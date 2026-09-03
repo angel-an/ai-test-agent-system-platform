@@ -1,0 +1,191 @@
+# AI Test Agent System Platform - Git Ignore Rules
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# =============================================================================
+# Virtual Environment
+# =============================================================================
+.venv/
+venv/
+env/
+ENV/
+
+# =============================================================================
+# IDE
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# Environment & Secrets
+# =============================================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# =============================================================================
+# Logs
+# =============================================================================
+*.log
+logs/
+log/
+
+# =============================================================================
+# Runtime / Temporary Files
+# =============================================================================
+*.tmp
+*.temp
+*.cache
+.cache/
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# Claude / AI Agent - Runtime Artifacts (NEVER commit these)
+# =============================================================================
+
+# Playwright CLI snapshots (runtime generated)
+*.yml
+!pytest.yml
+!playwright.yml
+after_*.yml
+base_*.yml
+chat_*.yml
+login*.yml
+register.yml
+webtests_*.yml
+
+# Agent screenshots (runtime generated)
+agent_screenshots/
+*.png
+!docs/**/*.png
+!assets/**/*.png
+!ui/public/**/*.png
+captcha_*.png
+login_*.png
+marketing_*.png
+
+# Session / Auth files (may contain sensitive data)
+auth.json
+marketing_auth.json
+peets_staging_auth.json
+*.state.json
+
+# Agent monitoring logs
+agent_monitor.log
+thread_last_messages.txt
+
+# =============================================================================
+# Webwright Skill - Runtime Artifacts
+# =============================================================================
+# These are generated during skill execution and should not be committed
+.claude/skills/webwright/workspace/final_runs/**/screenshots/
+.claude/skills/webwright/workspace/final_runs/**/*.log
+.claude/skills/webwright/workspace/final_runs/**/*.txt
+.claude/skills/webwright/workspace/playground/*.png
+.claude/skills/webwright/workspace/playground/*.jpg
+
+# =============================================================================
+# Web CLI / Web MCP - Runtime Test Artifacts
+# =============================================================================
+# Playwright test execution outputs (runtime generated)
+playwright-report*/
+test-results/
+playwright/.cache/
+
+# =============================================================================
+# LangGraph - Runtime Cache Only
+# =============================================================================
+# Local langgraph overrides now live in core/ directory.
+# Only ignore runtime cache, NOT the core/ directory itself.
+.langgraph_api/
+core/.langgraph_api/
+
+# =============================================================================
+# Backup & Archive
+# =============================================================================
+.backup-*/
+.archive/
+
+# =============================================================================
+# Node.js (if any frontend)
+# =============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =============================================================================
+# Database
+# =============================================================================
+*.db
+*.sqlite
+*.sqlite3
+
+# =============================================================================
+# Coverage & Test Reports
+# =============================================================================
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# =============================================================================
+# Build Outputs
+# =============================================================================
+*.tsbuildinfo
+out/
+.next/
+.nuxt/
+dist/
+
+# =============================================================================
+# Project Specific - Keep these
+# =============================================================================
+# DO NOT ignore:
+# - .claude/skills/*/SKILL.md (skill definitions)
+# - .claude/skills/*/references/ (skill reference docs)
+# - .claude/skills/web_cli/tests/*.spec.ts (generated test scripts - skill outputs)
+# - .claude/skills/web_cli/tests/*.json (test case data - skill outputs)
+# - .claude/skills/web_cli/tests/*.md (test plans - skill outputs)
+# - .claude/skills/web_cli/generated/ (generator outputs)
+# - .claude/skills/web_cli/planner/ (planner outputs)
+# - .claude/skills/web_cli/case-designer/ (case designer outputs)
+# - .claude/skills/webwright/reference/ (skill reference docs)
+# - .claude/skills/webwright/workspace/plan.md (skill workspace plan)
+# - .claude/skills/security/templates/ (skill templates)
+
+# Agent runtime workspace / conversation / backup artifacts (rev freeze)
+backend/app/agents/*/workspace/
+**/conversation_history/
+**/artifacts_backup/

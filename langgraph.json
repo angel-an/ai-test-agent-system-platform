@@ -1,0 +1,29 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "_buildId": "id_MC81OmFIVnBZMlhscm9ua3VMazZVMkZZTmc9PTpiNzA4ZDQ1MA==",
+  "graphs": {
+    "api_agent": {
+      "path": "./backend/app/agents/api/agent.py:agent"
+    },
+    "web_agent": {
+      "path": "./backend/app/agents/webwright/agent.py:agent"
+    },
+    "security_agent": {
+      "path": "./backend/app/agents/security/agent.py:agent"
+    },
+    "testcase_generator_agent": {
+      "path": "./backend/app/agents/testcase/agent.py:agent"
+    }
+  },
+  "_deployId": "id_MS81OmFIVnBZMlhscm9ua3VMazZVMkZZTmc9PTpiNzA4ZDQ1MA==",
+  "env": ".env",
+  "_releaseId": "id_Mi81OmFIVnBZMlhscm9ua3VMazZVMkZZTmc9PTpiNzA4ZDQ1MA==",
+  "image_distro": "wolfi",
+  "_versionId": "id_My81OmFIVnBZMlhscm9ua3VMazZVMkZZTmc9PTpiNzA4ZDQ1MA==",
+  "_buildHash": "NC81OmFIVnBZMlhscm9ua3VMazZVMkZZTmc9PTpiNzA4ZDQ1MA==",
+  "serde": {
+    "allowed_json_modules": true
+  }
+}

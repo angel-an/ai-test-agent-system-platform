@@ -1,0 +1,24 @@
+# IDP 项目映射配置
+# MVP 阶段只支持精确匹配，不做模糊关键词自动选择
+#
+# 联调确认字段说明：
+# - issue_type_id: IDP 问题类型 ID (缺陷=3)
+# - default_priority_id: 默认优先级 ID (中=2)
+# - default_priority_code: 默认优先级代码 (中="priority-2")
+# - type_code: 创建缺陷时必填 (bug="bug")
+
+projects:
+  - source_project_key: "PR-2"
+    source_project_name: "小杨生煎"
+    idp_project_id: 1169
+    idp_project_name: "小杨生煎"
+    apply_type: "agile"
+    bug_type_id: 12536
+    issue_type_id: 3
+    type_code: "bug"
+    default_priority_id: 2
+    default_priority_code: "priority-2"
+    default_sprint_id: 4167
+    default_epic_id: 859111
+    default_assignee_id: 6557
+    enabled: true
