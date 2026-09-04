@@ -122,7 +122,10 @@ class ScriptExecutionEngine:
                     test_run.run_state = TestRunState.DONE
 
                 await run_repo.update(test_run)
-                await run_repo.update_counts_from_jobs(test_run_id)
+                # rev59：计数口径统一为"用例级"（TestRunTestCase.latest_status 汇总；
+                # 作业结果已由 _sync_test_run_case_status 回写到其绑定的用例）。
+                # 未绑定具体用例的作业，执行结果以作业列表/报告呈现，不冒充用例通过数。
+                await run_repo.update_counts(test_run_id)
                 await session.commit()
 
             logger.info(
@@ -150,7 +153,10 @@ class ScriptExecutionEngine:
                 test_run = await run_repo.get_by_id(test_run_id)
                 test_run.run_state = TestRunState.REJECTED
                 await run_repo.update(test_run)
-                await run_repo.update_counts_from_jobs(test_run_id)
+                # rev59：计数口径统一为"用例级"（TestRunTestCase.latest_status 汇总；
+                # 作业结果已由 _sync_test_run_case_status 回写到其绑定的用例）。
+                # 未绑定具体用例的作业，执行结果以作业列表/报告呈现，不冒充用例通过数。
+                await run_repo.update_counts(test_run_id)
                 await session.commit()
 
             return {

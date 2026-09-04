@@ -9,6 +9,7 @@ andan
 
 
 import logging
+import os
 from types import SimpleNamespace
 from typing import Optional, Any
 
@@ -86,6 +87,24 @@ async def _create_test_case_impl(
     case_kind: Optional[str] = "sit",
 ) -> dict[str, Any]:
     """创建测试用例的内部实现"""
+    # rev59 质量门禁：普通模板每步 result 必填 + 步骤文本/结果模糊词双查（降级见环境变量）
+    if template != "test_case_bdd" and test_case_steps is not None:
+        from .quality_gates import normalize_steps
+
+        normalized, problems = normalize_steps(test_case_steps)
+        if problems:
+            if os.getenv("TESTCASE_ALLOW_QUALITY_DEGRADE") == "1":
+                custom_fields = dict(custom_fields or {})
+                custom_fields["quality_grade"] = "degraded"
+                custom_fields["quality_reasons"] = problems
+                tags = list(tags or [])
+                if "质量降级" not in tags:
+                    tags.append("质量降级")
+            else:
+                raise ValueError("步骤质量门禁未通过（请按提示重写后重试）：" + "；".join(problems[:6]))
+        else:
+            test_case_steps = normalized  # 统一为 {step, result}，并自动拆分"步骤 —— 预期结果：x"
+
     request_data: dict[str, Any] = {
         "name": name,
         "template": template,
@@ -765,22 +784,46 @@ async def stage_testcases(test_cases: list, batch_note: str = "") -> str:
     if not isinstance(test_cases, list):
         return _json.dumps({"error": "test_cases 必须是 list[dict]"}, ensure_ascii=False)
 
-    # 入库前实时质量拦截：模糊词检查
-    fuzzy_words = ["正确", "成功", "正常", "验证成功", "功能正常", "页面正确"]
+    # rev59 入库前实时质量拦截：用例级预期结果 + 步骤文本（去引号）/ 步骤结果 模糊词双查
+    from .quality_gates import find_fuzzy
+
     rejected = []
     accepted = []
     for case in test_cases:
+        reasons = []
+        # 1) 用例级 expected_results（Excel 暂存风格）
         expected = str(case.get("expected_results", ""))
-        found_fuzzy = None
-        for word in fuzzy_words:
-            if word in expected:
-                found_fuzzy = word
-                break
-        if found_fuzzy:
+        hit = find_fuzzy(expected, strip_quotes=False)
+        if hit:
+            reasons.append(f"用例级预期结果含模糊词「{hit}」")
+        # 2) 步骤级：步骤文本去引号扫描；字典步骤的 result 严格扫描
+        steps = case.get("steps")
+        if not isinstance(steps, list):
+            steps = case.get("test_case_steps")
+        if isinstance(steps, list):
+            for idx, st in enumerate(steps, start=1):
+                if isinstance(st, dict):
+                    step_text = str(
+                        next((st[k] for k in ("step", "action", "操作", "步骤") if st.get(k)), "") or ""
+                    )
+                    result_text = str(
+                        next((st[k] for k in ("result", "expected", "预期", "预期结果", "期望") if st.get(k)), "") or ""
+                    )
+                    hit = find_fuzzy(result_text, strip_quotes=False)
+                    if hit:
+                        reasons.append(f"第 {idx} 步预期结果含模糊词「{hit}」")
+                elif isinstance(st, str):
+                    step_text = st
+                else:
+                    continue
+                hit = find_fuzzy(step_text, strip_quotes=True)
+                if hit:
+                    reasons.append(f"第 {idx} 步步骤文本含模糊词「{hit}」（请写入该步 result 并量化）")
+        if reasons:
             rejected.append({
                 "id": case.get("id", "unknown"),
-                "title": case.get("title", "")[:40],
-                "fuzzy_word": found_fuzzy
+                "title": str(case.get("title", ""))[:40],
+                "reasons": reasons[:5],
             })
         else:
             accepted.append(case)
@@ -799,7 +842,7 @@ async def stage_testcases(test_cases: list, batch_note: str = "") -> str:
     if rejected:
         result["rejected_count"] = len(rejected)
         result["rejected_cases"] = rejected
-        result["warning"] = f"有 {len(rejected)} 条用例因预期结果含模糊词被拒绝入库，请重写后重新提交。"
+        result["warning"] = f"有 {len(rejected)} 条用例未通过质量门禁（预期结果/步骤文本/步骤结果含模糊词或结构问题），请按 rejected_cases 中每条 reasons 重写后重新提交。"
 
     return _json.dumps(result, ensure_ascii=False)
 
