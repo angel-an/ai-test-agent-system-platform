@@ -8,6 +8,7 @@ from app.agents.tools.testcase.quality_gates import (
     strip_quoted,
     check_expected_results_fuzzy,
     validate_steps_payload,
+    validate_staged_case,
 )
 
 
@@ -121,3 +122,64 @@ class TestFlattenExpectedResultsGuard:
 
         out = _flatten_expected_results(["(1) 保存", "2) 列表出现记录"])
         assert out == "(1) 保存\n2) 列表出现记录"
+
+
+class TestValidateStagedCaseUnifiedGate:
+    """跨轨统一门禁：stage/export 与 DB 创建路径判定一致（评审发现 1 闭环）。"""
+
+    def test_dict_step_missing_result_rejected(self):
+        problems, normalized = validate_staged_case(
+            {"id": "T-1", "title": "缺 result", "steps": [{"step": "点击保存"}]}
+        )
+        assert any("缺少预期结果" in p for p in problems)
+        assert normalized is None
+
+    def test_string_step_missing_result_rejected(self):
+        problems, _ = validate_staged_case({"id": "T-2", "steps": ["输入账号并登录"]})
+        assert any("缺少预期结果" in p for p in problems)
+
+    def test_case_level_expected_fuzzy_rejected(self):
+        problems, _ = validate_staged_case(
+            {"id": "T-3", "expected_results": "保存成功", "steps": [{"step": "点保存", "result": "状态=启用"}]}
+        )
+        assert any("用例级预期结果含模糊断言词" in p for p in problems)
+
+    def test_compliant_case_passes_and_normalizes(self):
+        problems, normalized = validate_staged_case(
+            {"id": "T-4",
+             "steps": [{"操作": "输入非法 JSON 保存", "预期结果": "页面提示 JSON格式错误 且模板未创建"}]}
+        )
+        assert problems == []
+        assert normalized == [{"step": "输入非法 JSON 保存", "result": "页面提示 JSON格式错误 且模板未创建"}]
+
+    def test_same_judgment_as_db_payload(self):
+        # DB 轨（validate_steps_payload）与暂存轨（validate_staged_case）对同一步骤集判定一致
+        case = {"steps": [{"step": "仅步骤"}]}
+        db_problems = validate_steps_payload(case)[1]
+        stage_problems = validate_staged_case(case)[0]
+        assert db_problems and stage_problems
+        assert len(db_problems) == len(stage_problems)
+
+
+class TestExportRenderingHelpers:
+    def test_flatten_steps_normalized_dict(self):
+        from app.agents.tools.testcase.testcase_tools import _flatten_steps
+
+        out = _flatten_steps([{"step": "进入列表页", "result": "列表展示"}, {"step": "点保存", "result": "状态=1"}])
+        assert out == "1. 进入列表页\n2. 点保存"
+
+    def test_case_expected_text_derived_from_step_result(self):
+        from app.agents.tools.testcase.testcase_tools import _case_expected_text
+
+        out = _case_expected_text(
+            {"steps": [{"step": "A", "result": "结果A"}, {"step": "B", "result": "结果B"}]}
+        )
+        assert out == "1. 结果A\n2. 结果B"
+
+    def test_case_expected_text_prefers_case_level(self):
+        from app.agents.tools.testcase.testcase_tools import _case_expected_text
+
+        out = _case_expected_text(
+            {"expected_results": "【预留】结果X", "steps": [{"step": "A", "result": "结果A"}]}
+        )
+        assert out == "【预留】结果X"

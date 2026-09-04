@@ -137,6 +137,31 @@ def check_expected_results_fuzzy(expected: Any) -> str | None:
     return find_fuzzy(str(expected or ""), strip_quotes=False)
 
 
+def validate_staged_case(case: dict[str, Any]) -> tuple[list[str], list[dict[str, str]] | None]:
+    """暂存/导出与 DB 创建共用的统一门禁（rev59 闭环）。
+
+    对一条用例同时执行：
+    - 步骤归一化门禁（normalize_steps：每步 result 必填、步骤文本去引号/结果模糊双查），
+      与 _create_test_case_impl（HTTP 创建轨）完全一致；
+    - 用例级 expected_results 模糊扫描（完整词表）。
+
+    Returns:
+        (problems, normalized_steps)：problems 非空即拒绝；normalized_steps 为合规时的
+        [{"step","result"}]（可能为 None，当未提供步骤或不合规）。
+    """
+    problems: list[str] = []
+    steps = case.get("steps")
+    if steps is None:
+        steps = case.get("test_case_steps")
+    normalized, step_problems = normalize_steps(steps)
+    if step_problems:
+        problems.extend(step_problems)
+    hit = check_expected_results_fuzzy(case.get("expected_results"))
+    if hit:
+        problems.append(f"用例级预期结果含模糊断言词「{hit}」，请改为具体可核验描述")
+    return problems, normalized
+
+
 def validate_steps_payload(case: dict[str, Any]) -> tuple[list[dict[str, str]] | None, list[str]]:
     """对单条待落库用例（DB 风格，键 test_case_steps）执行步骤门禁。"""
     steps = case.get("test_case_steps")

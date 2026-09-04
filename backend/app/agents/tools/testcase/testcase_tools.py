@@ -640,8 +640,10 @@ def _flatten_steps(steps: list[dict[str, Any]] | str | None) -> str:
         if not isinstance(step, dict):
             lines.append(str(step))
             continue
-        seq = step.get("seq", step.get("step", len(lines) + 1))
-        action = step.get("action", step.get("操作描述", ""))
+        seq = step.get("seq")
+        action = step.get("action", step.get("操作描述", step.get("step", "")))
+        if seq is None:
+            seq = len(lines) + 1
         target = step.get("target", step.get("操作对象", ""))
         data = step.get("data", "")
         line = f"{seq}. {action}"
@@ -689,6 +691,23 @@ def _has_leading_number(text: str) -> bool:
     import re
 
     return bool(re.match(r"^\s*(?:\d+[\.\)\】\、]|\(\d+\)|\[\d+\])", str(text)))
+
+
+def _case_expected_text(case: dict[str, Any]) -> str:
+    """导出用预期结果文本：优先用例级 expected_results；缺省时由归一化步骤的每步 result 推导（rev59）。"""
+    expected = _extract_field(case, "expected_results", "预期结果", default=None)
+    if expected:
+        return _flatten_expected_results(expected)
+    steps = _coerce_from_json(_extract_field(case, "steps", "测试步骤", default=None))
+    out: list[str] = []
+    if isinstance(steps, list):
+        for idx, st in enumerate(steps, start=1):
+            if not isinstance(st, dict):
+                continue
+            r = next((st[k] for k in ("result", "expected", "预期结果", "预期", "期望") if st.get(k)), "")
+            if str(r).strip():
+                out.append(f"{idx}. {str(r).strip()}")
+    return "\n".join(out)
 
 
 def _flatten_preconditions(preconditions: list[str] | str | None) -> str:
@@ -758,7 +777,7 @@ def _export_test_cases_to_excel_impl(
             _flatten_preconditions(_extract_field(case, "preconditions", "前置条件", default=None)),
             _flatten_steps(_extract_field(case, "steps", "测试步骤", default=None)),
             _flatten_test_data(_extract_field(case, "test_data", "测试数据", default=None)),
-            _flatten_expected_results(_extract_field(case, "expected_results", "预期结果", default=None)),
+            _case_expected_text(case),
             _extract_field(case, "remarks", "备注"),
         ]
         ws.append(row)
@@ -801,49 +820,30 @@ async def stage_testcases(test_cases: list, batch_note: str = "") -> str:
     if not isinstance(test_cases, list):
         return _json.dumps({"error": "test_cases 必须是 list[dict]"}, ensure_ascii=False)
 
-    # rev59 入库前实时质量拦截：用例级预期结果 + 步骤文本（去引号）/ 步骤结果 模糊词双查
-    from .quality_gates import find_fuzzy
+    # rev59 统一门禁（与 DB 创建轨 _create_test_case_impl 完全一致）：
+    # validate_staged_case = normalize_steps（每步 result 必填 + 步骤文本去引号/结果模糊双查）
+    #                       + 用例级 expected_results 模糊扫描（完整词表）
+    from .quality_gates import validate_staged_case
 
     rejected = []
     accepted = []
     for case in test_cases:
-        reasons = []
-        # 1) 用例级 expected_results（Excel 暂存风格）
-        expected = str(case.get("expected_results", ""))
-        hit = find_fuzzy(expected, strip_quotes=False)
-        if hit:
-            reasons.append(f"用例级预期结果含模糊词「{hit}」")
-        # 2) 步骤级：步骤文本去引号扫描；字典步骤的 result 严格扫描
-        steps = case.get("steps")
-        if not isinstance(steps, list):
-            steps = case.get("test_case_steps")
-        if isinstance(steps, list):
-            for idx, st in enumerate(steps, start=1):
-                if isinstance(st, dict):
-                    step_text = str(
-                        next((st[k] for k in ("step", "action", "操作", "步骤") if st.get(k)), "") or ""
-                    )
-                    result_text = str(
-                        next((st[k] for k in ("result", "expected", "预期", "预期结果", "期望") if st.get(k)), "") or ""
-                    )
-                    hit = find_fuzzy(result_text, strip_quotes=False)
-                    if hit:
-                        reasons.append(f"第 {idx} 步预期结果含模糊词「{hit}」")
-                elif isinstance(st, str):
-                    step_text = st
-                else:
-                    continue
-                hit = find_fuzzy(step_text, strip_quotes=True)
-                if hit:
-                    reasons.append(f"第 {idx} 步步骤文本含模糊词「{hit}」（请写入该步 result 并量化）")
-        if reasons:
+        problems, normalized = validate_staged_case(case)
+        if problems:
             rejected.append({
                 "id": case.get("id", "unknown"),
                 "title": str(case.get("title", ""))[:40],
-                "reasons": reasons[:5],
+                "reasons": problems[:5],
             })
-        else:
-            accepted.append(case)
+            continue
+        # 以归一化步骤（每步 {step, result}）入区，保证导出/回看与 DB 轨一致
+        if normalized is not None:
+            case = dict(case)
+            if "steps" in case:
+                case["steps"] = normalized
+            if "test_case_steps" in case:
+                case["test_case_steps"] = normalized
+        accepted.append(case)
 
     staged_count = len(accepted)
     total = _get_staging().add(accepted)
@@ -933,18 +933,32 @@ async def export_all_testcases(requirement_name: str = "", sheet_name: str = "�
     if bianjie / total < 0.10:
         quality_errors.append(f"边界用例占比 {bianjie/total*100:.1f}% < 10%，必须补充边界用例")
 
-    # 2. 模糊词检查（阈值放宽到10%，095910版本经验值）
-    fuzzy_words = ["正确", "成功", "正常", "验证成功", "功能正常", "页面正确"]
+    # 2. rev59 统一门禁（与 stage/DB 创建轨一致）：每步 result 必填/模糊双查（完整词表）+ 用例级预期模糊
+    #    结构性问题（缺 result 等）为硬性拦截；模糊词按 ≤10% 阈值（095910 经验值）
+    from .quality_gates import validate_staged_case
+
+    structural_errors = []
     fuzzy_cases = []
     for c in cases:
-        expected = str(c.get("expected_results", ""))
-        for word in fuzzy_words:
-            if word in expected:
-                fuzzy_cases.append(c.get("id", "unknown"))
-                break
+        problems, _norm = validate_staged_case(c)
+        fuzzy_hits = [p for p in problems if "模糊" in p]
+        structural = [p for p in problems if "模糊" not in p]
+        if fuzzy_hits:
+            fuzzy_cases.append((str(c.get("id", "unknown")), fuzzy_hits))
+        if structural:
+            structural_errors.append(f"{c.get('id','unknown')}: {'；'.join(structural)}")
 
-    if len(fuzzy_cases) / total > 0.10:
-        quality_errors.append(f"模糊预期结果占比 {len(fuzzy_cases)/total*100:.1f}% > 10%，用例 {fuzzy_cases[:5]} 等必须重写。标准要求：模糊词占比 ≤ 10%")
+    if structural_errors:
+        shown = "; ".join(structural_errors[:5])
+        more = f"（共 {len(structural_errors)} 条，其余略）" if len(structural_errors) > 5 else ""
+        quality_errors.append(
+            f"步骤结构门禁未通过（与创建路径一致，需先补齐每步 result/去模糊后重 stage 再导出）：{shown}{more}"
+        )
+    if fuzzy_cases and len(fuzzy_cases) / total > 0.10:
+        quality_errors.append(
+            f"模糊预期结果占比 {len(fuzzy_cases)/total*100:.1f}% > 10%，用例 "
+            f"{[fid for fid, _ in fuzzy_cases][:5]} 等必须重写。标准要求：模糊词占比 ≤ 10%"
+        )
 
     # 3. 9维覆盖检查 - 检查是否有DB/并发/安全等标记（"有即可"原则，不强制比例）
     has_db = any("DB" in str(c.get("remarks", "")) or "数据库" in str(c.get("remarks", "")) for c in cases)
@@ -995,6 +1009,15 @@ async def export_all_testcases(requirement_name: str = "", sheet_name: str = "�
                 "fanxiang": fanxiang,
                 "bianjie": bianjie,
             }, ensure_ascii=False)
+
+    # 导出前以归一化步骤（每步 {step,result}）回写暂存，保证 Excel 的 步骤/预期 两列与 DB 轨一致
+    for c in cases:
+        _p, n = validate_staged_case(c)
+        if n is not None:
+            if "steps" in c:
+                c["steps"] = n
+            elif "test_case_steps" in c:
+                c["test_case_steps"] = n
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = requirement_name.strip() if requirement_name else "测试用例"
