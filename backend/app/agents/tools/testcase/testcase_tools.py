@@ -671,7 +671,24 @@ def _flatten_expected_results(expected_results: list[str] | str | None) -> str:
     expected_results = _coerce_from_json(expected_results)
     if isinstance(expected_results, str):
         return expected_results
-    return "\n".join([f"{idx}. {r}" for idx, r in enumerate(expected_results, start=1)])
+    out: list[str] = []
+    for idx, r in enumerate(expected_results, start=1):
+        r = str(r).strip()
+        if not r:
+            continue
+        # 对齐生产（ai-test-agent-system 9a52da2 修复）：条目本身已带序号（如 "1. xxx"/"(1) xxx"）不再重复添加
+        if _has_leading_number(r):
+            out.append(r)
+        else:
+            out.append(f"{idx}. {r}")
+    return "\n".join(out)
+
+
+def _has_leading_number(text: str) -> bool:
+    """检查文本是否以序号开头（如 '1. '、'(1) '、'1) ' 等）。"""
+    import re
+
+    return bool(re.match(r"^\s*(?:\d+[\.\)\】\、]|\(\d+\)|\[\d+\])", str(text)))
 
 
 def _flatten_preconditions(preconditions: list[str] | str | None) -> str:

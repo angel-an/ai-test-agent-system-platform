@@ -105,3 +105,19 @@ class TestValidatePayload:
     def test_excel_payload(self):
         ok, problems = validate_steps_payload({"steps": [{"step": "执行 B"}]})
         assert ok is None and problems
+
+
+class TestFlattenExpectedResultsGuard:
+    """对齐生产(_has_leading_number)：已带序号的条目不再重复加号。"""
+
+    def test_no_double_numbering(self):
+        from app.agents.tools.testcase.testcase_tools import _flatten_expected_results
+
+        out = _flatten_expected_results(["1. 页面跳转微商城首页", "首页内容渲染正常"])
+        assert out == "1. 页面跳转微商城首页\n2. 首页内容渲染正常"
+
+    def test_already_numbered_items_kept(self):
+        from app.agents.tools.testcase.testcase_tools import _flatten_expected_results
+
+        out = _flatten_expected_results(["(1) 保存", "2) 列表出现记录"])
+        assert out == "(1) 保存\n2) 列表出现记录"
