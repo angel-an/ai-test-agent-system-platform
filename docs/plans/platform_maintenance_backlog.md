@@ -148,23 +148,23 @@ class MyModel(BaseModel):
 | `attachment.py` | `uploaded_at` | ✅ |
 | `api_test_log.py` | `started_at`, `created_at` | ✅ |
 
-**全仓其他使用点：尚未迁移**
+**全仓其他使用点：✅ 已完成（2026-09-05）**
 
-全仓扫描仍发现其他业务代码使用 `datetime.utcnow()`，包括但不限于：
+全仓扫描已清零，涉及 9 个文件、13 处 `datetime.utcnow()` 已全部迁移：
 
-| 文件 | 类型 |
-|---|---|
-| `app/repositories/api_test_repo.py` | 仓储 |
-| `app/services/api_case_link_service.py` | 服务 |
-| `app/services/export_service.py` | 服务 |
-| `app/services/mongodb_service.py` | 服务 |
-| `app/services/scheduler_service.py` | 服务 |
-| `app/api/v2/test_runs.py` | API |
-| `app/api/v2/security_tests.py` | API |
-| `app/api/v2/documents.py` | API |
-| `app/services/test_case_service.py` | 服务 |
+| 文件 | 类型 | 处数 |
+|---|---|---|
+| `app/repositories/api_test_repo.py` | 仓储 | 1 |
+| `app/services/api_case_link_service.py` | 服务 | 1 |
+| `app/services/export_service.py` | 服务 | 3 |
+| `app/services/mongodb_service.py` | 服务 | 2 |
+| `app/services/scheduler_service.py` | 服务 | 1 |
+| `app/services/test_case_service.py` | 服务 | 1 |
+| `app/api/v2/test_runs.py` | API | 1 |
+| `app/api/v2/security_tests.py` | API | 2 |
+| `app/api/v2/documents.py` | API | 1 |
 
-**准确表述**：P3 已完成 4 个 MongoDB 模型默认时间字段迁移，并消除目标回归中的 8 个 utcnow 警告；全项目仍有其他 `datetime.utcnow()` 使用点，尚未整体迁移。
+**合计**：9 文件，13 处
 
 ### 4.2 迁移方案
 
@@ -215,7 +215,7 @@ datetime.now(timezone.utc)
 | P1.5 | Pydantic `json_encoders` → `field_serializer` 迁移 | 已完成 | ✅ 已提交 |
 | P2 | Legacy 兼容清退（`from_legacy_env` 已标注 `@deprecated`） | 0.5 天 | 待确认无存量依赖后删除 |
 | P3 | MongoDB 模型 `datetime.utcnow()` → `datetime.now(timezone.utc)` | 0.5 天 | ✅ 已完成（4e22c91） |
-| P3.5 | 全仓 `datetime.utcnow()` 清理（API、服务、仓储等） | 1 天 | 待分批迁移 |
+| P3.5 | 全仓 `datetime.utcnow()` 清理（API、服务、仓储等） | 1 天 | ✅ 已完成（9 文件，13 处） |
 | P4 | Pytest 警告消除（重命名领域模型） | 1 天 | 保持现状 |
 | P5 | 测试样例字符串再统一 | 0.5 天 | 低优 |
 
@@ -226,7 +226,7 @@ datetime.now(timezone.utc)
 **平台通用规则（`backend/app/platform/` + `backend/tests/platform/`）自 2026-09-05 起内容口径冻结。**
 
 - 冻结含义：平台规则文档和代码的内容/接口/行为已定型，不再扩展新功能
-- 版控状态：平台基线已提交（`9cb34a9`），P1/P1.5 已提交（`aca3d07`），`from_legacy_env` 已标注 deprecated（`389c287`），P3 MongoDB 模型 datetime 迁移已提交（`4e22c91`），维护债文档已同步（`4e3f4cf`）
+- 版控状态：平台基线已提交（`9cb34a9`），P1/P1.5 已提交（`aca3d07`），`from_legacy_env` 已标注 deprecated（`389c287`），P3 MongoDB 模型 datetime 迁移已提交（`4e22c91`），P3.5 全仓 datetime 迁移已提交（`4aaea9b`），维护债文档已同步
 - 真实项目样例只用于验证平台能力，不定义平台规则
 - 新增平台功能需走 PR 评审，确保不引入项目专属逻辑
 - 维护债按本文件排期独立处理，不回流平台主线

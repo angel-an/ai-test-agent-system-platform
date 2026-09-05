@@ -4,7 +4,7 @@ MongoDB 服务
 处理版本历史、审计日志等 MongoDB 相关操作
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -57,7 +57,7 @@ class MongoDBService:
             version=version,
             snapshot=snapshot,
             changed_by=str(changed_by),
-            changed_at=datetime.utcnow(),
+            changed_at=datetime.now(timezone.utc),
             change_summary=change_summary,
         )
         
@@ -158,7 +158,7 @@ class MongoDBService:
             old_value=old_value,
             new_value=new_value,
             performed_by=str(performed_by),
-            performed_at=datetime.utcnow(),
+            performed_at=datetime.now(timezone.utc),
             ip_address=ip_address,
             user_agent=user_agent,
         )

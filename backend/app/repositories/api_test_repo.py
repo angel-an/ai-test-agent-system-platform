@@ -4,7 +4,7 @@ API 测试仓储
 处理 API 测试相关的数据库操作
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -239,7 +239,7 @@ class APITestRunRepository(BaseRepository[APITestRun]):
         通过 PG advisory 事务锁串行化"同 api_test 同日期"的并发写入，
         使用 MAX 而非 COUNT，避免删除记录后编号冲突。
         """
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         date_str = today.strftime("%Y%m%d")
         prefix = f"ATR-{date_str}-"
 # pragma: no cover  My80OmFIVnBZMlhscm9ua3VMazZUakpvU0E9PTo2NTQzNzJhMg==

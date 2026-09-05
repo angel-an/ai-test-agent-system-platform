@@ -7,7 +7,7 @@
 from typing import Optional
 from uuid import UUID
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Form, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -251,7 +251,7 @@ async def download_report(
         return {
             "download_url": url,
             "expires_in": 604800,  # 7天 = 7 * 24 * 60 * 60 秒
-            "expires_at": (datetime.utcnow() + timedelta(days=7)).isoformat(),
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成下载链接失败: {str(e)}")
@@ -285,7 +285,7 @@ async def refresh_report_url(
             data={
                 "download_url": url,
                 "expires_in": 604800,  # 7天 = 7 * 24 * 60 * 60 秒
-                "expires_at": (datetime.utcnow() + timedelta(days=7)).isoformat(),
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
                 "report_id": report_id,
                 "file_path": report["file_path"],
             },

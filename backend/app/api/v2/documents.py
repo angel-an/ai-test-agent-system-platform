@@ -108,7 +108,7 @@ async def upload_document(
     
     # 生成对象名
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
     
     file_ext = ""
     if file.filename:
@@ -117,7 +117,7 @@ async def upload_document(
             file_ext = f".{parts[1]}"
 # pragma: no cover  Mi80OmFIVnBZMlhscm9ua3VMazZjV1YzU0E9PToyODRjNTNmYg==
     
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     unique_id = str(uuid.uuid4())[:8]
     object_name = f"documents/{timestamp}_{unique_id}{file_ext}"
     

@@ -4,7 +4,7 @@
 处理测试用例相关的业务逻辑
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Any, Union
 from uuid import UUID
 
@@ -549,7 +549,7 @@ class TestCaseService:
                 user_id=item.get("user_id"),
                 updated_by=item.get("updated_by"),
                 testcase_id=test_case_identifier,
-                created_at=item.get("created_at", datetime.utcnow()),
+                created_at=item.get("created_at", datetime.now(timezone.utc)),
             ))
 
         return TestCaseHistoryResponse(

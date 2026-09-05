@@ -8,7 +8,7 @@ andan
 """
 
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -201,7 +201,7 @@ class TestRunSchedulerService:
             test_run_id = test_run.id
 
             # 更新调度上次执行时间
-            schedule.last_run_at = datetime.utcnow()
+            schedule.last_run_at = datetime.now(timezone.utc)
             await session.commit()
 
             print(f"[Scheduler] 创建测试运行: {test_run.identifier}")

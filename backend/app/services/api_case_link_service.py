@@ -9,7 +9,7 @@ TestCase + APITest 脚本，并建立三方关联。复杂的 AI 需求理解仍
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -424,7 +424,7 @@ class APICaseLinkService:
         endpoint.test_case_ids = sorted(case_ids)
         endpoint.api_test_ids = sorted(api_test_ids)
         endpoint.total_test_cases = len(endpoint.test_case_ids)
-        endpoint.updated_at = datetime.utcnow()
+        endpoint.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
 
     async def _create_test_run(

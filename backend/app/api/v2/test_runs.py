@@ -8,7 +8,7 @@
 from typing import Optional, Any, Dict
 import io
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status, HTTPException
@@ -478,7 +478,7 @@ async def get_report_summary(
     project_id = project.id
 
     # 2. 计算时间范围
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     date_filter = None
     if date_range == "7d":
         date_filter = now - timedelta(days=7)

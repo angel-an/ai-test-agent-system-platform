@@ -6,7 +6,7 @@ BDD 测试用例导出服务
 
 import io
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 from uuid import uuid4
 
@@ -68,7 +68,7 @@ class ExportService:
             "filename": None,
             "content_type": None,
             "error_message": None,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
             "completed_at": None,
         }
 # fmt: off  MS80OmFIVnBZMlhscm9ua3VMazZNRlJDUlE9PToyZDJkOTNmNQ==
@@ -133,7 +133,7 @@ class ExportService:
                         "file_content": file_content,
                         "filename": filename,
                         "content_type": content_type,
-                        "completed_at": datetime.utcnow(),
+                        "completed_at": datetime.now(timezone.utc),
                     }
                 }
             )
@@ -146,7 +146,7 @@ class ExportService:
                     "$set": {
                         "status": ExportStatus.FAILED.value,
                         "error_message": str(e),
-                        "completed_at": datetime.utcnow(),
+                        "completed_at": datetime.now(timezone.utc),
                     }
                 }
             )
