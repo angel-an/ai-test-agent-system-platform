@@ -69,12 +69,7 @@ Pydantic V2 中 `ConfigDict(json_encoders=...)` 本身也被标记为 deprecated
 - 多个 DeprecationWarning `datetime.utcnow()`（来自 MongoDB 模型默认值）
 - 其余为 LangChain / sqlite3 等第三方库警告
 
-**分层测试口径**：
-- 平台层：`tests/platform/` — 215 passed（基线，零环境依赖）
-- 序列化回归：`tests/mongodb/test_serialization_regression.py` — 10 passed（新增，零环境依赖）
-- 可复现基线合计：225 passed（提交前必跑）
-- 扩展基线：`tests/` 排除 e2e/api/services — 516 passed（需 SQLite，提交前建议跑）
-- 完整基线：585 collected（含环境依赖测试，环境就绪后跑）
+**注意**：`tests/platform/` 单独运行时警告数为 9（仅 collection + json_encoders），合并运行序列化回归后增至 33（含 datetime.utcnow() 等）。文档和报告应以合并运行口径为准。
 - 现有业务测试：待确认可复现集合（当前 KB E2E 环境存在错误，需隔离或修复后重跑）
 
 ### 2.3 迁移方案（第一批）
