@@ -14,11 +14,20 @@
 | `from_legacy_env(prefix="PR2")` | `execution_gates.py:51` | 兼容 PR2_* 环境变量命名 | 存量项目全部迁移至标准命名（LIVE_API / RUN_RISKY_NEG） |
 | `test_from_legacy_env` | `test_p0_gates.py:62` | 验证兼容方法本身 | 随 `from_legacy_env` 一并清退 |
 
-### 1.2 决策记录
+### 1.2 存量依赖扫描结果（2026-09-05）
+
+| 位置 | 使用方式 | 类型 | 处理建议 |
+|---|---|---|---|
+| `tests/api/pr2_storage_recharge/` | 8 个测试文件 + conftest + README 使用 PR2_LIVE_API / PR2_RUN_RISKY_NEG / PR2_AUTH_NEG | 项目样例 | 迁移至标准命名（LIVE_API / RUN_RISKY_NEG），作为平台推荐用法示例 |
+| `tests/platform/test_p0_gates.py:63-64` | 测试 `from_legacy_env` 兼容方法 | 平台测试 | 随兼容方法清退 |
+| `app/platform/execution_gates.py:52` | 兼容方法文档字符串 | 平台代码 | 标注 deprecated，待清退 |
+
+### 1.3 决策记录
 
 - **不删除**：当前仍有存量项目使用 PR2_* 前缀，删除会破坏向后兼容
 - **不扩展**：严禁为新项目增加新前缀兼容
-- **清退触发**：确认无存量依赖后，一次性删除 `from_legacy_env` 及对应测试
+- **项目样例迁移**：`tests/api/pr2_storage_recharge/` 应迁移至标准命名，作为平台推荐用法
+- **清退触发**：项目样例完成迁移 + 确认无其他存量依赖后，一次性删除 `from_legacy_env` 及对应测试
 
 ---
 
