@@ -242,10 +242,7 @@ datetime.now(timezone.utc)
 
 ```bash
 cd backend
-# 平台测试（214）+ 序列化回归（10）= 224
+# 完整基线：243 passed, 10 warnings
+# 构成：平台测试 214 + P3.5 验证 19 + 序列化回归 10
 python -m pytest tests/platform/ tests/mongodb/test_serialization_regression.py -v
-
-# 完整基线（含 P3.5 验证）：243 passed, 10 warnings
-python -m pytest tests/platform/ tests/mongodb/test_serialization_regression.py -v
-# 注：P3.5 验证测试（19）已纳入 tests/platform/，无需额外指定
 ```
