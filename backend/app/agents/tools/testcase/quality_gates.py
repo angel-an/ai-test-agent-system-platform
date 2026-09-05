@@ -169,3 +169,155 @@ def validate_steps_payload(case: dict[str, Any]) -> tuple[list[dict[str, str]] |
         # 兼容 Excel 风格步骤键
         steps = case.get("steps")
     return normalize_steps(steps)
+
+
+# ---------------------------------------------------------------------------
+# P1-2 扩展：重复场景检查、覆盖缺口检查、质量报告汇总
+# ---------------------------------------------------------------------------
+
+import difflib
+from collections import Counter
+
+
+def check_duplicate_scenarios(cases: list[dict[str, Any]], threshold: float = 0.85) -> list[dict[str, Any]]:
+    """检查重复场景（基于标题相似度）。
+
+    Args:
+        cases: 用例列表
+        threshold: 相似度阈值（默认 0.85，即 85% 相似视为重复）
+
+    Returns:
+        重复用例对列表，每项为 {"index_a", "id_a", "title_a", "index_b", "id_b", "title_b", "similarity"}
+    """
+    duplicates: list[dict[str, Any]] = []
+    n = len(cases)
+    for i in range(n):
+        title_i = str(cases[i].get("title", "") or cases[i].get("name", "")).strip()
+        if not title_i:
+            continue
+        for j in range(i + 1, n):
+            title_j = str(cases[j].get("title", "") or cases[j].get("name", "")).strip()
+            if not title_j:
+                continue
+            sim = difflib.SequenceMatcher(None, title_i, title_j).ratio()
+            if sim >= threshold:
+                duplicates.append({
+                    "index_a": i + 1,
+                    "id_a": cases[i].get("id", "unknown"),
+                    "title_a": title_i,
+                    "index_b": j + 1,
+                    "id_b": cases[j].get("id", "unknown"),
+                    "title_b": title_j,
+                    "similarity": round(sim, 3),
+                })
+    return duplicates
+
+
+def check_coverage_gaps(cases: list[dict[str, Any]]) -> list[str]:
+    """检查覆盖缺口（正向/反向/边界比例、DB/并发/安全维度）。
+
+    返回问题清单（空列表表示覆盖完整）。
+    """
+    problems: list[str] = []
+    if not cases:
+        problems.append("用例列表为空")
+        return problems
+
+    total = len(cases)
+
+    # 关键词统计
+    keywords = Counter()
+    for c in cases:
+        kw = c.get("keyword")
+        if kw:
+            keywords[str(kw)] += 1
+
+    zhengxiang = keywords.get("正向", 0)
+    fanxiang = keywords.get("反向", 0)
+    bianjie = keywords.get("边界", 0)
+
+    # 比例检查（与 export_all_testcases 中的门禁对齐）
+    if zhengxiang / total > 0.45:
+        problems.append(f"正向用例占比 {zhengxiang/total*100:.1f}% > 45%，需削减正向或补充反向/边界")
+    if fanxiang / total < 0.30:
+        problems.append(f"反向用例占比 {fanxiang/total*100:.1f}% < 30%，需补充反向用例")
+    if bianjie / total < 0.10:
+        problems.append(f"边界用例占比 {bianjie/total*100:.1f}% < 10%，需补充边界用例")
+
+    # 维度检查（有即可）
+    remarks_text = " ".join(str(c.get("remarks", "")) for c in cases)
+    if "DB" not in remarks_text and "数据库" not in remarks_text:
+        problems.append("缺少 DB 异常类用例标记")
+    if "并发" not in remarks_text and "幂等" not in remarks_text:
+        problems.append("缺少并发安全类用例标记")
+    if "安全" not in remarks_text and "SQL" not in remarks_text and "XSS" not in remarks_text:
+        problems.append("缺少字段级安全类用例标记")
+
+    return problems
+
+
+class QualityReport:
+    """质量门禁汇总报告。"""
+
+    def __init__(self):
+        self.structural_errors: list[str] = []
+        self.fuzzy_cases: list[tuple[str, list[str]]] = []
+        self.duplicates: list[dict[str, Any]] = []
+        self.coverage_gaps: list[str] = []
+        self.total_cases: int = 0
+
+    @property
+    def passed(self) -> bool:
+        return (
+            len(self.structural_errors) == 0
+            and len(self.fuzzy_cases) == 0
+            and len(self.duplicates) == 0
+            and len(self.coverage_gaps) == 0
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "total_cases": self.total_cases,
+            "structural_errors": self.structural_errors,
+            "fuzzy_cases_count": len(self.fuzzy_cases),
+            "fuzzy_cases": [{"id": fid, "reasons": reasons} for fid, reasons in self.fuzzy_cases],
+            "duplicates_count": len(self.duplicates),
+            "duplicates": self.duplicates,
+            "coverage_gaps": self.coverage_gaps,
+        }
+
+
+def run_quality_gates(cases: list[dict[str, Any]]) -> QualityReport:
+    """对一批用例执行完整质量门禁检查。
+
+    包括：
+    1. 结构性检查（每步 result 必填）
+    2. 模糊词扫描
+    3. 重复场景检查
+    4. 覆盖缺口检查
+    """
+    report = QualityReport()
+    report.total_cases = len(cases)
+
+    if not cases:
+        report.structural_errors.append("用例列表为空")
+        return report
+
+    # 1. 结构性检查 + 模糊词扫描
+    for c in cases:
+        problems, _ = validate_staged_case(c)
+        fuzzy = [p for p in problems if "模糊" in p]
+        structural = [p for p in problems if "模糊" not in p]
+        if fuzzy:
+            report.fuzzy_cases.append((str(c.get("id", "unknown")), fuzzy))
+        if structural:
+            report.structural_errors.append(f"{c.get('id', 'unknown')}: {'; '.join(structural)}")
+
+    # 2. 重复场景检查
+    report.duplicates = check_duplicate_scenarios(cases)
+
+    # 3. 覆盖缺口检查
+    report.coverage_gaps = check_coverage_gaps(cases)
+
+    return report
