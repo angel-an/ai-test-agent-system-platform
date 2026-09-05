@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 # noqa  MC8zOmFIVnBZMlhscm9ua3VMazZNbGRPYVE9PTo3MDc2NWRjZQ==
 
 class APITestDetailLog(BaseModel):
@@ -50,12 +50,13 @@ class APITestDetailLog(BaseModel):
 
     created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
 
-    model_config = ConfigDict(
-        json_encoders={
-            UUID: str,
-            datetime: lambda v: v.isoformat(),
-        }
-    )
+    @field_serializer("test_result_id", "test_run_id", "api_test_id")
+    def serialize_uuid(self, value: UUID) -> str:
+        return str(value)
+
+    @field_serializer("started_at", "completed_at", "created_at")
+    def serialize_datetime(self, value: datetime | None) -> str | None:
+        return value.isoformat() if value else None
 
     @classmethod
     def collection_name(cls) -> str:

@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 # noqa  MC80OmFIVnBZMlhscm9ua3VMazZSM05RUWc9PTozMDRkZGIwZg==
 
 # type: ignore  MS80OmFIVnBZMlhscm9ua3VMazZSM05RUWc9PTozMDRkZGIwZg==
@@ -62,13 +62,14 @@ class AuditLog(BaseModel):
         default=None,
         description="操作者 User-Agent"
     )
-    
-    model_config = ConfigDict(
-        json_encoders={
-            UUID: str,
-            datetime: lambda v: v.isoformat(),
-        }
-    )
+
+    @field_serializer("entity_id", "performed_by")
+    def serialize_uuid(self, value: UUID) -> str:
+        return str(value)
+
+    @field_serializer("performed_at")
+    def serialize_datetime(self, value: datetime) -> str:
+        return value.isoformat()
 
     @classmethod
     def collection_name(cls) -> str:

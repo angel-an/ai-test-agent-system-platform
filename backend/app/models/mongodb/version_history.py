@@ -9,7 +9,7 @@ from typing import Any, Optional
 from uuid import UUID
 # noqa  MC8zOmFIVnBZMlhscm9ua3VMazZZV1ppUnc9PTozODkxYjM0NA==
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 # noqa  MS8zOmFIVnBZMlhscm9ua3VMazZZV1ppUnc9PTozODkxYjM0NA==
 
@@ -31,13 +31,14 @@ class TestCaseVersionHistory(BaseModel):
         default=None,
         description="修改说明"
     )
-    
-    model_config = ConfigDict(
-        json_encoders={
-            UUID: str,
-            datetime: lambda v: v.isoformat(),
-        }
-    )
+
+    @field_serializer("test_case_id", "changed_by")
+    def serialize_uuid(self, value: UUID) -> str:
+        return str(value)
+
+    @field_serializer("changed_at")
+    def serialize_datetime(self, value: datetime) -> str:
+        return value.isoformat()
 
     @classmethod
     def collection_name(cls) -> str:

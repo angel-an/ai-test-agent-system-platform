@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 # type: ignore  MS80OmFIVnBZMlhscm9ua3VMazZlVzFGYlE9PTowMTQwNThjMw==
 
@@ -35,15 +35,17 @@ class TestCaseAttachment(BaseModel):
         default=None,
         description="附件描述"
     )
-    
-    model_config = ConfigDict(
-        json_encoders={
-            UUID: str,
-            datetime: lambda v: v.isoformat(),
-        }
-    )
+
+    @field_serializer("test_case_id", "uploaded_by")
+    def serialize_uuid(self, value: UUID) -> str:
+        return str(value)
+
+    @field_serializer("uploaded_at")
+    def serialize_datetime(self, value: datetime) -> str:
+        return value.isoformat()
+
 # fmt: off  Mi80OmFIVnBZMlhscm9ua3VMazZlVzFGYlE9PTowMTQwNThjMw==
-    
+
     @classmethod
     def collection_name(cls) -> str:
         """获取 MongoDB 集合名称"""
