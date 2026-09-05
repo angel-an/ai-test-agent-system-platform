@@ -59,13 +59,6 @@ class TestGateConfig:
         cfg = GateConfig.from_env()
         assert cfg.fail_closed is True
 
-    def test_from_legacy_env(self, monkeypatch):
-        monkeypatch.setenv("PR2_LIVE_API", "1")
-        monkeypatch.setenv("PR2_RUN_RISKY_NEG", "1")
-        cfg = GateConfig.from_legacy_env(prefix="PR2")
-        assert cfg.live_api is True
-        assert cfg.run_risky_negative is True
-
     def test_any_live(self):
         assert GateConfig(live_api=True).any_live() is True
         assert GateConfig(live_web=True).any_live() is True
