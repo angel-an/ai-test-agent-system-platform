@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional, Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 # pragma: no cover  MC80OmFIVnBZMlhscm9ua3VMazZWbHBNZFE9PTo1ZmQ1MDhkMA==
 
 from app.schemas.enums import (
@@ -111,8 +111,7 @@ class TestRunLinks(BaseModel):
     self_link: Optional[str] = Field(default=None, alias="self", description="自身链接")
     test_cases: Optional[str] = Field(default=None, description="测试用例链接")
     
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 class OverallProgress(BaseModel):
     """

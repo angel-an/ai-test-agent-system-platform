@@ -8,7 +8,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 # pragma: no cover  MC80OmFIVnBZMlhscm9ua3VMazZjWEJoYWc9PTplMzM5NGRjNg==
 
 from app.schemas.common import BaseResponse, LinkInfo
@@ -100,8 +100,7 @@ class ProjectInfo(ProjectBase):
         description="相关资源链接"
     )
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 # pragma: no cover  Mi80OmFIVnBZMlhscm9ua3VMazZjWEJoYWc9PTplMzM5NGRjNg==
 
 class ProjectResponse(BaseResponse):

@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 # noqa  MC80OmFIVnBZMlhscm9ua3VMazZSM05RUWc9PTozMDRkZGIwZg==
 
 # type: ignore  MS80OmFIVnBZMlhscm9ua3VMazZSM05RUWc9PTozMDRkZGIwZg==
@@ -63,12 +63,13 @@ class AuditLog(BaseModel):
         description="操作者 User-Agent"
     )
     
-    class Config:
-        json_encoders = {
+    model_config = ConfigDict(
+        json_encoders={
             UUID: str,
             datetime: lambda v: v.isoformat(),
         }
-    
+    )
+
     @classmethod
     def collection_name(cls) -> str:
         """获取 MongoDB 集合名称"""

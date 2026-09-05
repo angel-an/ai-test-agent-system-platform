@@ -9,7 +9,7 @@ from typing import Any, Optional
 from uuid import UUID
 # noqa  MC8zOmFIVnBZMlhscm9ua3VMazZZV1ppUnc9PTozODkxYjM0NA==
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # noqa  MS8zOmFIVnBZMlhscm9ua3VMazZZV1ppUnc9PTozODkxYjM0NA==
 
@@ -32,12 +32,13 @@ class TestCaseVersionHistory(BaseModel):
         description="修改说明"
     )
     
-    class Config:
-        json_encoders = {
+    model_config = ConfigDict(
+        json_encoders={
             UUID: str,
             datetime: lambda v: v.isoformat(),
         }
-    
+    )
+
     @classmethod
     def collection_name(cls) -> str:
         """获取 MongoDB 集合名称"""

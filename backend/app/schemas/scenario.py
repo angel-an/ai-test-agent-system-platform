@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 # fmt: off  MC80OmFIVnBZMlhscm9ua3VMazZTSEZVUmc9PToyMzY4Mzc3Zg==
 
 # ==================== 场景模型 ====================
@@ -47,8 +47,7 @@ class ScenarioResponse(ScenarioBase):
     updated_at: datetime
     created_by: Optional[UUID]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ScenarioListResponse(BaseModel):
     """场景列表响应"""
@@ -77,8 +76,7 @@ class DataMappingResponse(BaseModel):
     transform_expression: Optional[str]
     description: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class StepExtractor(BaseModel):
     """数据提取器"""
@@ -133,8 +131,7 @@ class ScenarioStepResponse(ScenarioStepCreate):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ==================== 执行模型 ====================
 
@@ -167,8 +164,7 @@ class ScenarioRunResponse(BaseModel):
     completed_at: Optional[datetime]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 # pragma: no cover  My80OmFIVnBZMlhscm9ua3VMazZTSEZVUmc9PToyMzY4Mzc3Zg==
 
 class ScenarioRunListResponse(BaseModel):
@@ -190,8 +186,7 @@ class ScenarioStepResultResponse(BaseModel):
     extracted_data: Dict[str, Any]
     assertion_results: List[Dict[str, Any]]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # 更新前向引用
 ScenarioExecuteResponse.model_rebuild()

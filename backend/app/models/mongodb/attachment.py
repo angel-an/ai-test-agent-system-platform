@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # type: ignore  MS80OmFIVnBZMlhscm9ua3VMazZlVzFGYlE9PTowMTQwNThjMw==
 
@@ -36,11 +36,12 @@ class TestCaseAttachment(BaseModel):
         description="附件描述"
     )
     
-    class Config:
-        json_encoders = {
+    model_config = ConfigDict(
+        json_encoders={
             UUID: str,
             datetime: lambda v: v.isoformat(),
         }
+    )
 # fmt: off  Mi80OmFIVnBZMlhscm9ua3VMazZlVzFGYlE9PTowMTQwNThjMw==
     
     @classmethod

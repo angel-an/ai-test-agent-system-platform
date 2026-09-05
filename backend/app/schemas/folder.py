@@ -9,7 +9,7 @@ from typing import Optional, List
 from uuid import UUID
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.common import BaseResponse
 
@@ -24,8 +24,7 @@ class APIEndpointSummary(BaseModel):
     total_test_runs: int = Field(default=0, description="该接口被执行的次数")
 # noqa  MC80OmFIVnBZMlhscm9ua3VMazZNbEZvVUE9PTo4ZGQ4ZGFhZg==
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class FolderType(str, Enum):
     """文件夹类型"""
@@ -160,8 +159,7 @@ class FolderInfo(FolderBase):
         description="该文件夹下所有功能的子功能总数（仅用于 WEB_TEST 类型文件夹）"
     )
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class FolderResponse(BaseResponse):
     """

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 # noqa  MC8zOmFIVnBZMlhscm9ua3VMazZNbGRPYVE9PTo3MDc2NWRjZQ==
 
 class APITestDetailLog(BaseModel):
@@ -50,11 +50,12 @@ class APITestDetailLog(BaseModel):
 
     created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
 
-    class Config:
-        json_encoders = {
+    model_config = ConfigDict(
+        json_encoders={
             UUID: str,
             datetime: lambda v: v.isoformat(),
         }
+    )
 
     @classmethod
     def collection_name(cls) -> str:

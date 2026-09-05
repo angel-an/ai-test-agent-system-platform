@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # fmt: off  MC80OmFIVnBZMlhscm9ua3VMazZkbU5uUWc9PTo3NzlkNDI5OA==
 
@@ -70,8 +70,7 @@ class APIEndpointResponse(APIEndpointBase):
     created_at: datetime
     updated_at: datetime | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 # pragma: no cover  My80OmFIVnBZMlhscm9ua3VMazZkbU5uUWc9PTo3NzlkNDI5OA==
 
 class OpenAPIParseResult(BaseModel):
