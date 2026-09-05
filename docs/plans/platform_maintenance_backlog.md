@@ -219,8 +219,8 @@ datetime.now(timezone.utc)
 |---|---|---|---|
 | P1 | Pydantic `class Config` → `ConfigDict` 迁移 | 已完成 | ✅ 已提交（`9cb34a9`） |
 | P1.5 | Pydantic `json_encoders` → `field_serializer` 迁移 | 已完成 | ✅ 已提交（`aca3d07`） |
+| P1-2 | 质量门禁扩展（重复场景、覆盖缺口、质量报告） | 0.5 天 | ✅ 已提交（`eed3af5`） |
 | P2 | Legacy 兼容清退（`from_legacy_env` 已删除） | 0.5 天 | ✅ 已完成（`b9a304b`） |
-| P3 | MongoDB 模型 `datetime.utcnow()` → `datetime.now(timezone.utc)` | 0.5 天 | ✅ 已完成（4e22c91） |
 | P3.5 | 全仓 `datetime.utcnow()` 清理（API、服务、仓储等） | 1 天 | ✅ 已完成（9 文件，13 处） |
 | P4 | Pytest 警告消除（重命名领域模型） | 1 天 | 保持现状 |
 | P5 | 测试样例字符串再统一 | 0.5 天 | 低优 |
@@ -232,7 +232,7 @@ datetime.now(timezone.utc)
 **平台通用规则（`backend/app/platform/` + `backend/tests/platform/`）自 2026-09-05 起内容口径冻结。**
 
 - 冻结含义：平台规则文档和代码的内容/接口/行为已定型，不再扩展新功能
-- 版控状态：平台基线已提交（`9cb34a9`），P1 `class Config` → `ConfigDict` 已提交（`9cb34a9`），P1.5 `json_encoders` → `field_serializer` 已提交（`aca3d07`），P2 Legacy 兼容已清退（`b9a304b`），P3 MongoDB 模型 datetime 迁移已提交（`4e22c91`），P3.5 全仓 datetime 迁移已提交（`3466395`），P3.5 验证测试已提交（`94790d6`），维护债文档已同步
+- 版控状态：平台基线已提交（`9cb34a9`），P1 `class Config` → `ConfigDict` 已提交（`9cb34a9`），P1.5 `json_encoders` → `field_serializer` 已提交（`aca3d07`），P1-2 质量门禁扩展已提交（`eed3af5`），P2 Legacy 兼容已清退（`b9a304b`），P3 MongoDB 模型 datetime 迁移已提交（`4e22c91`），P3.5 全仓 datetime 迁移已提交（`3466395`），P3.5 验证测试已提交（`94790d6`），维护债文档已同步
 - 真实项目样例只用于验证平台能力，不定义平台规则
 - 新增平台功能需走 PR 评审，确保不引入项目专属逻辑
 - 维护债按本文件排期独立处理，不回流平台主线
