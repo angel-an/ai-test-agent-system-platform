@@ -65,11 +65,10 @@ Pydantic V2 中 `ConfigDict(json_encoders=...)` 本身也被标记为 deprecated
 
 **当前警告数（可复现基线：平台 215 + 序列化回归 10）**：`225 passed, 33 warnings`
 - 8 个 PytestCollectionWarning（平台层 Enum 类名与 pytest 测试类命名冲突）
-- 1 个 PydanticDeprecatedSince20 `json_encoders`（由 4 个模型文件共同触发）
-- 多个 DeprecationWarning `datetime.utcnow()`（来自 MongoDB 模型默认值）
-- 其余为 LangChain / sqlite3 等第三方库警告
+- 1 个 PydanticDeprecatedSince20 `json_encoders`（由 4 个模型文件共同触发，实际展开为 9 条）
+- 多个 DeprecationWarning `datetime.utcnow()`（来自 MongoDB 模型默认值，仅合并运行时出现）
 
-**注意**：`tests/platform/` 单独运行时警告数为 17（collection + json_encoders + 第三方库），合并运行序列化回归后增至 33（含 datetime.utcnow() 等）。文档和报告应以合并运行口径 33 warnings 为准。
+**注意**：`tests/platform/` 单独运行时警告数为 17，构成为 8 个 PytestCollectionWarning + 9 个 json_encoders 弃用（由 pydantic 内部重复触发）。第三方库警告（LangChain / sqlite3 等）仅在更大范围测试中出现。文档和报告应以合并运行口径 33 warnings 为准。
 - 现有业务测试：待确认可复现集合（当前 KB E2E 环境存在错误，需隔离或修复后重跑）
 
 ### 2.3 迁移方案（第一批）
