@@ -7,27 +7,20 @@
 
 ## 1. Legacy 兼容生命周期
 
-### 1.1 当前状态
+### 1.1 状态：✅ 已完成（2026-09-05，提交 `b9a304b`）
 
-| 兼容项 | 位置 | 说明 | 清退条件 |
+| 兼容项 | 原位置 | 说明 | 状态 |
 |---|---|---|---|
-| `from_legacy_env(prefix="PR2")` | `execution_gates.py:54` | 兼容 PR2_* 环境变量命名 | 存量项目全部迁移至标准命名（LIVE_API / RUN_RISKY_NEG） |
-| `test_from_legacy_env` | `test_p0_gates.py:65` | 验证兼容方法本身 | 随 `from_legacy_env` 一并清退 |
+| `from_legacy_env(prefix="PR2")` | `execution_gates.py:54` | 兼容 PR2_* 环境变量命名 | ✅ 已删除 |
+| `test_from_legacy_env` | `test_p0_gates.py:65` | 验证兼容方法本身 | ✅ 已删除 |
 
-### 1.2 存量依赖扫描结果（2026-09-05，更新）
+### 1.2 清退后扫描
 
-| 位置 | 使用方式 | 类型 | 处理建议 |
+| 位置 | 使用方式 | 类型 | 状态 |
 |---|---|---|---|
-| `tests/api/pr2_storage_recharge/` | 8 个测试文件 + conftest 已迁移至 `_env_gate("LIVE_API")`，README 已更新 | 项目样例 | ✅ 已迁移至标准命名，保留 PR2_* 兼容回退 |
-| `tests/platform/test_p0_gates.py:65` | 测试 `from_legacy_env` 兼容方法，运行时触发 DeprecationWarning | 平台测试 | 随兼容方法清退 |
-| `app/platform/execution_gates.py:54` | 兼容方法已标注 `@deprecated` | 平台代码 | 待清退 |
-
-### 1.3 决策记录
-
-- **不删除**：`from_legacy_env` 已标注 `@deprecated`，但保留方法体以维持向后兼容
-- **不扩展**：严禁为新项目增加新前缀兼容
-- **项目样例迁移**：`tests/api/pr2_storage_recharge/` 已迁移至 `_env_gate()`，优先使用标准命名
-- **清退触发**：确认无其他存量依赖后，一次性删除 `from_legacy_env` 及对应测试
+| `tests/api/pr2_storage_recharge/` | 8 个测试文件 + conftest 使用 `_env_gate("LIVE_API")` | 项目样例 | ✅ 已迁移至标准命名 |
+| `app/platform/execution_gates.py` | 仅 `from_env()`，标准命名 | 平台代码 | ✅ 无遗留兼容 |
+| 全仓 `from_legacy_env` 调用 | — | — | ✅ 已清零 |
 
 ---
 
@@ -69,13 +62,16 @@
 - 可复现基线：`tests/platform/ + tests/mongodb/test_serialization_regression.py` — 225 passed, 11 warnings（P3 完成后）
 - `json_encoders` 弃用警告已消除
 
-### 2.3 当前警告构成（2026-09-05，P3 完成后）
+### 2.3 当前警告构成（2026-09-05，P2/P3.5 完成后）
 
-**可复现基线**：`225 passed, 11 warnings`
+**可复现基线**：`243 passed, 10 warnings`
 - 10 个 PytestCollectionWarning（平台层 8 + MongoDB 模型 2）
-- 1 个 DeprecationWarning `from_legacy_env is deprecated`（预期行为，随方法清退消除）
+- 0 个 DeprecationWarning（P2 `from_legacy_env` 已删除，P3.5 `datetime.utcnow()` 已清零）
 
-**已消除**：8 个 DeprecationWarning `datetime.utcnow()`（P3 完成）
+**已消除**：
+- 1 个 DeprecationWarning `from_legacy_env is deprecated`（P2 完成）
+- 8 个 DeprecationWarning `datetime.utcnow()`（P3 完成）
+- 全仓其他 `datetime.utcnow()` 13 处（P3.5 完成）
 
 ### 2.4 迁移方案参考
 
@@ -213,7 +209,7 @@ datetime.now(timezone.utc)
 |---|---|---|---|
 | P1 | Pydantic `class Config` → `ConfigDict` 迁移 | 已完成 | ✅ 已提交（`9cb34a9`） |
 | P1.5 | Pydantic `json_encoders` → `field_serializer` 迁移 | 已完成 | ✅ 已提交（`aca3d07`） |
-| P2 | Legacy 兼容清退（`from_legacy_env` 已标注 `@deprecated`） | 0.5 天 | 待确认无存量依赖后删除 |
+| P2 | Legacy 兼容清退（`from_legacy_env` 已删除） | 0.5 天 | ✅ 已完成（`b9a304b`） |
 | P3 | MongoDB 模型 `datetime.utcnow()` → `datetime.now(timezone.utc)` | 0.5 天 | ✅ 已完成（4e22c91） |
 | P3.5 | 全仓 `datetime.utcnow()` 清理（API、服务、仓储等） | 1 天 | ✅ 已完成（9 文件，13 处） |
 | P4 | Pytest 警告消除（重命名领域模型） | 1 天 | 保持现状 |
@@ -226,7 +222,7 @@ datetime.now(timezone.utc)
 **平台通用规则（`backend/app/platform/` + `backend/tests/platform/`）自 2026-09-05 起内容口径冻结。**
 
 - 冻结含义：平台规则文档和代码的内容/接口/行为已定型，不再扩展新功能
-- 版控状态：平台基线已提交（`9cb34a9`），P1 `class Config` → `ConfigDict` 已提交（`9cb34a9`），P1.5 `json_encoders` → `field_serializer` 已提交（`aca3d07`），`from_legacy_env` 已标注 deprecated（`389c287`），P3 MongoDB 模型 datetime 迁移已提交（`4e22c91`），P3.5 全仓 datetime 迁移已提交（`3466395`），维护债文档已同步（`7ce895b`）
+- 版控状态：平台基线已提交（`9cb34a9`），P1 `class Config` → `ConfigDict` 已提交（`9cb34a9`），P1.5 `json_encoders` → `field_serializer` 已提交（`aca3d07`），P2 Legacy 兼容已清退（`b9a304b`），P3 MongoDB 模型 datetime 迁移已提交（`4e22c91`），P3.5 全仓 datetime 迁移已提交（`3466395`），P3.5 验证测试已提交（`94790d6`），维护债文档已同步
 - 真实项目样例只用于验证平台能力，不定义平台规则
 - 新增平台功能需走 PR 评审，确保不引入项目专属逻辑
 - 维护债按本文件排期独立处理，不回流平台主线
