@@ -65,6 +65,16 @@
 ### 2.3 当前警告构成（2026-09-05，P2/P3.5 完成后）
 
 **可复现基线**：`243 passed, 10 warnings`
+
+**测试构成**：
+| 类别 | 数量 | 说明 |
+|---|---|---|
+| 平台测试 | 224 | P0-P2 平台规则测试（含门控、契约、报告、版本、质量等） |
+| P3.5 验证 | 19 | 时区感知、日期边界、MongoDB 时间字段、报告过期等 |
+| 序列化回归 | 10 | MongoDB 模型 model_dump + to_document 验证 |
+| **合计** | **243** | — |
+
+**警告构成**：
 - 10 个 PytestCollectionWarning（平台层 8 + MongoDB 模型 2）
 - 0 个 DeprecationWarning（P2 `from_legacy_env` 已删除，P3.5 `datetime.utcnow()` 已清零）
 
@@ -180,7 +190,7 @@ datetime.now(timezone.utc)
 - MongoDB BSON Date 类型原生支持带 tzinfo 的 datetime
 - `to_document()` 直接传递 datetime 对象给驱动，驱动自动处理时区转换
 - `@field_serializer` 输出的 ISO 格式字符串兼容下游消费方
-- 序列化回归测试 10 passed，完整基线 225 passed
+- 序列化回归测试 10 passed，完整基线 **243 passed, 10 warnings**
 
 ---
 
