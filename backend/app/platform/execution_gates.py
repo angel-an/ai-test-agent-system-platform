@@ -14,8 +14,11 @@ live 与风险项必须显式开启。
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Optional
+
+from typing_extensions import deprecated
 
 
 # ---------------------------------------------------------------------------
@@ -48,12 +51,13 @@ class GateConfig:
         )
 
     @classmethod
+    @deprecated("from_legacy_env is deprecated. Use from_env() with standard naming (LIVE_API / RUN_RISKY_NEG).")
     def from_legacy_env(cls, prefix: str = "PR2") -> "GateConfig":
         """兼容遗留项目环境变量命名（如 PR2_LIVE_API / PR2_RUN_RISKY_NEG）。
 
-        状态：migration-only，已冻结，不扩展新前缀。
-        生命周期：待存量项目全部迁移至标准命名后清退（标准命名：LIVE_API / RUN_RISKY_NEG）。
-        新代码严禁使用本方法，应直接使用 from_env() 或显式构造 GateConfig。
+        状态：已弃用，将在下一版本中删除。
+        所有存量项目已迁移至标准命名（LIVE_API / RUN_RISKY_NEG）。
+        新代码应直接使用 from_env() 或显式构造 GateConfig。
         """
         return cls(
             live_api=os.getenv(f"{prefix}_LIVE_API", "0") == "1",
