@@ -59,7 +59,7 @@
 
 **验证结果**：
 - 序列化回归测试：`tests/mongodb/test_serialization_regression.py` — 10 passed
-- 可复现基线：`tests/platform/ + tests/mongodb/test_serialization_regression.py` — 225 passed, 11 warnings（P3 完成后）
+- 可复现基线（历史）：`tests/platform/ + tests/mongodb/test_serialization_regression.py` — 225 passed, 11 warnings（P3 完成后，P2/P3.5 之前）
 - `json_encoders` 弃用警告已消除
 
 ### 2.3 当前警告构成（2026-09-05，P2/P3.5 完成后）
@@ -69,8 +69,8 @@
 **测试构成**：
 | 类别 | 数量 | 说明 |
 |---|---|---|
-| 平台测试 | 224 | P0-P2 平台规则测试（含门控、契约、报告、版本、质量等） |
-| P3.5 验证 | 19 | 时区感知、日期边界、MongoDB 时间字段、报告过期等 |
+| 平台测试 | 214 | P0-P2 平台规则测试（契约、目录、报告、门控、提示词、质量、版本、API 分层、Web 框架、证据链、编排） |
+| P3.5 验证 | 19 | 时区感知、日期边界、MongoDB 时间字段、报告过期、调度时间、导出时间戳、序列化回归 |
 | 序列化回归 | 10 | MongoDB 模型 model_dump + to_document 验证 |
 | **合计** | **243** | — |
 
