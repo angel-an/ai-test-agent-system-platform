@@ -11,23 +11,23 @@
 
 | 兼容项 | 位置 | 说明 | 清退条件 |
 |---|---|---|---|
-| `from_legacy_env(prefix="PR2")` | `execution_gates.py:51` | 兼容 PR2_* 环境变量命名 | 存量项目全部迁移至标准命名（LIVE_API / RUN_RISKY_NEG） |
-| `test_from_legacy_env` | `test_p0_gates.py:62` | 验证兼容方法本身 | 随 `from_legacy_env` 一并清退 |
+| `from_legacy_env(prefix="PR2")` | `execution_gates.py:54` | 兼容 PR2_* 环境变量命名 | 存量项目全部迁移至标准命名（LIVE_API / RUN_RISKY_NEG） |
+| `test_from_legacy_env` | `test_p0_gates.py:65` | 验证兼容方法本身 | 随 `from_legacy_env` 一并清退 |
 
-### 1.2 存量依赖扫描结果（2026-09-05）
+### 1.2 存量依赖扫描结果（2026-09-05，更新）
 
 | 位置 | 使用方式 | 类型 | 处理建议 |
 |---|---|---|---|
-| `tests/api/pr2_storage_recharge/` | 8 个测试文件 + conftest + README 使用 PR2_LIVE_API / PR2_RUN_RISKY_NEG / PR2_AUTH_NEG | 项目样例 | 迁移至标准命名（LIVE_API / RUN_RISKY_NEG），作为平台推荐用法示例 |
-| `tests/platform/test_p0_gates.py:63-64` | 测试 `from_legacy_env` 兼容方法 | 平台测试 | 随兼容方法清退 |
-| `app/platform/execution_gates.py:52` | 兼容方法文档字符串 | 平台代码 | 标注 deprecated，待清退 |
+| `tests/api/pr2_storage_recharge/` | 8 个测试文件 + conftest 已迁移至 `_env_gate("LIVE_API")`，README 已更新 | 项目样例 | ✅ 已迁移至标准命名，保留 PR2_* 兼容回退 |
+| `tests/platform/test_p0_gates.py:65` | 测试 `from_legacy_env` 兼容方法，运行时触发 DeprecationWarning | 平台测试 | 随兼容方法清退 |
+| `app/platform/execution_gates.py:54` | 兼容方法已标注 `@deprecated` | 平台代码 | 待清退 |
 
 ### 1.3 决策记录
 
-- **不删除**：当前仍有存量项目使用 PR2_* 前缀，删除会破坏向后兼容
+- **不删除**：`from_legacy_env` 已标注 `@deprecated`，但保留方法体以维持向后兼容
 - **不扩展**：严禁为新项目增加新前缀兼容
-- **项目样例迁移**：`tests/api/pr2_storage_recharge/` 应迁移至标准命名，作为平台推荐用法
-- **清退触发**：项目样例完成迁移 + 确认无其他存量依赖后，一次性删除 `from_legacy_env` 及对应测试
+- **项目样例迁移**：`tests/api/pr2_storage_recharge/` 已迁移至 `_env_gate()`，优先使用标准命名
+- **清退触发**：确认无其他存量依赖后，一次性删除 `from_legacy_env` 及对应测试
 
 ---
 
@@ -66,16 +66,16 @@
 
 **验证结果**：
 - 序列化回归测试：`tests/mongodb/test_serialization_regression.py` — 10 passed
-- 可复现基线：`tests/platform/ + tests/mongodb/test_serialization_regression.py` — 225 passed, 18 warnings
+- 可复现基线：`tests/platform/ + tests/mongodb/test_serialization_regression.py` — 225 passed, 11 warnings（P3 完成后）
 - `json_encoders` 弃用警告已消除
 
-### 2.3 当前警告构成（2026-09-05）
+### 2.3 当前警告构成（2026-09-05，P3 完成后）
 
-**可复现基线**：`225 passed, 18 warnings`
+**可复现基线**：`225 passed, 11 warnings`
 - 10 个 PytestCollectionWarning（平台层 8 + MongoDB 模型 2）
-- 8 个 DeprecationWarning `datetime.utcnow()`（来自 MongoDB 模型默认值）
+- 1 个 DeprecationWarning `from_legacy_env is deprecated`（预期行为，随方法清退消除）
 
-**注意**：`datetime.utcnow()` 为 Python 3.12+ 弃用，非 Pydantic 问题。迁移至 `datetime.now(timezone.utc)` 可作为独立维护项。
+**已消除**：8 个 DeprecationWarning `datetime.utcnow()`（P3 完成）
 
 ### 2.4 迁移方案参考
 
@@ -137,14 +137,34 @@ class MyModel(BaseModel):
 
 ### 4.1 影响范围
 
-4 个 MongoDB 模型使用 `datetime.utcnow()` 作为默认值：
+**MongoDB 模型默认时间字段：✅ 已完成（2026-09-05，提交 4e22c91）**
 
-| 文件 | 字段 |
+4 个 MongoDB 模型已迁移：
+
+| 文件 | 字段 | 状态 |
+|---|---|---|
+| `version_history.py` | `changed_at` | ✅ |
+| `audit_log.py` | `performed_at` | ✅ |
+| `attachment.py` | `uploaded_at` | ✅ |
+| `api_test_log.py` | `started_at`, `created_at` | ✅ |
+
+**全仓其他使用点：尚未迁移**
+
+全仓扫描仍发现其他业务代码使用 `datetime.utcnow()`，包括但不限于：
+
+| 文件 | 类型 |
 |---|---|
-| `version_history.py` | `changed_at` |
-| `audit_log.py` | `performed_at` |
-| `attachment.py` | `uploaded_at` |
-| `api_test_log.py` | `started_at`, `created_at` |
+| `app/repositories/api_test_repo.py` | 仓储 |
+| `app/services/api_case_link_service.py` | 服务 |
+| `app/services/export_service.py` | 服务 |
+| `app/services/mongodb_service.py` | 服务 |
+| `app/services/scheduler_service.py` | 服务 |
+| `app/api/v2/test_runs.py` | API |
+| `app/api/v2/security_tests.py` | API |
+| `app/api/v2/documents.py` | API |
+| `app/services/test_case_service.py` | 服务 |
+
+**准确表述**：P3 已完成 4 个 MongoDB 模型默认时间字段迁移，并消除目标回归中的 8 个 utcnow 警告；全项目仍有其他 `datetime.utcnow()` 使用点，尚未整体迁移。
 
 ### 4.2 迁移方案
 
@@ -154,13 +174,17 @@ from datetime import datetime
 
 datetime.utcnow()
 
-# 新写法（推荐）
+# 新写法（P3 已应用）
 from datetime import datetime, timezone
 
 datetime.now(timezone.utc)
 ```
 
-**注意**：迁移后字段类型变为 `datetime`（带 tzinfo），需确认 MongoDB 驱动和下游消费方兼容。
+**兼容性验证**：
+- MongoDB BSON Date 类型原生支持带 tzinfo 的 datetime
+- `to_document()` 直接传递 datetime 对象给驱动，驱动自动处理时区转换
+- `@field_serializer` 输出的 ISO 格式字符串兼容下游消费方
+- 序列化回归测试 10 passed，完整基线 225 passed
 
 ---
 
@@ -189,8 +213,9 @@ datetime.now(timezone.utc)
 |---|---|---|---|
 | P1 | Pydantic `class Config` → `ConfigDict` 迁移 | 已完成 | ✅ 已提交 |
 | P1.5 | Pydantic `json_encoders` → `field_serializer` 迁移 | 已完成 | ✅ 已提交 |
-| P2 | Legacy 兼容清退（确认无存量后） | 0.5 天 | 待扫描确认 |
-| P3 | `datetime.utcnow()` → `datetime.now(timezone.utc)` | 0.5 天 | 待确认 MongoDB 兼容性 |
+| P2 | Legacy 兼容清退（`from_legacy_env` 已标注 `@deprecated`） | 0.5 天 | 待确认无存量依赖后删除 |
+| P3 | MongoDB 模型 `datetime.utcnow()` → `datetime.now(timezone.utc)` | 0.5 天 | ✅ 已完成（4e22c91） |
+| P3.5 | 全仓 `datetime.utcnow()` 清理（API、服务、仓储等） | 1 天 | 待分批迁移 |
 | P4 | Pytest 警告消除（重命名领域模型） | 1 天 | 保持现状 |
 | P5 | 测试样例字符串再统一 | 0.5 天 | 低优 |
 
@@ -201,7 +226,7 @@ datetime.now(timezone.utc)
 **平台通用规则（`backend/app/platform/` + `backend/tests/platform/`）自 2026-09-05 起内容口径冻结。**
 
 - 冻结含义：平台规则文档和代码的内容/接口/行为已定型，不再扩展新功能
-- 版控状态：平台基线已提交（`9cb34a9`），P1/P1.5 已提交（`aca3d07`），已形成 Git 提交基线
+- 版控状态：平台基线已提交（`9cb34a9`），P1/P1.5 已提交（`aca3d07`），`from_legacy_env` 已标注 deprecated（`389c287`），P3 MongoDB 模型 datetime 迁移已提交（`4e22c91`），维护债文档已同步（`4e3f4cf`）
 - 真实项目样例只用于验证平台能力，不定义平台规则
 - 新增平台功能需走 PR 评审，确保不引入项目专属逻辑
 - 维护债按本文件排期独立处理，不回流平台主线
