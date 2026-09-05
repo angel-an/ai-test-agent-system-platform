@@ -4,7 +4,7 @@ API 测试详细日志模型
 MongoDB 文档模型，用于存储完整的请求/响应数据
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -36,7 +36,7 @@ class APITestDetailLog(BaseModel):
     assertions: list[dict[str, Any]] = Field(default_factory=list, description="断言结果列表")
 
     # 时间线
-    started_at: datetime = Field(default_factory=datetime.utcnow, description="开始时间")
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="开始时间")
     completed_at: Optional[datetime] = Field(None, description="完成时间")
     duration_ms: Optional[int] = Field(None, description="执行时长(毫秒)")
 
@@ -48,7 +48,7 @@ class APITestDetailLog(BaseModel):
     retry_history: list[dict[str, Any]] = Field(default_factory=list, description="重试历史")
 # noqa  Mi8zOmFIVnBZMlhscm9ua3VMazZNbGRPYVE9PTo3MDc2NWRjZQ==
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="创建时间")
 
     @field_serializer("test_result_id", "test_run_id", "api_test_id")
     def serialize_uuid(self, value: UUID) -> str:

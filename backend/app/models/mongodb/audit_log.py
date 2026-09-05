@@ -4,7 +4,7 @@
 使用 MongoDB 存储系统操作审计日志
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
@@ -51,7 +51,7 @@ class AuditLog(BaseModel):
     )
     performed_by: UUID = Field(..., description="操作者 ID")
     performed_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="操作时间"
     )
     ip_address: Optional[str] = Field(

@@ -6,7 +6,7 @@
 
 # pylint: disable  MC80OmFIVnBZMlhscm9ua3VMazZlVzFGYlE9PTowMTQwNThjMw==
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -28,7 +28,7 @@ class TestCaseAttachment(BaseModel):
     file_path: str = Field(..., description="文件存储路径")
     uploaded_by: UUID = Field(..., description="上传者 ID")
     uploaded_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="上传时间"
     )
     description: Optional[str] = Field(

@@ -4,7 +4,7 @@
 使用 MongoDB 存储测试用例的版本历史记录
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 # noqa  MC8zOmFIVnBZMlhscm9ua3VMazZZV1ppUnc9PTozODkxYjM0NA==
@@ -24,7 +24,7 @@ class TestCaseVersionHistory(BaseModel):
     snapshot: dict[str, Any] = Field(..., description="测试用例快照数据")
     changed_by: UUID = Field(..., description="修改者 ID")
     changed_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="修改时间"
     )
     change_description: Optional[str] = Field(
