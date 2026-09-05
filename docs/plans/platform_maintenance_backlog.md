@@ -237,3 +237,15 @@ datetime.now(timezone.utc)
 - 新增平台功能需走 PR 评审，确保不引入项目专属逻辑
 - 维护债按本文件排期独立处理，不回流平台主线
 - 真实项目验证持续进行，但验证结论回收为平台基线时才修改平台代码
+
+### 基线复现命令
+
+```bash
+cd backend
+# 平台测试（214）+ 序列化回归（10）= 224
+python -m pytest tests/platform/ tests/mongodb/test_serialization_regression.py -v
+
+# 完整基线（含 P3.5 验证）：243 passed, 10 warnings
+python -m pytest tests/platform/ tests/mongodb/test_serialization_regression.py -v
+# 注：P3.5 验证测试（19）已纳入 tests/platform/，无需额外指定
+```
