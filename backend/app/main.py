@@ -224,11 +224,14 @@ async def lifespan(app: FastAPI):
     # 连接 MongoDB
     await MongoDB.connect()
 
-    yield
-
-    scheduler.shutdown(wait=False)
-    await MongoDB.disconnect()
-    await engine.dispose()
+    try:
+        yield
+    finally:
+        # 确保清理顺序：先停调度器，再断连接，最后释放引擎
+        scheduler.shutdown(wait=True)
+        await MongoDB.disconnect()
+        # AsyncEngine.dispose() 是异步方法，需要 await
+        await engine.dispose()
 # pragma: no cover  Mi80OmFIVnBZMlhscm9ua3VMazZPRVF6YkE9PToyM2NmMTExNQ==
 
 def create_app() -> FastAPI:

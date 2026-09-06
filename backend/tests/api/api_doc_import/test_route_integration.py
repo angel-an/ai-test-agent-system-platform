@@ -16,7 +16,13 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 from app.main import app
 
-client = TestClient(app)
+
+@pytest.fixture(scope="session")
+def client():
+    """TestClient fixture：确保 lifespan 正确启动和关闭。"""
+    with TestClient(app) as c:
+        yield c
+
 
 # OpenAPI JSON fixture
 OPENAPI_JSON = {
@@ -110,7 +116,7 @@ class TestUnifiedImportRoute:
             mock.return_value = result
             yield mock
 
-    def test_unified_import_json_file(self, mock_project, mock_parse_openapi):
+    def test_unified_import_json_file(self, client, mock_project, mock_parse_openapi):
         """POST /unified-import JSON 文件导入"""
         response = client.post(
             "/api/v2/unified-import",
@@ -129,7 +135,7 @@ class TestUnifiedImportRoute:
         assert data["data"]["total_endpoints"] == 2
         assert data["data"]["schema_title"] == "Test API"
 
-    def test_unified_import_url(self, mock_project):
+    def test_unified_import_url(self, client, mock_project):
         """POST /unified-import URL 导入"""
         with patch("app.api.v2.api_endpoints.fetch_openapi_from_url") as mock_fetch:
             mock_fetch.return_value = OPENAPI_JSON
@@ -179,7 +185,7 @@ class TestUnifiedImportRoute:
         assert data["success"] is True
         assert data["data"]["source_type"] == "swagger_online"
 
-    def test_unified_import_text(self, mock_project):
+    def test_unified_import_text(self, client, mock_project):
         """POST /unified-import 文本导入"""
         response = client.post(
             "/api/v2/unified-import",
@@ -196,7 +202,7 @@ class TestUnifiedImportRoute:
         # 文本解析应识别到 2 个接口
         assert data["data"]["total_endpoints"] >= 0  # 解析结果取决于 APIDocParserService
 
-    def test_unified_import_missing_project(self):
+    def test_unified_import_missing_project(self, client):
         """项目不存在返回 404"""
         with patch("app.api.v2.unified_import._get_project") as mock:
             from fastapi import HTTPException
@@ -213,7 +219,7 @@ class TestUnifiedImportRoute:
 
         assert response.status_code == 404
 
-    def test_unified_import_missing_url(self):
+    def test_unified_import_missing_url(self, client):
         """URL 模式缺少 url 参数返回 400"""
         with patch("app.api.v2.unified_import._get_project") as mock:
             project = MagicMock()
@@ -234,7 +240,7 @@ class TestUnifiedImportRoute:
         data = response.json()
         assert "url" in str(data).lower()
 
-    def test_unified_import_missing_text(self):
+    def test_unified_import_missing_text(self, client):
         """文本模式缺少 text_content 返回 400"""
         with patch("app.api.v2.unified_import._get_project") as mock:
             project = MagicMock()
@@ -254,7 +260,7 @@ class TestUnifiedImportRoute:
         data = response.json()
         assert "text_content" in str(data).lower()
 
-    def test_unified_import_invalid_source_type(self):
+    def test_unified_import_invalid_source_type(self, client):
         """无效 source_type 返回 400"""
         with patch("app.api.v2.unified_import._get_project") as mock:
             project = MagicMock()
@@ -285,7 +291,7 @@ class TestUnifiedImportFileRoute:
             mock.return_value = project
             yield mock
 
-    def test_upload_json_file(self, mock_project):
+    def test_upload_json_file(self, client, mock_project):
         """POST /unified-import-file JSON 文件上传"""
         with patch("app.api.v2.unified_import._parse_openapi_source") as mock_parse:
             from app.schemas.api_endpoint import (
@@ -333,7 +339,7 @@ class TestUnifiedImportFileRoute:
         assert data["success"] is True
         assert data["data"]["schema_title"] == "Uploaded API"
 
-    def test_upload_txt_file(self, mock_project):
+    def test_upload_txt_file(self, client, mock_project):
         """POST /unified-import-file TXT 文件上传"""
         response = client.post(
             "/api/v2/unified-import-file",
@@ -351,7 +357,7 @@ class TestUnifiedImportFileRoute:
         # 文本解析应识别到接口
         assert "total_endpoints" in data["data"]
 
-    def test_upload_unsupported_extension(self, mock_project):
+    def test_upload_unsupported_extension(self, client, mock_project):
         """不支持的文件扩展名返回 400"""
         response = client.post(
             "/api/v2/unified-import-file",
@@ -367,7 +373,7 @@ class TestUnifiedImportFileRoute:
         # 全局异常处理器包装后可能没有 detail 字段
         assert "pdf" in str(data).lower() or "不支持" in str(data)
 
-    def test_upload_oversized_file(self, mock_project):
+    def test_upload_oversized_file(self, client, mock_project):
         """超大文件返回 400"""
         # 构造一个 16MB 的文件
         big_content = b"x" * (16 * 1024 * 1024)
@@ -389,7 +395,7 @@ class TestUnifiedImportFileRoute:
 class TestResponseShape:
     """验证响应形状正确性"""
 
-    def test_success_response_has_data_wrapper(self):
+    def test_success_response_has_data_wrapper(self, client):
         """成功响应包含 {success, data} 包装"""
         with patch("app.api.v2.unified_import._get_project") as mock_proj:
             project = MagicMock()
@@ -438,7 +444,7 @@ class TestResponseShape:
         assert "warnings" in data["data"]
         assert "errors" in data["data"]
 
-    def test_error_response_shape(self):
+    def test_error_response_shape(self, client):
         """错误响应形状"""
         response = client.post(
             "/api/v2/unified-import",
