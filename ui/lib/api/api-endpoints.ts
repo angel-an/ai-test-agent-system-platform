@@ -100,6 +100,12 @@ export interface UnifiedImportRequest {
 
 // ==================== API 函数 ====================
 
+// 统一响应包装（后端 SuccessResponse[T]）
+interface SuccessResponse<T> {
+  success: boolean;
+  data: T;
+}
+
 /**
  * 统一 API 文档导入（D1-D2）
  *
@@ -107,14 +113,32 @@ export interface UnifiedImportRequest {
  * - swagger_online / swagger_offline
  * - apifox_online / apifox_offline
  * - manual_text / manual_file
+ *
+ * 注意：后端返回 SuccessResponse[UnifiedImportResult]，此处自动解包
  */
 export async function unifiedImportAPI(
   request: UnifiedImportRequest
 ): Promise<UnifiedImportResult> {
-  return apiClient.post<UnifiedImportResult>(
+  const response = await apiClient.post<SuccessResponse<UnifiedImportResult>>(
     "/unified-import",
     request
   );
+  return response.data;
+}
+
+/**
+ * 统一文件上传导入
+ *
+ * 使用 apiClient.form 确保继承统一超时和错误处理
+ */
+export async function unifiedImportFileAPI(
+  formData: FormData
+): Promise<UnifiedImportResult> {
+  const response = await apiClient.form<SuccessResponse<UnifiedImportResult>>(
+    "/unified-import-file",
+    formData
+  );
+  return response.data;
 }
 
 /**

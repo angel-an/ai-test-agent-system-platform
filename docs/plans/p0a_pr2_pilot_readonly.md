@@ -93,39 +93,60 @@
 
 | 检查项 | 状态 | 说明 |
 |---|---|---|
-| 环境变量已配置 | ☐ | `PR2_STORAGE_ACCOUNT_NO` 等 |
-| 凭据未硬编码 | ☐ | 确认脚本无硬编码 |
-| 只读操作确认 | ☐ | 确认接口为 POST 查询，无数据变更 |
-| 响应脱敏检查 | ☐ | 手机号、ID 已脱敏 |
+| 环境变量已配置 | ☑ | `PR2_STORAGE_ACCOUNT_NO` 等已配置 |
+| 凭据未硬编码 | ☑ | 脚本从环境变量读取，无硬编码 |
+| 只读操作确认 | ☑ | POST 查询，无数据变更 |
+| 响应脱敏检查 | ☑ | 手机号、ID 已脱敏归档 |
 
 ---
 
 ## A5 执行记录（只读查询）
 
+**执行时间**：2026-09-06 15:40
+
 ### 5.1 执行前检查
 
 | 检查项 | 状态 |
 |---|---|
-| LIVE_API 开关状态 | `LIVE_API=0`（默认关闭，如需执行设为 1） |
-| 环境变量已加载 | ☐ |
-| 查询参数已确认 | ☐ |
+| LIVE_API 开关状态 | ☑ `LIVE_API=1` |
+| 环境变量已加载 | ☑ `tests/conftest.py` 加载 `backend/.env` |
+| 查询参数已确认 | ☑ `mobile=183****0265`（脱敏） |
 
 ### 5.2 执行步骤（使用现有 PR-2 API 客户端）
 
 **接口信息**：
 - 方法：`POST`
-- 路径：`/api/icdp/v1/memberCard/account/page`
-- 请求体：JSON（见 3.2 查询参数）
-- 鉴权：沿用 PR-2 现有方式（access-token + Cookie + referer）
+- 路径：`/yundt-saas-gateway/api/icdp/v1/memberCard/account/page`
+- 请求体：JSON（`{"pageNum": 1, "pageSize": 10, "mobile": "..."}`）
+- 鉴权：`access-token` + `Cookie` + `referer`
+- 客户端：`DirectHttpApiClient`（已知 token + Cookie）
 
-**执行方式**：
-1. 使用 `tests/api/pr2_storage_recharge/` 中的 pytest/Playwright API 客户端
-2. 或参照现有骨架中的 `PlaywrightApiClient` / `DirectHttpApiClient`
+**执行命令**：
+```bash
+cd backend
+python -m pytest tests/api/pr2_storage_recharge/test_p1_query.py -v
+```
 
-**禁止**：
-- 使用 `Authorization: Bearer` 头（与 PR-2 实际鉴权方式不一致）
-- 表单参数（`-d`）传递查询条件（实际使用 JSON 请求体）
-- 在聊天、脚本或报告中提供真实 token/password
+**执行结果**：
+```
+tests\api\pr2_storage_recharge\test_p1_query.py::test_p1_account_query_by_mobile PASSED [100%]
+============================== 1 passed in 1.27s ==============================
+```
+
+**验证点**：
+- ☑ 按手机号查询命中记录
+- ☑ 余额为数值（≥ 0）
+- ☑ 有会员卡号
+- ☑ 响应状态 200 OK
+
+### 5.3 执行后检查
+
+| 检查项 | 状态 |
+|---|---|
+| 响应已保存 | ☑ |
+| 响应已脱敏（手机号、ID） | ☑ |
+| 证据已归档 | ☑ |
+| 无数据变更确认 | ☑（只读查询，无余额/流水变更） |
 
 **示例代码框架**（需配置环境变量后执行）：
 ```python
@@ -175,8 +196,22 @@ workspace/evidence/pr2-pilot-query/{timestamp}/
 | A1 接入登记 | 登记内容已填写，负责人待指定 |
 | A2 需求映射 | 登记内容已填写（只读范围已限定） |
 | A3 数据登记 | 登记内容已填写（只读数据已登记） |
-| A5 只读执行 | 待执行（需环境变量配置后执行） |
-| 治理规范有效性 | 待验证（执行后填写） |
+| A4 质量门禁 | ☑ 通过（环境变量、凭据、只读、脱敏均已确认） |
+| A5 只读执行 | ☑ 已完成（2026-09-06 15:40，1 passed in 1.27s） |
+| 治理规范有效性 | ☑ 验证通过（P0-B 规范在实际执行中有效） |
+
+**执行摘要**：
+- 项目：PR-2 储值充值
+- 环境：UAT
+- 操作：会员账户只读查询（L1）
+- 结果：PASSED
+- 数据变更：无（只读查询）
+- 证据：已脱敏归档
+
+**下一步**：
+1. 按 B3 审批流程申请写入场景（充值、退款等）
+2. 或继续 PR-9 只读接入试点
+3. 或进入 P1-C 接入规范固化
 
 **下一步**：
 1. 配置环境变量后执行只读查询

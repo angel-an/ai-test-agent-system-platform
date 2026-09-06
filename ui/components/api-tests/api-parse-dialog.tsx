@@ -38,6 +38,7 @@ import {
 import { toast } from "sonner";
 import {
   unifiedImportAPI,
+  unifiedImportFileAPI,
   type ImportSourceType,
   type ImportInputMode,
   type UnifiedImportResult,
@@ -249,18 +250,11 @@ export function APIParseDialog({
     }));
 
     try {
-      let requestBody: Record<string, unknown> = {
-        project_identifier: projectIdentifier,
-        parent_folder_id: parentFolderId ?? null,
-        source_type: sourceType,
-        create_structure: true,
-      };
+      let result: UnifiedImportResult;
 
-      // 根据输入方式构造请求
-      if (state.inputMode === "url") {
-        requestBody.url = state.url.trim();
-      } else if (state.inputMode === "file") {
-        // 文件上传使用 form 接口
+      // 根据输入方式调用对应 API
+      if (state.inputMode === "file") {
+        // 文件上传：使用 apiClient.form 继承统一超时和错误处理
         const formData = new FormData();
         formData.append("project_identifier", projectIdentifier);
         formData.append("source_type", sourceType);
@@ -268,38 +262,24 @@ export function APIParseDialog({
         formData.append("create_structure", "true");
         formData.append("file", state.selectedFile!);
 
-        const response = await fetch("/api/v2/unified-import-file", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("auth_token") || ""}`,
-          },
-          body: formData,
-        });
+        result = await unifiedImportFileAPI(formData);
+      } else {
+        // URL / 文本：使用 JSON 接口
+        const requestBody: Record<string, unknown> = {
+          project_identifier: projectIdentifier,
+          parent_folder_id: parentFolderId ?? null,
+          source_type: sourceType,
+          create_structure: true,
+        };
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || errorData.message || "导入失败");
+        if (state.inputMode === "url") {
+          requestBody.url = state.url.trim();
+        } else if (state.inputMode === "text") {
+          requestBody.text_content = state.textContent;
         }
 
-        const data = await response.json();
-        setState((prev) => ({
-          ...prev,
-          step: data.data?.errors?.length > 0 ? "error" : "success",
-          result: data.data,
-          errorMessage: data.data?.errors?.[0] || "",
-        }));
-
-        if (!data.data?.errors?.length) {
-          onSuccess?.();
-          toast.success("API 文档导入成功！");
-        }
-        return;
-      } else if (state.inputMode === "text") {
-        requestBody.text_content = state.textContent;
+        result = await unifiedImportAPI(requestBody as any);
       }
-
-      // JSON 接口调用
-      const result = await unifiedImportAPI(requestBody as any);
 
       setState((prev) => ({
         ...prev,
