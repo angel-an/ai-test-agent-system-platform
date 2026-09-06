@@ -79,15 +79,45 @@ async def fetch_openapi_from_url(url: str) -> dict[str, Any]:
     preview = text[:200].replace("\n", " ").replace("\r", " ")
     hint = ""
     lower = text.lstrip()[:64].lower()
-    if "swagger-ui" in url.lower() or lower.startswith("<!doctype") or lower.startswith("<html"):
+    url_lower = url.lower()
+
+    # 检测常见的 Swagger UI / 文档页面模式
+    is_swagger_ui = (
+        "swagger-ui" in url_lower
+        or lower.startswith("<!doctype")
+        or lower.startswith("<html")
+        or "swagger ui" in lower
+        or "<div id=\"swagger-ui" in lower
+    )
+
+    # 检测 Apifox 项目页面（非 OpenAPI 导出）
+    is_apifox_page = (
+        "apifox.com" in url_lower
+        and "/openapi" not in url_lower
+        and "/share" not in url_lower
+        and "/api-docs" not in url_lower
+    )
+
+    if is_swagger_ui:
         hint = (
-            " 看起来该地址返回的是 Swagger UI 页面（HTML），请改用 OpenAPI JSON 地址，"
-            "例如把 /swagger-ui.html 替换为 /v3/api-docs 或 /v2/api-docs。"
+            " 该地址返回的是 Swagger UI 页面（HTML），不是 OpenAPI JSON/YAML 文档。"
+            "请改用 OpenAPI JSON 地址，例如把 /swagger-ui.html 替换为 /v3/api-docs 或 /v2/api-docs。"
         )
+    elif is_apifox_page:
+        hint = (
+            " 该地址看起来是 Apifox 项目页面，不是 OpenAPI 导出链接。"
+            "请在 Apifox 中导出为 OpenAPI 3.0 JSON/YAML，或使用分享链接的 OpenAPI 格式地址。"
+        )
+    elif "apifox" in url_lower and "/openapi" not in url_lower:
+        hint = (
+            " Apifox 链接需要指向 OpenAPI 格式文件。"
+            "请确认链接以 /openapi.json 或类似路径结尾。"
+        )
+
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=(
-            f"远程地址返回的不是 OpenAPI JSON/YAML 文档（content-type={content_type!r}）。"
+            f"远程地址返回的不是有效的 OpenAPI JSON/YAML 文档（content-type={content_type!r}）。"
             f"前 200 字符: {preview!r}。{hint}"
         )
     )

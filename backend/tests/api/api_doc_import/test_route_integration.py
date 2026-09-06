@@ -357,7 +357,110 @@ class TestUnifiedImportFileRoute:
         # 文本解析应识别到接口
         assert "total_endpoints" in data["data"]
 
-    def test_upload_unsupported_extension(self, client, mock_project):
+    def test_upload_yaml_file(self, client, mock_project):
+        """POST /unified-import-file YAML 文件上传"""
+        openapi_yaml = """
+openapi: 3.0.0
+info:
+  title: YAML API
+  version: 1.0.0
+paths:
+  /api/v1/items:
+    get:
+      tags: [Items]
+      summary: List items
+      responses:
+        "200":
+          description: OK
+"""
+        with patch("app.api.v2.unified_import._parse_openapi_source") as mock_parse:
+            from app.schemas.api_endpoint import (
+                EndpointSummary,
+                ImportPreview,
+                TagFolderSummary,
+                UnifiedImportResult,
+            )
+            result = UnifiedImportResult(
+                source_type="swagger_offline",
+                schema_title="YAML API",
+                schema_version="1.0.0",
+                total_endpoints=1,
+                total_tags=1,
+                tag_folders=[TagFolderSummary(folder_id="f1", folder_name="Items", endpoint_count=1)],
+                endpoints=[
+                    EndpointSummary(
+                        endpoint_id=None,
+                        display_name="GET /api/v1/items",
+                        method="GET",
+                        path="/api/v1/items",
+                        has_auth=False,
+                        auth_type=None,
+                        has_request_body=False,
+                        has_path_params=False,
+                        has_query_params=False,
+                    ),
+                ],
+                preview=ImportPreview(),
+            )
+            mock_parse.return_value = result
+
+            response = client.post(
+                "/api/v2/unified-import-file",
+                data={
+                    "project_identifier": "PR-TEST",
+                    "source_type": "swagger_offline",
+                    "create_structure": "true",
+                },
+                files={"file": ("api.yaml", openapi_yaml, "application/yaml")},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["schema_title"] == "YAML API"
+
+    def test_upload_yml_file(self, client, mock_project):
+        """POST /unified-import-file .yml 扩展名文件上传"""
+        openapi_yml = """
+openapi: 3.0.0
+info:
+  title: YML API
+  version: 1.0.0
+paths: {}
+"""
+        with patch("app.api.v2.unified_import._parse_openapi_source") as mock_parse:
+            from app.schemas.api_endpoint import (
+                EndpointSummary,
+                ImportPreview,
+                TagFolderSummary,
+                UnifiedImportResult,
+            )
+            result = UnifiedImportResult(
+                source_type="swagger_offline",
+                schema_title="YML API",
+                schema_version="1.0.0",
+                total_endpoints=0,
+                total_tags=0,
+                tag_folders=[],
+                endpoints=[],
+                preview=ImportPreview(),
+            )
+            mock_parse.return_value = result
+
+            response = client.post(
+                "/api/v2/unified-import-file",
+                data={
+                    "project_identifier": "PR-TEST",
+                    "source_type": "swagger_offline",
+                    "create_structure": "true",
+                },
+                files={"file": ("api.yml", openapi_yml, "application/yaml")},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["schema_title"] == "YML API"
         """不支持的文件扩展名返回 400"""
         response = client.post(
             "/api/v2/unified-import-file",

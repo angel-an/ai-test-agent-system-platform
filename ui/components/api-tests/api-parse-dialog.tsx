@@ -44,6 +44,72 @@ import {
   type UnifiedImportResult,
 } from "@/lib/api/api-endpoints";
 
+// ============================================================================
+// 引导内容配置
+// ============================================================================
+
+interface GuideStep {
+  title: string;
+  description: string;
+}
+
+interface SourceGuide {
+  urlPlaceholder: string;
+  urlHint: React.ReactNode;
+  fileHint: string;
+  steps?: GuideStep[];
+}
+
+const SOURCE_GUIDES: Record<SourceCategory, SourceGuide> = {
+  swagger: {
+    urlPlaceholder: "https://api.example.com/openapi.json",
+    urlHint: "支持公开的 OpenAPI/Swagger JSON 或 YAML URL",
+    fileHint: "支持 JSON / YAML，最大 15MB",
+  },
+  apifox: {
+    urlPlaceholder: "https://api.apifox.com/api/v1/share/xxx",
+    urlHint: (
+      <>
+        <AlertCircle className="inline h-3 w-3 mr-1" />
+        Apifox 需先导出为 OpenAPI/Swagger 格式，或分享为在线 OpenAPI 链接
+      </>
+    ),
+    fileHint: "从 Apifox 导出 OpenAPI 3.0 JSON/YAML 后上传",
+    steps: [
+      {
+        title: "在 Apifox 中导出",
+        description: "项目设置 → 导出 → 选择 OpenAPI 3.0 (JSON 或 YAML)",
+      },
+      {
+        title: "或分享在线链接",
+        description: "项目 → 分享 → 开启在线链接 → 复制 OpenAPI 格式链接",
+      },
+      {
+        title: "粘贴到此处",
+        description: "上传导出的文件，或粘贴在线分享链接",
+      },
+    ],
+  },
+  manual: {
+    urlPlaceholder: "",
+    urlHint: "",
+    fileHint: "支持 TXT / DOCX，最大 15MB",
+  },
+};
+
+// URL 示例对照
+const URL_EXAMPLES = [
+  {
+    label: "OpenAPI JSON",
+    correct: "https://petstore.swagger.io/v2/swagger.json",
+    incorrect: "https://petstore.swagger.io/ (Swagger UI 页面)",
+  },
+  {
+    label: "Apifox 分享",
+    correct: "https://api.apifox.com/api/v1/share/xxx/openapi.json",
+    incorrect: "https://app.apifox.com/main/project/xxx (项目页面)",
+  },];
+
 interface APIParseDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -318,10 +384,11 @@ export function APIParseDialog({
     }));
   };
 
-  // 当前类别配置
+  // 当前类别配置和引导
   const currentCategory = SOURCE_CATEGORIES.find(
     (c) => c.key === state.sourceCategory
   );
+  const guide = SOURCE_GUIDES[state.sourceCategory];
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -419,28 +486,64 @@ export function APIParseDialog({
 
               {/* URL 输入 */}
               {state.inputMode === "url" && (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <Input
                     value={state.url}
                     onChange={(e) =>
                       setState((prev) => ({ ...prev, url: e.target.value }))
                     }
-                    placeholder={
-                      state.sourceCategory === "apifox"
-                        ? "https://app.apifox.com/...（需为 OpenAPI 格式）"
-                        : "https://api.example.com/openapi.json"
-                    }
+                    placeholder={guide.urlPlaceholder}
                   />
                   <p className="text-xs text-muted-foreground">
-                    {state.sourceCategory === "apifox" ? (
-                      <>
-                        <AlertCircle className="inline h-3 w-3 mr-1" />
-                        Apifox 需先导出为 OpenAPI/Swagger 格式，或分享为在线 OpenAPI 链接
-                      </>
-                    ) : (
-                      "支持公开的 OpenAPI/Swagger JSON 或 YAML URL"
-                    )}
+                    {guide.urlHint}
                   </p>
+
+                  {/* Apifox 导出步骤引导 */}
+                  {state.sourceCategory === "apifox" && guide.steps && (
+                    <div className="rounded-lg bg-blue-50 p-3 space-y-2">
+                      <p className="text-xs font-medium text-blue-700 flex items-center gap-1">
+                        <BookOpen className="h-3 w-3" />
+                        Apifox 导出指引
+                      </p>
+                      <ol className="space-y-1.5">
+                        {guide.steps.map((step, i) => (
+                          <li key={i} className="flex gap-2 text-xs text-blue-600">
+                            <span className="shrink-0 w-4 h-4 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center text-[10px] font-medium">
+                              {i + 1}
+                            </span>
+                            <div>
+                              <span className="font-medium">{step.title}</span>
+                              <span className="text-blue-500"> — {step.description}</span>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+
+                  {/* URL 示例对照 */}
+                  {state.sourceCategory !== "manual" && (
+                    <div className="rounded-lg border p-3 space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <LinkIcon className="h-3 w-3" />
+                        URL 示例对照
+                      </p>
+                      <div className="space-y-1.5">
+                        {URL_EXAMPLES.map((ex) => (
+                          <div key={ex.label} className="text-xs space-y-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-green-600">✓</span>
+                              <code className="text-green-700 bg-green-50 px-1 rounded">{ex.correct}</code>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-red-500">✗</span>
+                              <span className="text-muted-foreground">{ex.incorrect}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -489,7 +592,7 @@ export function APIParseDialog({
                             <div>
                               <p className="text-sm font-medium">点击选择文件</p>
                               <p className="text-xs text-muted-foreground mt-1">
-                                支持 JSON / YAML / TXT / DOCX，最大 15MB
+                                {guide.fileHint}
                               </p>
                             </div>
                           </>
