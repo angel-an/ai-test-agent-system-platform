@@ -127,11 +127,18 @@ cd backend
 python -m pytest tests/api/pr2_storage_recharge/test_p1_query.py -v
 ```
 
-**执行结果**：
+**执行结果**（2026-09-06 15:40）：
 ```
 tests\api\pr2_storage_recharge\test_p1_query.py::test_p1_account_query_by_mobile PASSED [100%]
 ============================== 1 passed in 1.27s ==============================
 ```
+
+**补充验证**（统一导入测试包）：
+```
+tests\api\api_doc_import\ 55 passed, 1 warning
+```
+- 唯一 warning：Pydantic schema 字段命名冲突（与数据库连接无关）
+- 无 event loop 清理异常
 
 **验证点**：
 - ☑ 按手机号查询命中记录

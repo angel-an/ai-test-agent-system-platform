@@ -36,8 +36,10 @@
 c0f21cac99e9da96db5b985cdf8f67590ac0f0bde1d0608605604b1f4133f478  README.md
 1c92b91068d0aad921d27386a35ae501bd3d82899d20b72d2e33fa33bbe59591  request/query_request.json
 6cab48b3d6e737b57cbf367d9b0ddc5565f6792a7ac5a694003efe3e1b4d7231  response/query_response.json
-# audit/a1_a5_record.md 在索引生成后创建，需单独校验
+898bc6bd6184dba846c8b85be6185d4b34ce7c0c0ebd868f6713f6811b04167c  audit/a1_a5_record.md
 ```
+
+**校验说明**：4 个文件全部记录 SHA-256，完整性可验证。
 
 ---
 
