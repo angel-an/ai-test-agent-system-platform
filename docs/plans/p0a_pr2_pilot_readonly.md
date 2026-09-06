@@ -19,6 +19,8 @@
 | 排除范围 | 充值、退款、批量导入（写入操作，需审批后执行） |
 | 数据保留期限 | 项目结束后 7 天内清理 |
 
+**状态**：登记内容已填写，负责人待指定。
+
 ---
 
 ## A2 需求与测试范围映射
@@ -55,13 +57,24 @@
 | 证据位置 | `workspace/evidence/pr2-pilot-query/{timestamp}/` |
 | 责任人 | QA |
 
-### 3.2 查询参数
+### 3.2 查询参数（POST JSON）
 
-| 参数 | 值 | 说明 |
+| 字段 | 值 | 说明 |
 |---|---|---|
-| accountNo | `PR2_STORAGE_ACCOUNT_NO` | 环境变量，脱敏后示例：`183****0265` |
+| mobile | `PR2_STORAGE_ACCOUNT_NO` | 环境变量，脱敏后示例：`183****0265` |
 | pageNum | 1 | 页码 |
 | pageSize | 10 | 每页条数 |
+
+**请求体示例**：
+```json
+{
+  "pageNum": 1,
+  "pageSize": 10,
+  "mobile": "183****0265"
+}
+```
+
+**注意**：真实执行时 `mobile` 从环境变量读取，不硬编码。
 
 ### 3.3 预期响应字段
 
@@ -82,7 +95,7 @@
 |---|---|---|
 | 环境变量已配置 | ☐ | `PR2_STORAGE_ACCOUNT_NO` 等 |
 | 凭据未硬编码 | ☐ | 确认脚本无硬编码 |
-| 只读操作确认 | ☐ | 确认无 POST/PUT/DELETE |
+| 只读操作确认 | ☐ | 确认接口为 POST 查询，无数据变更 |
 | 响应脱敏检查 | ☐ | 手机号、ID 已脱敏 |
 
 ---
@@ -97,20 +110,36 @@
 | 环境变量已加载 | ☐ |
 | 查询参数已确认 | ☐ |
 
-### 5.2 执行步骤
+### 5.2 执行步骤（使用现有 PR-2 API 客户端）
 
-```bash
-# 1. 确认环境变量
-echo $PR2_STORAGE_ACCOUNT_NO
+**接口信息**：
+- 方法：`POST`
+- 路径：`/api/icdp/v1/memberCard/account/page`
+- 请求体：JSON（见 3.2 查询参数）
+- 鉴权：沿用 PR-2 现有方式（access-token + Cookie + referer）
 
-# 2. 执行只读查询（示例 curl，实际使用 pytest 骨架）
-curl -X GET "${PR2_API_BASE}/api/icdp/v1/memberCard/account/page" \
-  -H "Authorization: Bearer ${PR2_ACCESS_TOKEN}" \
-  -d "accountNo=${PR2_STORAGE_ACCOUNT_NO}" \
-  -d "pageNum=1" \
-  -d "pageSize=10"
+**执行方式**：
+1. 使用 `tests/api/pr2_storage_recharge/` 中的 pytest/Playwright API 客户端
+2. 或参照现有骨架中的 `PlaywrightApiClient` / `DirectHttpApiClient`
 
-# 3. 记录响应（脱敏后归档）
+**禁止**：
+- 使用 `Authorization: Bearer` 头（与 PR-2 实际鉴权方式不一致）
+- 表单参数（`-d`）传递查询条件（实际使用 JSON 请求体）
+- 在聊天、脚本或报告中提供真实 token/password
+
+**示例代码框架**（需配置环境变量后执行）：
+```python
+# 使用 PR-2 现有客户端执行只读查询
+# 真实凭据从环境变量读取，不硬编码
+response = client.post(
+    "/api/icdp/v1/memberCard/account/page",
+    json={
+        "pageNum": 1,
+        "pageSize": 10,
+        "mobile": os.environ["PR2_STORAGE_ACCOUNT_NO"]
+    }
+)
+# 保存响应（脱敏后归档）
 ```
 
 ### 5.3 执行后检查
@@ -143,9 +172,9 @@ workspace/evidence/pr2-pilot-query/{timestamp}/
 
 | 检查项 | 结论 |
 |---|---|
-| A1 接入登记 | 已完成 |
-| A2 需求映射 | 已完成（只读范围已限定） |
-| A3 数据登记 | 已完成（只读数据已登记） |
+| A1 接入登记 | 登记内容已填写，负责人待指定 |
+| A2 需求映射 | 登记内容已填写（只读范围已限定） |
+| A3 数据登记 | 登记内容已填写（只读数据已登记） |
 | A5 只读执行 | 待执行（需环境变量配置后执行） |
 | 治理规范有效性 | 待验证（执行后填写） |
 
