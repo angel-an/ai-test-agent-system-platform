@@ -30,17 +30,13 @@
 
 ---
 
-## 完整性校验
+## 完整性校验（SHA-256）
 
 ```
-# SHA-256 校验（示例格式，实际值由执行环境生成）
-# 生成命令：find workspace/evidence/pr2-pilot-query/20260906-1540 -type f | sort | xargs sha256sum
-
-# 文件哈希占位符（执行时填充）
-# README.md: <待填充>
-# request/query_request.json: <待填充>
-# response/query_response.json: <待填充>
-# audit/a1_a5_record.md: <待填充>
+c0f21cac99e9da96db5b985cdf8f67590ac0f0bde1d0608605604b1f4133f478  README.md
+1c92b91068d0aad921d27386a35ae501bd3d82899d20b72d2e33fa33bbe59591  request/query_request.json
+6cab48b3d6e737b57cbf367d9b0ddc5565f6792a7ac5a694003efe3e1b4d7231  response/query_response.json
+# audit/a1_a5_record.md 在索引生成后创建，需单独校验
 ```
 
 ---
@@ -66,7 +62,8 @@
 
 | 检查项 | 状态 |
 |---|---|
-| 证据包目录存在 | ☐ |
-| 文件清单完整 | ☐ |
-| 脱敏检查通过 | ☐ |
+| 证据包目录存在 | ☑ |
+| 文件清单完整（4 个文件） | ☑ |
+| 脱敏检查通过 | ☑ |
+| SHA-256 已记录 | ☑ |
 | 责任人确认 | admin |
