@@ -238,11 +238,45 @@ datetime.now(timezone.utc)
 - 维护债按本文件排期独立处理，不回流平台主线
 - 真实项目验证持续进行，但验证结论回收为平台基线时才修改平台代码
 
-### 基线复现命令
+### 基线复现命令（本地）
 
 ```bash
 cd backend
-# 完整基线：243 passed, 10 warnings
-# 构成：平台测试 214 + P3.5 验证 19 + 序列化回归 10
+# 本地平台基线：243 passed, 10 warnings
+# 构成：平台测试 233 + 序列化回归 10
+# 注意：该基线不含 PR-2/PR-9 真实数据依赖测试
 python -m pytest tests/platform/ tests/mongodb/test_serialization_regression.py -v
 ```
+
+**基线属性**：
+| 属性 | 说明 |
+|---|---|
+| 类型 | 本地可复现基线（非 CI 门禁） |
+| 测试数据 | 纯内存/模拟数据，无外部依赖 |
+| 真实 API/Web | 默认关闭（`LIVE_API=0`, `LIVE_WEB=0`），避免写入 UAT |
+| 环境要求 | Python 3.13+, 依赖见 `pyproject.toml`, 数据库版本见迁移文件 |
+| 项目样例 | PR-2/PR-9 仅作验证样例，不纳入平台基线 |
+
+### 项目接入规范
+
+1. **新项目统一使用平台契约**：`testcase_contract.py` 的 `TestCaseContract`、`GenerationResult`
+2. **统一目录与命名**：`directory_layout.py` 的三轨目录结构
+3. **统一门控**：`execution_gates.py` 的 `LIVE_API` / `RUN_RISKY_NEG` / `AUTH_NEG`
+4. **统一报告**：`report_templates.py` 的四类结果（PASSED/PENDING_REVIEW/PENDING_CONFIRM/DEFECT）
+5. **固定流程**：需求 → 用例生成 → 质量门禁 → API/Web 执行 → 报告归档
+
+### 测试数据治理
+
+| 事项 | 要求 |
+|---|---|
+| 凭据管理 | 环境变量或密钥管理系统，禁止硬编码 |
+| UAT 写入 | 必须有业务确认、流水留痕、冲正记录 |
+| 证据归档 | 截图、响应体、报告、版本快照统一归档 |
+| 真实项目测试 | 手动或按需执行，不纳入自动基线 |
+
+### 可观测性与维护
+
+- 依赖更新：定期审查 `pyproject.toml` 安全漏洞
+- 平台回归：每次平台代码修改后执行 243 项基线
+- 失败率/跳过率：关注真实项目执行趋势
+- P4/P5：继续暂缓，按需独立处理
