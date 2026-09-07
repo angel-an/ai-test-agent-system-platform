@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-stdlib-conflicts
+        name: Check Python stdlib naming conflicts
+        entry: python backend/scripts/check_stdlib_conflicts.py backend/app --quiet
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
