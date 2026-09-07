@@ -3,7 +3,7 @@
 
 import pytest
 
-from app.platform.api_test_framework.api_layer import (
+from app.test_platform.api_test_framework.api_layer import (
     ApiLayer,
     LayerConfig,
     DEFAULT_LAYER_CONFIGS,

@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from app.platform.execution_gates import (
+from app.test_platform.execution_gates import (
     GateConfig,
     ExecutionGate,
     should_skip_live,

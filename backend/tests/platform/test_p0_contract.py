@@ -3,7 +3,7 @@
 
 import pytest
 
-from app.platform.testcase_contract import (
+from app.test_platform.testcase_contract import (
     TestCaseContract,
     TestCaseStep,
     GenerationResult,
@@ -90,7 +90,7 @@ class TestGenerationResult:
 
 class TestNormalizeCaseFields:
     def test_identifier_to_id(self):
-        from app.platform.testcase_contract import normalize_case_fields
+        from app.test_platform.testcase_contract import normalize_case_fields
         result = normalize_case_fields({"identifier": "TC-001", "name": "测试"})
         assert result["id"] == "TC-001"
         assert result["title"] == "测试"
@@ -98,7 +98,7 @@ class TestNormalizeCaseFields:
         assert "name" not in result
 
     def test_preserves_canonical_fields(self):
-        from app.platform.testcase_contract import normalize_case_fields
+        from app.test_platform.testcase_contract import normalize_case_fields
         result = normalize_case_fields({"id": "TC-001", "title": "已有标题", "name": "测试"})
         # title 已存在，name 不映射（避免覆盖）
         assert result["id"] == "TC-001"
@@ -106,7 +106,7 @@ class TestNormalizeCaseFields:
         assert result["name"] == "测试"  # name 保留
 
     def test_real_project_alias(self):
-        from app.platform.testcase_contract import normalize_case_fields
+        from app.test_platform.testcase_contract import normalize_case_fields
         # 模拟 PR-9 真实项目输出
         raw = {
             "identifier": "TC-437641",

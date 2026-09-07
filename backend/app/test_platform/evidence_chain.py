@@ -163,6 +163,7 @@ def build_evidence_package(
     api_ev: Optional[ApiEvidence] = None,
     output_dir: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
+    project: Optional[str] = None,
 ) -> Path:
     """打包统一证据为 ZIP 文件。
 
@@ -170,16 +171,21 @@ def build_evidence_package(
         run_id: 运行标识
         web_ev: Web 证据
         api_ev: API 证据
-        output_dir: 输出目录（默认 workspace/evidence/{run_id}/）
+        output_dir: 输出目录（默认使用 DirectoryLayout）
         metadata: 元数据
+        project: 项目标识符（用于项目隔离目录）
 
     Returns:
         ZIP 文件路径
     """
-    from app.platform.directory_layout import DirectoryLayout
+    from app.test_platform.directory_layout import DirectoryLayout
 
-    layout = DirectoryLayout()
-    evidence_dir = layout.evidence_dir(run_id)
+    if output_dir:
+        evidence_dir = Path(output_dir)
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        layout = DirectoryLayout()
+        evidence_dir = layout.evidence_dir(run_id, project=project)
 
     # 创建统一证据
     unified = UnifiedEvidence(
@@ -202,10 +208,16 @@ def build_evidence_package(
         zf.write(evidence_json, "evidence.json")
 
         if web_ev:
+            # 截图路径相对于 evidence_dir 解析
             for ss in web_ev.screenshots:
-                ss_path = evidence_dir.parent / ss  # screenshots 可能在 evidence 外
+                ss_path = evidence_dir / ss
                 if ss_path.exists():
                     zf.write(ss_path, f"screenshots/{ss_path.name}")
+                else:
+                    # 尝试绝对路径或相对于工作目录
+                    alt_path = Path(ss)
+                    if alt_path.exists():
+                        zf.write(alt_path, f"screenshots/{alt_path.name}")
             if web_ev.self_reflect_path:
                 sr_path = Path(web_ev.self_reflect_path)
                 if sr_path.exists():

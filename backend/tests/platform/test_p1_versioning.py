@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.platform.versioning import (
+from app.test_platform.versioning import (
     VersionRecord,
     VersionManager,
     diff_versions,

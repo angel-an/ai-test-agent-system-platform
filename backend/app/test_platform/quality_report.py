@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Optional
 
-from app.platform.testcase_contract import TestCaseKeyword
+from app.test_platform.testcase_contract import TestCaseKeyword
 
 
 # ---------------------------------------------------------------------------

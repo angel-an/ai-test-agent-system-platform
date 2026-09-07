@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.platform.web_test_framework import (
+from app.test_platform.web_test_framework import (
     WebRegressionLayer,
     WebRunConfig,
     WebResultWriteback,

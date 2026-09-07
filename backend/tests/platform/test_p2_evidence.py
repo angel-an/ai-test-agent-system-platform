@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.platform.evidence_chain import (
+from app.test_platform.evidence_chain import (
     WebEvidence,
     ApiEvidence,
     UnifiedEvidence,

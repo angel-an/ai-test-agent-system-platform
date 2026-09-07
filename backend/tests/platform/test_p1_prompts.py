@@ -3,7 +3,7 @@
 
 import pytest
 
-from app.platform.generation_prompts import (
+from app.test_platform.generation_prompts import (
     check_prompt_compliance,
     build_generation_prompt,
     format_step,

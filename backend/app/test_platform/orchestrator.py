@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from app.platform.execution_gates import ExecutionGate, GateConfig
-from app.platform.report_templates import (
+from app.test_platform.execution_gates import ExecutionGate, GateConfig
+from app.test_platform.report_templates import (
     TestResult,
     WriteBackRecord,
     build_execution_report,
@@ -231,7 +231,11 @@ def run_orchestration(
         包含执行结果和报告的字典
     """
     # 1. 场景选择
-    scenarios = select_scenarios(cases, config.to_dict())
+    # 统一字段契约：config.to_dict() 中的 selected_scenarios 映射为 select_scenarios 期望的 ids
+    criteria = config.to_dict()
+    if criteria.get("selected_scenarios") and "ids" not in criteria:
+        criteria["ids"] = criteria["selected_scenarios"]
+    scenarios = select_scenarios(cases, criteria)
 
     # 2. 分轨执行
     runner = DualTrackRunner(config)

@@ -27,6 +27,7 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
     "pydantic-settings>=2.14.1",
     "pydantic[email]>=2.13.4",
+    "pyyaml>=6.0.2",
     "python-jose>=3.5.0",
     "python-multipart>=0.0.28",
     "pytz>=2024.1",
@@ -43,3 +44,4 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
+

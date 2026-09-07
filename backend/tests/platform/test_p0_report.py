@@ -3,7 +3,7 @@
 
 import pytest
 
-from app.platform.report_templates import (
+from app.test_platform.report_templates import (
     TestResult,
     TestResultCode,
     EvidenceRef,

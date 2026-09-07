@@ -45,6 +45,11 @@ from .execution_gates import (
     get_gate_status,
 )
 
+from .runtime_context import (
+    RunContext,
+    create_run_context,
+)
+
 __all__ = [
     # P0-1 生成契约
     "TestCaseContract",
@@ -82,4 +87,7 @@ __all__ = [
     "check_live_gate",
     "check_risky_gate",
     "get_gate_status",
+    # P0-5 统一运行上下文
+    "RunContext",
+    "create_run_context",
 ]

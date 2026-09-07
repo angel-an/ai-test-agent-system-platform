@@ -118,7 +118,7 @@ pytestmark = pytest.mark.skipif(
 
 
 # 复用平台通用客户端和断言
-# from app.platform.api_test_framework.assertion_helpers import ...
+# from app.test_platform.api_test_framework.assertion_helpers import ...
 
 
 def test_{layer_name}_example():

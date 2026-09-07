@@ -3,7 +3,7 @@
 
 import pytest
 
-from app.platform.quality_report import (
+from app.test_platform.quality_report import (
     compute_quality_metrics,
     mark_pending_items,
     GenerationQualityReport,

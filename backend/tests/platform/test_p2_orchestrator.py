@@ -3,7 +3,7 @@
 
 import pytest
 
-from app.platform.orchestrator import (
+from app.test_platform.orchestrator import (
     OrchestratorConfig,
     select_scenarios,
     TrackResult,
@@ -11,7 +11,7 @@ from app.platform.orchestrator import (
     aggregate_results,
     run_orchestration,
 )
-from app.platform.report_templates import TestResult, WriteBackRecord, EvidenceRef
+from app.test_platform.report_templates import TestResult, WriteBackRecord, EvidenceRef
 
 
 class TestSelectScenarios:
