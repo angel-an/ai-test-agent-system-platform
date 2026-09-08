@@ -9,24 +9,23 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, UploadFile, File, Form, Depends
 from fastapi.responses import Response, StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     PaginationDep,
+    DbSessionDep,
 )
+from app.config.database import get_db
 from app.schemas.common import SuccessResponse
 from app.services.web_test_service import WebTestService
-from app.config.database import async_session_factory
-from motor.motor_asyncio import AsyncIOMotorClient
 
 # type: ignore  MC80OmFIVnBZMlhscm9ua3VMazZiblF5ZUE9PToxYTJkMTgzMA==
 
 router = APIRouter(prefix="/projects/{project_identifier}/web-tests")
 
-async def get_web_test_service():
+async def get_web_test_service(db: AsyncSession = Depends(get_db)):
     """获取 Web 测试服务实例"""
-    async with async_session_factory() as session:
-        # mongodb = None  # 简化版本，不需要mongodb
-        yield WebTestService(session, None)
+    yield WebTestService(db, None)
 
 # ============ Web 测试管理接口 ============
 
