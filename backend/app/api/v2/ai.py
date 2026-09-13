@@ -12,6 +12,18 @@ from app.schemas.enums import Priority
 from app.schemas.test_case import TestCaseCreate, TestStepCreate
 from app.services.api_doc_parser_service import APIDocParserService
 from app.services.test_case_service import TestCaseService
+from app.test_platform.requirements.gate import (
+    GateOverride,
+    GateOverrideAuditError,
+    GateOverrideNotAuthorizedError,
+    record_generated,
+    start_session,
+    update_session,
+)
+from app.test_platform.services.requirement_quality_service import (
+    RequirementQualityService,
+    resolve_sole_feature_id,
+)
 
 
 router = APIRouter(
@@ -29,6 +41,29 @@ async def generate_from_document(
     folder_id: UUID | None = Form(default=None),
     additional_prompt: str | None = Form(default=None),
     template: str = Form(default="test_case"),
+    output_type: str = Form(
+        default="test_case",
+        description="输出类型：test_case（生成用例）/ requirement_analysis（只输出分析报告）",
+    ),
+    analysis_payload: str | None = Form(
+        default=None,
+        description="可选：结构化需求分析结果（JSON）。解析失败自动降级 Incomplete 并阻断生成",
+    ),
+    force_generate: bool = Form(
+        default=False,
+        description="已废弃：不再生效。人工放行请使用 override_token + override_reason（服务端受控）",
+        deprecated=True,
+    ),
+    override_token: str | None = Form(
+        default=None,
+        description="人工放行凭证：必须与服务端 REQUIREMENT_GATE_OVERRIDE_TOKEN 一致（默认未启用）",
+    ),
+    override_reason: str | None = Form(
+        default=None,
+        description="人工放行原因（必填，用于审计；不少于 10 个字符）",
+    ),
+    session_key: str | None = Form(default=None, description="生成会话标识，用于状态跟踪"),
+    requirement_id: str | None = Form(default=None, description="需求编号，写入用例追踪字段"),
 ) -> dict:
     content_bytes = await file.read()
     if len(content_bytes) > 15 * 1024 * 1024:
@@ -41,9 +76,92 @@ async def generate_from_document(
     if additional_prompt:
         text = f"{text}\n\n补充说明:\n{additional_prompt}"
 
+    source = file.filename or "需求文档"
+
+    # ---- 阶段一：需求质量门控（硬门控）-------------------------------------
+    # 人工放行只能由服务端运维配置凭证后触发；force_generate 旧参数已废弃且不生效。
+    gate_override: GateOverride | None = None
+    if override_token or override_reason:
+        gate_override = GateOverride(
+            token=override_token or "",
+            reason=override_reason or "",
+            operator=project_identifier,
+            requirement_id=requirement_id or "",
+            source=source,
+        )
+
+    quality_service = RequirementQualityService()
+    try:
+        pipeline = quality_service.pipeline(
+            text,
+            source=source,
+            analysis_payload=analysis_payload or None,
+            override=gate_override,
+        )
+    except GateOverrideNotAuthorizedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except GateOverrideAuditError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
+    analysis = pipeline.analysis
+
+    if session_key:
+        start_session(session_key, source=source)
+        update_session(session_key, analysis)
+
+    # 只输出分析报告：不生成用例
+    if output_type == "requirement_analysis":
+        return {
+            "success": True,
+            "test_cases": [],
+            "message": (
+                f"需求分析完成：{analysis.status.label}"
+                f"（{analysis.status.value}）"
+            ),
+            **pipeline.response,
+            "analysis_report_markdown": pipeline.analysis_report_markdown,
+        }
+
+    # Incomplete / Blocked → 输出报告并暂停用例生成（不接受客户端布尔参数绕过）
+    if not analysis.can_generate_testcases:
+        result = {
+            "success": False,
+            "test_cases": [],
+            "message": (
+                f"需求质量判定为 {analysis.status.label}，已暂停测试用例生成；"
+                "请先补齐缺失项（详见 analysis_report）"
+            ),
+            **pipeline.response,
+            "analysis_report_markdown": pipeline.analysis_report_markdown,
+        }
+        if force_generate:
+            result["warning"] = (
+                "force_generate 参数已废弃且不生效；如确需人工放行，"
+                "请使用服务端受控的 override_token + override_reason。"
+            )
+        # 会话状态已由上面的 update_session() 置为 blocked，此处不再改动，
+        # 更不得调用 record_generated（那会把状态误标为 generated）。
+        return result
+
+    # ---- 通过门控：走既有生成链路 -----------------------------------------
+    feature_points = pipeline.feature_points
+    # 追踪字段落库规则（阶段二）：
+    # - 仅当需求只有一个功能点时，才允许用该唯一功能点兜底；
+    # - 多功能点需求不得默认绑定 FP-001，缺失 feature_id 的用例会被标记为未追踪，
+    #   由契约校验的 traceability_problems 报出，而不是产生错误关联。
+    sole_feature_id = resolve_sole_feature_id(feature_points)
+
     service = TestCaseService(db)
     created = []
-    for case in _build_minimal_cases(text, file.filename or "需求文档"):
+    untraced_case_titles: list[str] = []
+    for case in _build_minimal_cases(text, source):
+        case.requirement_id = case.requirement_id or (requirement_id or None)
+        if not case.feature_id and sole_feature_id:
+            case.feature_id = sole_feature_id
+        elif not case.feature_id:
+            untraced_case_titles.append(case.name)
+        case.source_location = case.source_location or source
         created.append(
             await service.create_test_case(
                 project_identifier=project_identifier,
@@ -54,10 +172,23 @@ async def generate_from_document(
         )
 
     await db.commit()
+
+    created_ids = [str(item.identifier) for item in created if getattr(item, "identifier", None)]
+    if session_key:
+        record_generated(session_key, created_ids)
+
     return {
         "success": True,
         "test_cases": [item.model_dump(mode="json") for item in created],
         "message": f"成功生成 {len(created)} 个测试用例",
+        **pipeline.response,
+        "feature_points": [fp.to_dict() for fp in feature_points],
+        "analysis_report_markdown": pipeline.analysis_report_markdown,
+        "traceability_warning": (
+            f"有 {len(untraced_case_titles)} 条用例未能确定功能点归属（多功能点需求不默认绑定 FP-001），"
+            "请在用例追踪字段补齐 feature_id："
+            + "、".join(untraced_case_titles[:5])
+        ) if untraced_case_titles else None,
     }
 
 

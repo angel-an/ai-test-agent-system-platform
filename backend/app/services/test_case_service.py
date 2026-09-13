@@ -98,6 +98,10 @@ class TestCaseService:
             tp_code=tc.tp_code,
             risk_level=tc.risk_level,
             case_kind=tc.case_kind,
+            requirement_id=tc.requirement_id,
+            feature_id=tc.feature_id,
+            acceptance_id=tc.acceptance_id,
+            source_location=tc.source_location,
             links=LinkInfo(
                 self=f"{settings.api_prefix}/projects/{project_identifier}/test-cases/{tc.identifier}",
                 project=f"{settings.api_prefix}/projects/{project_identifier}",
@@ -267,6 +271,10 @@ class TestCaseService:
             tp_code=data.tp_code,
             risk_level=data.risk_level,
             case_kind=data.case_kind,
+            requirement_id=data.requirement_id,
+            feature_id=data.feature_id,
+            acceptance_id=data.acceptance_id,
+            source_location=data.source_location,
         )
 
         # 添加测试步骤（仅普通测试用例）

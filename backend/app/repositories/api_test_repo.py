@@ -152,16 +152,20 @@ class APITestRepository(BaseRepository[APITest]):
 
         格式: AT-1001, AT-1002, ...
 
-        通过 PG advisory 事务锁串行化"同 project"的并发写入，提交/回滚时
-        自动释放。使用 MAX 而非 COUNT，避免删除记录后编号冲突。
+        identifier 在数据库层是全局唯一约束（见 APITest.identifier unique=True），
+        因此编号必须在全局范围内递增，而不能按项目各自起号——否则两个项目都会
+        从 AT-1001 起步，第二个项目插入时撞全局唯一约束。
+
+        通过 PG advisory 事务锁串行化全局并发写入（key 与 project 无关），
+        提交/回滚时自动释放。使用 MAX 而非 COUNT，避免删除记录后编号冲突。
 
         Args:
-            project_id: 项目 ID
+            project_id: 项目 ID（保留参数以兼容调用方，不再参与编号计算）
 
         Returns:
             str: 标识符 (AT-xxx)
         """
-        await self._acquire_xact_lock(f"at_identifier:{project_id}")
+        await self._acquire_xact_lock("at_identifier:global")
 
         numeric_part = cast(
             func.regexp_replace(APITest.identifier, r"^\D+", ""),
@@ -169,7 +173,6 @@ class APITestRepository(BaseRepository[APITest]):
         )
         result = await self.session.execute(
             select(func.max(numeric_part))
-            .where(APITest.project_id == project_id)
             .where(APITest.identifier.op("~")(r"^AT-\d+$"))
         )
         max_number = result.scalar_one_or_none()

@@ -14,8 +14,15 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# 注意：原先的 `lib/` / `lib64/` 会匹配任意层级的同名目录，
+# 误将前端正式源码目录（ui/lib、gitnexus-web/src/lib）一并忽略。
+# 因此将 Python 打包目录规则限定在 backend/ 下。
+backend/lib/
+backend/lib64/
+# 前端目录名为 lib/ 的源码必须可跟踪（git 规定：父目录被忽略后，
+# 对其子文件的否定规则无效，故此处用目录级否定）。
+!ui/lib/
+!gitnexus-web/src/lib/
 parts/
 sdist/
 var/

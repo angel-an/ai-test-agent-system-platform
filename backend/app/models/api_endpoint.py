@@ -5,7 +5,7 @@ API 端点定义模型
 支持按文件夹组织，每个端点可关联测试用例和测试脚本
 """
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,7 +21,13 @@ class APIEndpoint(Base, UUIDMixin, TimestampMixin):
     支持与文件夹、测试用例、测试脚本的多重关联
     """
     __tablename__ = "api_endpoints"
-    __table_args__ = {"comment": "API 端点定义表"}
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "method", "normalized_path",
+            name="uq_endpoint_project_method_normpath",
+        ),
+        {"comment": "API 端点定义表"},
+    )
 
     # ========== 基本信息 ==========
     project_id: Mapped[UUID] = mapped_column(
@@ -61,6 +67,13 @@ class APIEndpoint(Base, UUIDMixin, TimestampMixin):
         nullable=False,
         index=True,
         comment="HTTP 方法: GET, POST, PUT, DELETE, PATCH, etc."
+    )
+
+    normalized_path: Mapped[str | None] = mapped_column(
+        String(2048),
+        nullable=True,
+        index=True,
+        comment="归一化路径（去协议/host/尾斜杠，小写）；统一导入幂等键的一部分"
     )
 
     summary: Mapped[str | None] = mapped_column(

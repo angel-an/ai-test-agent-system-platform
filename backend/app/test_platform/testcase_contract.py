@@ -17,6 +17,8 @@ from typing import Any, Optional
 
 class TestCaseType(str, Enum):
     """用例类型"""
+    __test__ = False  # 避免被 pytest 当作测试类收集
+
     FUNCTIONAL = "functional"
     API = "api"
     UI = "ui"
@@ -26,6 +28,8 @@ class TestCaseType(str, Enum):
 
 class TestCasePriority(str, Enum):
     """优先级"""
+    __test__ = False
+
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
@@ -34,6 +38,8 @@ class TestCasePriority(str, Enum):
 
 class TestCaseKeyword(str, Enum):
     """关键词：正向 / 反向 / 边界"""
+    __test__ = False
+
     POSITIVE = "正向"
     NEGATIVE = "反向"
     BOUNDARY = "边界"
@@ -41,6 +47,8 @@ class TestCaseKeyword(str, Enum):
 
 class TestCaseStatus(str, Enum):
     """用例状态"""
+    __test__ = False
+
     NEW = "new"
     READY = "ready"
     REVIEW = "review"
@@ -112,6 +120,10 @@ class TestCaseContract:
     - data_dependencies: 数据依赖说明
     - executable_flag: 可执行性标记（True=可直接进入执行层）
     - remarks: 备注（用于标记 DB/并发/安全等覆盖维度）
+    - requirement_id: 需求编号（追踪字段，阶段二）
+    - feature_id: 功能点编号（追踪字段，阶段二；新用例必填）
+    - acceptance_id: 验收标准编号（追踪字段，阶段二）
+    - source_location: 需求来源位置（追踪字段，阶段二）
     """
 
     def __init__(
@@ -130,7 +142,14 @@ class TestCaseContract:
         data_dependencies: Optional[list[str]] = None,
         executable_flag: bool = False,
         remarks: Optional[str] = None,
+        requirement_id: Optional[str] = None,
+        feature_id: Optional[str] = None,
+        acceptance_id: Optional[str] = None,
+        source_location: Optional[str] = None,
     ):
+        # 延迟导入：requirements 包依赖本模块的 normalize_case_fields
+        from app.test_platform.requirements.features import normalize_feature_id
+
         self.id = id
         self.title = title
         self.module = module
@@ -145,6 +164,11 @@ class TestCaseContract:
         self.data_dependencies = data_dependencies or []
         self.executable_flag = executable_flag
         self.remarks = remarks
+        # 阶段二：追踪字段（历史用例允许为空 → 视为未追踪，不阻断读取）
+        self.requirement_id = requirement_id
+        self.feature_id = normalize_feature_id(feature_id) if feature_id else None
+        self.acceptance_id = acceptance_id
+        self.source_location = source_location
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -162,6 +186,10 @@ class TestCaseContract:
             "data_dependencies": self.data_dependencies,
             "executable_flag": self.executable_flag,
             "remarks": self.remarks,
+            "requirement_id": self.requirement_id,
+            "feature_id": self.feature_id,
+            "acceptance_id": self.acceptance_id,
+            "source_location": self.source_location,
         }
 
     @classmethod
@@ -192,6 +220,10 @@ class TestCaseContract:
             data_dependencies=d.get("data_dependencies") or [],
             executable_flag=bool(d.get("executable_flag", False)),
             remarks=d.get("remarks"),
+            requirement_id=d.get("requirement_id"),
+            feature_id=d.get("feature_id"),
+            acceptance_id=d.get("acceptance_id"),
+            source_location=d.get("source_location"),
         )
 
 
@@ -238,10 +270,14 @@ def normalize_case_fields(case: dict[str, Any]) -> dict[str, Any]:
     支持常见别名：identifier->id, name->title, test_case_steps->steps 等。
     不修改原始字典，返回新字典。
     """
+    from app.test_platform.requirements.features import normalize_feature_id
+
     result = dict(case)
     for alias, canonical in FIELD_ALIASES.items():
         if alias in result and canonical not in result:
             result[canonical] = result.pop(alias)
+    if result.get("feature_id"):
+        result["feature_id"] = normalize_feature_id(str(result["feature_id"]))
     return result
 
 

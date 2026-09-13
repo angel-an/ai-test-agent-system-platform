@@ -168,6 +168,29 @@ class TestCase(Base, UUIDMixin, TimestampMixin):
         default="sit",
         comment="用例种类：sit/uat/smoke/api"
     )
+    # 阶段二追踪字段（全部 nullable，历史用例读取不受影响）
+    requirement_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+        comment="需求编号"
+    )
+    feature_id: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        index=True,
+        comment="功能点编号，如 FP-001（新生成用例必填，历史用例可为空）"
+    )
+    acceptance_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="验收标准编号，如 FP-001-AC-01"
+    )
+    source_location: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="需求来源位置（文件名/章节/行号）"
+    )
 
     # 关系
     project: Mapped["Project"] = relationship("Project", back_populates="test_cases")
@@ -303,4 +326,3 @@ class TestCaseTag(Base):
         primary_key=True,
         comment="标签 ID"
     )
-

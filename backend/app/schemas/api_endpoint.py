@@ -6,7 +6,27 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def normalize_security(value: Any) -> list[dict] | None:
+    """把 ``security`` 归一化为 ``list[dict] | None``。
+
+    历史背景：统一导入曾把鉴权配置（如 ``{"type": "mx_md5", ...}``）**整体**
+    写进该字段，而响应模型要求 list，导致 ``GET /projects/{id}/api-endpoints``
+    抛 ``ResponseValidationError``（18 个端点）→ 500。列表接口是前端刷新后
+    校验端点是否存在的唯一入口，因此这里对两种形状都做兼容，而不是只修写入侧
+    （库里已有的存量行也必须能读出来）。
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return [value] if value else None
+    if isinstance(value, list):
+        items = [item for item in value if isinstance(item, dict)]
+        return items or None
+    # 其它类型（如误写成字符串）不能静默丢成 500：退化为单元素列表
+    return [{"value": value}]
 
 # fmt: off  MC80OmFIVnBZMlhscm9ua3VMazZkbU5uUWc9PTo3NzlkNDI5OA==
 
@@ -29,6 +49,10 @@ class APIEndpointCreate(APIEndpointBase):
     responses: dict | None = Field(None, description="响应定义")
     security: list[dict] | None = Field(None, description="安全配置")
     tags: list[str] | None = Field(None, description="标签列表")
+
+    _normalize_security = field_validator("security", mode="before")(
+        staticmethod(normalize_security)
+    )
 
 class APIEndpointUpdate(BaseModel):
     """更新 API 端点 Schema"""
@@ -59,7 +83,6 @@ class APIEndpointResponse(APIEndpointBase):
     security: list[dict] | None
     tags: list[str] | None
     custom_config: dict | None
-
     # 统计信息
     total_test_cases: int
     total_test_runs: int
@@ -71,6 +94,11 @@ class APIEndpointResponse(APIEndpointBase):
     updated_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
+
+    # 兼容统一导入曾以 dict 形状写入的存量数据（否则列表接口整体 500）
+    _normalize_security = field_validator("security", mode="before")(
+        staticmethod(normalize_security)
+    )
 # pragma: no cover  My80OmFIVnBZMlhscm9ua3VMazZkbU5uUWc9PTo3NzlkNDI5OA==
 
 class OpenAPIParseResult(BaseModel):
@@ -194,6 +222,7 @@ class UnifiedImportRequest(BaseModel):
     file_content: dict | None = Field(None, description="文件内容（source_type 为 *_offline 时必填）")
     text_content: str | None = Field(None, description="文本内容（source_type 为 manual_text 时必填）")
     create_structure: bool = Field(True, description="是否自动创建文件夹结构")
+    headers: dict[str, str] | None = Field(None, description="可选的请求头（用于认证等，如 Authorization、Cookie）")
 
     def get_input_description(self) -> str:
         """获取输入描述（用于日志/审计）"""

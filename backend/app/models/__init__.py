@@ -14,12 +14,25 @@ from .folder import Folder
 from .folder_type import FolderType
 from .test_case import TestCase, TestStep, Tag, TestCaseTag
 from .test_run import TestRun, TestRunTestCase
+from .scheduled_run import ScheduledRun, ScheduledRunExecution
 from .test_result import TestResult, TestStepResult
 from .attachment import Attachment, AttachmentEntityType
 from .configuration import Configuration
 from .test_plan import TestPlan
 from .api_test import APITest, APITestRun, APITestResult
 from .api_endpoint import APIEndpoint
+from .api_doc_parse_task import APIDocParseTask
+from .api_asset import (
+    ApiDocumentBundle,
+    ApiDocumentSource,
+    ApiInterfaceContract,
+    ApiRequestTemplate,
+    ApiVariable,
+    ApiAssertion,
+    ApiDependency,
+    ApiConflict,
+)
+from .test_run_artifact import TestRunArtifact
 from .web_test import WebTest, WebTestRun, WebTestResult
 from .web_function import WebFunction, WebSubFunction
 from .security_test import SecurityTest, SecurityVulnerability, SecurityReport
@@ -61,10 +74,22 @@ __all__ = [
     "TestCaseTag",
     "TestRun",
     "TestRunTestCase",
+    "ScheduledRun",
+    "ScheduledRunExecution",
     "TestResult",
     "TestStepResult",
     "Attachment",
     "AttachmentEntityType",
+    "APIDocParseTask",
+    "ApiDocumentBundle",
+    "ApiDocumentSource",
+    "ApiInterfaceContract",
+    "ApiRequestTemplate",
+    "ApiVariable",
+    "ApiAssertion",
+    "ApiDependency",
+    "ApiConflict",
+    "TestRunArtifact",
     "Configuration",
     "TestPlan",
     "TestPlanStatus",

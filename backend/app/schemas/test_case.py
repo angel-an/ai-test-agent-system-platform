@@ -83,6 +83,11 @@ class TestCaseBase(BaseModel):
     tp_code: Optional[str] = Field(default=None, max_length=32, description="测试点编号，如 TP-001")
     risk_level: Optional[str] = Field(default=None, max_length=16, description="风险等级：high/medium/low")
     case_kind: Optional[str] = Field(default="sit", max_length=8, description="用例种类：sit/uat/smoke/api")
+    # 阶段二追踪字段（可选；历史用例可为空，新生成用例应带 feature_id）
+    requirement_id: Optional[str] = Field(default=None, max_length=64, description="需求编号")
+    feature_id: Optional[str] = Field(default=None, max_length=32, description="功能点编号，如 FP-001")
+    acceptance_id: Optional[str] = Field(default=None, max_length=64, description="验收标准编号，如 FP-001-AC-01")
+    source_location: Optional[str] = Field(default=None, max_length=500, description="需求来源位置")
 
     model_config = {"populate_by_name": True}
 
@@ -116,6 +121,11 @@ class TestCaseCreate(BaseModel):
     tp_code: Optional[str] = Field(default=None, max_length=32, description="测试点编号")
     risk_level: Optional[str] = Field(default=None, max_length=16, description="风险等级：high/medium/low")
     case_kind: Optional[str] = Field(default="sit", max_length=8, description="用例种类：sit/uat/smoke/api")
+    # 阶段二追踪字段
+    requirement_id: Optional[str] = Field(default=None, max_length=64, description="需求编号")
+    feature_id: Optional[str] = Field(default=None, max_length=32, description="功能点编号，如 FP-001")
+    acceptance_id: Optional[str] = Field(default=None, max_length=64, description="验收标准编号")
+    source_location: Optional[str] = Field(default=None, max_length=500, description="需求来源位置")
 
     model_config = {"populate_by_name": True}
 
@@ -160,6 +170,11 @@ class TestCaseUpdate(BaseModel):
     tp_code: Optional[str] = Field(default=None, description="测试点编号")
     risk_level: Optional[str] = Field(default=None, description="风险等级：high/medium/low")
     case_kind: Optional[str] = Field(default="sit", description="用例种类：sit/uat/smoke/api")
+    # 阶段二追踪字段
+    requirement_id: Optional[str] = Field(default=None, description="需求编号")
+    feature_id: Optional[str] = Field(default=None, description="功能点编号，如 FP-001")
+    acceptance_id: Optional[str] = Field(default=None, description="验收标准编号")
+    source_location: Optional[str] = Field(default=None, description="需求来源位置")
 
     model_config = {"populate_by_name": True}
 
@@ -198,6 +213,11 @@ class TestCaseInfo(BaseModel):
     tp_code: Optional[str] = Field(default=None, description="测试点编号")
     risk_level: Optional[str] = Field(default=None, description="风险等级：high/medium/low")
     case_kind: Optional[str] = Field(default="sit", description="用例种类：sit/uat/smoke/api")
+    # 阶段二追踪字段
+    requirement_id: Optional[str] = Field(default=None, description="需求编号")
+    feature_id: Optional[str] = Field(default=None, description="功能点编号，如 FP-001")
+    acceptance_id: Optional[str] = Field(default=None, description="验收标准编号")
+    source_location: Optional[str] = Field(default=None, description="需求来源位置")
     links: Optional[LinkInfo] = Field(default=None, description="相关资源链接")
 
     model_config = {"from_attributes": True}

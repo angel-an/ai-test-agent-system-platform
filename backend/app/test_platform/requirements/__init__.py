@@ -1,0 +1,173 @@
+# -*- coding: utf-8 -*-
+"""需求质量门控与追踪（阶段一 + 阶段二）。
+
+- 阶段一：需求分析模型、Complete/Incomplete/Blocked 判定、生成硬门控
+- 阶段二：功能点编号、测试用例追踪字段、覆盖率与缺口报告、历史数据兼容
+"""
+
+from .analysis import (
+    CONDITIONAL_SECTIONS,
+    BASE_RESULT_SECTIONS,
+    NON_BLOCKING_ITEMS,
+    REQUIRED_SECTIONS,
+    GapCheckKind,
+    PRDAnalysisResult,
+    PRDQualityStatus,
+    RequirementGap,
+    RequirementSectionSpec,
+    TestCaseGenerationStatus,
+    analyze_requirement_text,
+    parse_analysis_payload,
+    render_analysis_markdown,
+    render_analysis_report,
+)
+
+from .features import (
+    FEATURE_ID_PREFIX,
+    FeaturePoint,
+    FeaturePriority,
+    apply_affected_features,
+    assert_unique_feature_ids,
+    build_feature_point_index,
+    extract_feature_points,
+    generate_feature_id,
+    normalize_feature_id,
+)
+
+from .coverage import (
+    TRACE_FIELDS,
+    CoverageMatrix,
+    FeatureCoverage,
+    build_coverage_matrix,
+    build_feature_criteria,
+    case_acceptance_id,
+    case_feature_id,
+    case_test_point_id,
+    identify_coverage_gaps,
+    is_legacy_case,
+    render_coverage_report,
+    summary_line,
+    validate_case_traceability,
+    validate_cases_traceability,
+)
+
+from .gate import (
+    AUDIT_DIR_ENV,
+    MIN_OVERRIDE_REASON_LENGTH,
+    OVERRIDE_TOKEN_ENV,
+    GateOverride,
+    GateOverrideAuditError,
+    GateOverrideNotAuthorizedError,
+    GenerationSession,
+    RequirementNotReadyError,
+    audit_file_path,
+    build_gated_response,
+    build_generated_response,
+    check_generation_gate,
+    clear_override_audit_log,
+    clear_session,
+    get_override_audit_log,
+    get_session,
+    mark_generation_status,
+    override_enabled,
+    read_persisted_audit_entries,
+    record_generated,
+    require_complete,
+    start_session,
+    update_session,
+)
+
+from .legacy_adapter import (
+    attach_traceability,
+    classify_cases,
+    convert_legacy_case,
+    convert_legacy_cases,
+    convert_legacy_step,
+    is_legacy_step,
+)
+
+from .pipeline import (
+    PipelineResult,
+    PipelineStage,
+    generate_testcases_with_gate,
+    run_requirement_pipeline,
+)
+
+__all__ = [
+    # 分析模型
+    "PRDAnalysisResult",
+    "PRDQualityStatus",
+    "RequirementGap",
+    "RequirementSectionSpec",
+    "GapCheckKind",
+    "TestCaseGenerationStatus",
+    "REQUIRED_SECTIONS",
+    "BASE_RESULT_SECTIONS",
+    "CONDITIONAL_SECTIONS",
+    "NON_BLOCKING_ITEMS",
+    "analyze_requirement_text",
+    "parse_analysis_payload",
+    "render_analysis_report",
+    "render_analysis_markdown",
+    # 功能点
+    "FeaturePoint",
+    "FeaturePriority",
+    "FEATURE_ID_PREFIX",
+    "generate_feature_id",
+    "normalize_feature_id",
+    "extract_feature_points",
+    "apply_affected_features",
+    "build_feature_point_index",
+    "assert_unique_feature_ids",
+    # 覆盖与追踪
+    "TRACE_FIELDS",
+    "CoverageMatrix",
+    "FeatureCoverage",
+    "build_coverage_matrix",
+    "build_feature_criteria",
+    "case_feature_id",
+    "case_test_point_id",
+    "case_acceptance_id",
+    "is_legacy_case",
+    "validate_case_traceability",
+    "validate_cases_traceability",
+    "identify_coverage_gaps",
+    "render_coverage_report",
+    "summary_line",
+    # 门控
+    "RequirementNotReadyError",
+    "GateOverride",
+    "GateOverrideNotAuthorizedError",
+    "GateOverrideAuditError",
+    "OVERRIDE_TOKEN_ENV",
+    "AUDIT_DIR_ENV",
+    "MIN_OVERRIDE_REASON_LENGTH",
+    "override_enabled",
+    "audit_file_path",
+    "get_override_audit_log",
+    "read_persisted_audit_entries",
+    "clear_override_audit_log",
+    "GenerationSession",
+    "check_generation_gate",
+    "require_complete",
+    "mark_generation_status",
+    "build_gated_response",
+    "build_generated_response",
+    "start_session",
+    "update_session",
+    "record_generated",
+    "get_session",
+    "clear_session",
+    # 兼容适配
+    "convert_legacy_case",
+    "convert_legacy_cases",
+    "convert_legacy_step",
+    "is_legacy_step",
+    "attach_traceability",
+    "classify_cases",
+    # 流程
+    "PipelineStage",
+    "PipelineResult",
+    "run_requirement_pipeline",
+    "generate_testcases_with_gate",
+]
