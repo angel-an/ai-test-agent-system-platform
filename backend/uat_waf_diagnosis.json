@@ -1,0 +1,55 @@
+{
+  "diagnosed_at": "2026-09-14T20:09:36+08:00",
+  "purpose": "判定 403 来源：CDN/WAF 反爬 vs 请求构造",
+  "results": [
+    {
+      "label": "A. GET icdp（无 Cookie）",
+      "url": "https://console.uat.eatizen.com.hk/yundt-saas-gateway/api/icdp/v1/memberInfoBestore?pageNum=1&pageSize=1",
+      "method": "GET",
+      "with_cookie": false,
+      "status": 403,
+      "duration_ms": 385,
+      "waf_markers": [
+        "403 Forbidden"
+      ],
+      "body_prefix": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>403 Forbidden</title><style>body,html{height:100%;display:flex;flex-direction:column}.ei,.et{text-align:center}"
+    },
+    {
+      "label": "B. GET icdp（带 Cookie）",
+      "url": "https://console.uat.eatizen.com.hk/yundt-saas-gateway/api/icdp/v1/memberInfoBestore?pageNum=1&pageSize=1",
+      "method": "GET",
+      "with_cookie": true,
+      "status": 403,
+      "duration_ms": 120,
+      "waf_markers": [
+        "403 Forbidden"
+      ],
+      "body_prefix": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>403 Forbidden</title><style>body,html{height:100%;display:flex;flex-direction:column}.ei,.et{text-align:center}"
+    },
+    {
+      "label": "C. POST aigens（无 Cookie）",
+      "url": "https://console.uat.eatizen.com.hk/yundt-saas-gateway/api/sync/aigens/json",
+      "method": "POST",
+      "with_cookie": false,
+      "status": 403,
+      "duration_ms": 101,
+      "waf_markers": [
+        "403 Forbidden"
+      ],
+      "body_prefix": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>403 Forbidden</title><style>body,html{height:100%;display:flex;flex-direction:column}.ei,.et{text-align:center}"
+    },
+    {
+      "label": "D. POST aigens（带 Cookie）",
+      "url": "https://console.uat.eatizen.com.hk/yundt-saas-gateway/api/sync/aigens/json",
+      "method": "POST",
+      "with_cookie": true,
+      "status": 403,
+      "duration_ms": 118,
+      "waf_markers": [
+        "403 Forbidden"
+      ],
+      "body_prefix": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>403 Forbidden</title><style>body,html{height:100%;display:flex;flex-direction:column}.ei,.et{text-align:center}"
+    }
+  ],
+  "conclusion": null
+}

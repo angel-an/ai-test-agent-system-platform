@@ -1,5 +1,5 @@
 {
-  "investigated_at": "2026-09-14T18:29:10+08:00",
+  "investigated_at": "2026-09-14T20:11:33+08:00",
   "environment": {
     "host_from_user": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
     "host_from_environment_file": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
@@ -44,17 +44,38 @@
     {
       "item": "生成器与 Collection 的签名差异（本轮查明）",
       "result": "生成器用 canonical_msg（紧凑 JSON）并只发 appid/ts/sign 三个头；Collection 用**原始 body 字符串**签名，并额外发 model/method/request-channel，ts 用毫秒。两者是不同的约定 —— 生成器按 Excel 导读实现，与真实 Collection 不一致，需按真实契约修正（属 P1 范围，已记录）。"
+    },
+    {
+      "item": "用户提供可通的 Postman CURL（关键路由事实）",
+      "result": "真实路径是 **/api/sync/aigens/json**（不是样本里的 /cop/json）；请求头 method=ord_memLogin、request-channel=aigens；body 为小驼峰字段（touchpoint/language/mobilePhone/countryCode/password/brandCode）；并携带 Cookie。此前我按样本的 {{url}}/cop/json 调用，因此一直 404 —— 样本路径与真实路由不一致。"
+    },
+    {
+      "item": "按该 CURL 复现的结果",
+      "result": "POST /api/sync/aigens/json 返回 403，且响应体是**反爬拦截页**（含 acw_tc / cdn_sec_tc 特征，属阿里云 WAF），非业务错误。"
+    },
+    {
+      "item": "WAF 拦截判定（对照实验 A–D）",
+      "result": "A 无 Cookie GET icdp、B 带 Cookie GET icdp、C 无 Cookie POST aigens、D 带 Cookie POST aigens —— **四者全部 403**。其中 icdp GET 早前曾返回 200 + 401 no login，说明拦截是本机 IP 触发的 WAF 封禁（短时间内多次探测所致），与请求构造、签名、Cookie 均无关。"
+    },
+    {
+      "item": "提供的 Cookie 不完整",
+      "result": "粘贴内容存在截断（如首段 '<cookie-value-redacted>' 缺少前缀），因此即便未被 WAF 拦截，也无法据此建立会话。"
+    },
+    {
+      "item": "由此确认的两处代码/文档问题（属 P1 范围）",
+      "result": "1) 生成器使用 canonical_msg（紧凑 JSON）+ 仅 appid/ts/sign 三个头；真实契约是**原始 body 字符串** + 6 个头（含 model/method/request-channel），ts 为毫秒。2) 样本 Collection 记录的 {{url}}/cop/json 与真实路由 /api/sync/aigens/json 不一致 —— 样本本身是旧/占位写法。"
     }
   ],
-  "conclusion": "blocked-by-environment：网络已通、签名与请求头已按 Collection 真实契约重建，但 COP 服务（api_checkMobileDuplicat 所属）在 console.uat 返回 404、在 uat-mkt 返回 503，两个域名均不可用。因此真实业务请求仍未打通，**不能表述为业务接口验证通过**；appid/secret 的有效性也仍未被验证。",
+  "conclusion": "blocked-by-waf：网络与路由问题已定位（真实路由为 /api/sync/aigens/json），但本机 IP 已被 CDN/WAF 拦截（对照实验 A–D 全部 403，含此前可用的 icdp GET），且用户提供的 Cookie 被截断。真实业务请求仍未打通，**不能表述为业务接口验证通过**；appid/secret 有效性亦未被验证。",
   "unblock_options": [
-    "确认 COP 服务在 UAT 的部署网关（样本记录的两个域名均不可用：一个 404、一个 503）",
-    "或确认 COP 服务是否已发布到该 UAT 环境",
-    "或提供可用的登录态/token，改走 ICDP 类查询接口（/api/icdp/* 路由存在但返回 401 no login）"
+    "等待 WAF 封禁解除（建议隔一段时间），或请网络/运维将本机 IP 加入 UAT 白名单",
+    "提供**完整**的 curl（含全部 Cookie 原始值，未截断），并确认该 Cookie 仍在有效期内",
+    "或由你在 Postman 执行并给出完整响应体，我负责把结果写入验收记录（并在文档中注明该请求非本 agent 发出）"
   ],
   "safety": {
-    "requests_sent": "全部为只读查询（GET / 手机号查重 POST），未发起任何写操作",
+    "requests_sent": "全部为只读（GET / 登录读取 / 手机号查重），未发起任何写操作",
     "credentials_persisted": false,
-    "archive_redaction": "归档前对 appid / sign / secret 统一脱敏为 <len=N>"
+    "archive_redaction": "归档前对 appid / sign / secret / Cookie 统一脱敏为 <len=N> 或 <cookie-value-redacted>",
+    "stopped_on_waf": "确认 WAF 封禁后立即停止请求，避免加重封禁"
   }
 }

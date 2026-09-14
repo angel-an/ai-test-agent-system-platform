@@ -1,0 +1,47 @@
+{
+  "executed_at": "2026-09-14T18:32:56+08:00",
+  "sign_rule": "MD5(appid + secret + ts + raw_body_string)，ts 为毫秒",
+  "note": "只读重试；不含写操作（memLogin 为登录读取，不改数据）；凭据未落盘",
+  "results": [
+    {
+      "gateway": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/cop/json",
+      "method_name": "checkMobileDuplicat",
+      "status": 503,
+      "duration_ms": 1034,
+      "request_body": "{\"Touchpoint\":\"M\",\"Language\":\"TC\",\"MobilePhone\":\"18320101265\",\"UserName\":\"COP Test User\",\"FamilyName\":\"Chan\",\"GivenName\":\"Tai Man\",\"Gender\":1,\"BirthYear\":1990,\"BirthMonth\":8,\"BirthDay\":19,\"PreferredLanguage\":\"TC\",\"NotRecPromoMesg\":\"N\",\"MemberType\":\"MX1\",\"CountryCode\":\"852\",\"WhatsAppOptin\":true}",
+      "response": "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n<hr><center>alb</center>\r\n</body>\r\n</html>\r\n",
+      "label": "uat-mkt.eatizen.com.hk POST /cop/json"
+    },
+    {
+      "gateway": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/cop/json",
+      "method_name": "memLogin",
+      "status": 503,
+      "duration_ms": 769,
+      "request_body": "{\"Touchpoint\":\"M\",\"Language\":\"TC\",\"LoginIDType\":\"P\",\"LoginID\":\"85218320101265\",\"Password\":\"Aa123457.\",\"MemberType\":\"MX1\",\"BrandCode\":\"_DEFAULT\"}",
+      "response": "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n<hr><center>alb</center>\r\n</body>\r\n</html>\r\n",
+      "label": "uat-mkt.eatizen.com.hk POST /cop/json (memLogin)"
+    },
+    {
+      "gateway": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/cop/json",
+      "method_name": "checkMobileDuplicat",
+      "status": 404,
+      "duration_ms": 80,
+      "request_body": "{\"Touchpoint\":\"M\",\"Language\":\"TC\",\"MobilePhone\":\"18320101265\",\"UserName\":\"COP Test User\",\"FamilyName\":\"Chan\",\"GivenName\":\"Tai Man\",\"Gender\":1,\"BirthYear\":1990,\"BirthMonth\":8,\"BirthDay\":19,\"PreferredLanguage\":\"TC\",\"NotRecPromoMesg\":\"N\",\"MemberType\":\"MX1\",\"CountryCode\":\"852\",\"WhatsAppOptin\":true}",
+      "response": "{\"timestamp\":\"2026-09-14 18:32:57\",\"path\":\"/cop/json\",\"status\":404,\"error\":\"Not Found\",\"message\":null,\"requestId\":\"22bdd244-81860\"}",
+      "label": "console.uat.eatizen.com.hk POST /cop/json"
+    },
+    {
+      "gateway": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/cop/json",
+      "method_name": "memLogin",
+      "status": 404,
+      "duration_ms": 103,
+      "request_body": "{\"Touchpoint\":\"M\",\"Language\":\"TC\",\"LoginIDType\":\"P\",\"LoginID\":\"85218320101265\",\"Password\":\"Aa123457.\",\"MemberType\":\"MX1\",\"BrandCode\":\"_DEFAULT\"}",
+      "response": "{\"timestamp\":\"2026-09-14 18:32:57\",\"path\":\"/cop/json\",\"status\":404,\"error\":\"Not Found\",\"message\":null,\"requestId\":\"ade8caa8-81861\"}",
+      "label": "console.uat.eatizen.com.hk POST /cop/json (memLogin)"
+    }
+  ]
+}
