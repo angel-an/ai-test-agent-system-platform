@@ -39,26 +39,15 @@ SCOPE_PREFIXES = ("backend/app/", "backend/alembic/", "backend/scripts/", "backe
 
 #: 基线既有缺口（**显式登记，不静默忽略**）。
 #:
-#: 这些文件在本次交付之前就从未被 git 跟踪，且**不由本次交付的文件引用**——
-#: 它们由基线已跟踪文件（如 `api_test_service.py`）引用。属"仓库未跟踪文件治理"
-#: 范畴（见交付说明第九节技术债），不在本次交付范围内。
-#: 任一新增缺口都会让本检查失败；只有下表内条目被豁免。
-BASELINE_GAPS: dict[str, str] = {
-    "backend/app/services/api_spec_test_generator.py":
-        "基线未跟踪；由基线文件 api_test_service.py 引用",
-    "backend/app/services/artifact_publisher.py":
-        "基线未跟踪；由基线文件 execution_preflight.py 引用",
-    "backend/app/services/execution_preflight.py":
-        "基线未跟踪；由基线文件 unified_execution.py 引用",
-    "backend/app/services/test_run_artifact_service.py":
-        "基线未跟踪；由基线文件 api_test_service.py 引用（本次已改为 naive UTC，仍待纳入提交）",
-    "backend/app/services/unified_execution.py":
-        "基线未跟踪；由基线文件 api_test_service.py 引用",
-    "backend/app/agents/api/tools/intent_tools.py":
-        "基线未跟踪；由基线文件 api/v2/api_tests.py 引用（平台层，非本次交付）",
-    "backend/app/schemas/intent.py":
-        "基线未跟踪；由基线文件 api/v2/api_tests.py 引用（平台层，非本次交付）",
-}
+#: 历史：P0 交付期间此处登记过 7 项（`api_spec_test_generator.py`、
+#: `artifact_publisher.py`、`execution_preflight.py`、`test_run_artifact_service.py`、
+#: `unified_execution.py`、`intent_tools.py`、`schemas/intent.py`），全部由基线已跟踪
+#: 文件引用且从未被 git 跟踪，会让 clean clone 无法 import。
+#: **现已全部纳入版本控制**（提交 `d29c945` / `02456b3`），故清单清空。
+#:
+#: 维护约定：新增缺口会让本检查失败；确需豁免时必须在此登记路径、归属与原因，
+#: 并在相关文件被纳入版本控制后**立即移除**（检查器会报告"豁免过期"）。见 `stale` 检测。
+BASELINE_GAPS: dict[str, str] = {}
 
 IMPORT_RE = re.compile(
     r"^\s*(?:from\s+([A-Za-z_][\w.]*)\s+import\s+([^\n#]+)|import\s+([A-Za-z_][\w.]*))",
@@ -184,10 +173,19 @@ def main() -> int:
     exempt = {k: v for k, v in missing.items() if k in BASELINE_GAPS}
     fresh = {k: v for k, v in missing.items() if k not in BASELINE_GAPS}
 
+    # 豁免清单漂移检测：登记项已不再缺口 → 必须从豁免表移除，否则豁免表会长期失维
+    # （基线文件被纳入版本控制、或引用方被移除后，旧豁免会掩盖新问题）。
+    stale = sorted(
+        path for path in BASELINE_GAPS
+        if path not in missing
+    )
+
     for rel_hit, by in sorted(exempt.items()):
         print(f"  [基线豁免] {rel_hit}   <- 由 {by} 引用；{BASELINE_GAPS[rel_hit]}")
     for rel_hit, by in sorted(fresh.items()):
         print(f"  [缺失] {rel_hit}   <- 由 {by} 引用")
+    for path in stale:
+        print(f"  [豁免过期] {path}   —— 已不再缺口，请从 BASELINE_GAPS 移除该条")
 
     changed: list[str] = []
     if args.changed:
@@ -201,13 +199,16 @@ def main() -> int:
             for rel in changed:
                 print(f"  [未暂存] {rel}")
 
-    problems = len(fresh) + (len(changed) if args.changed else 0)
+    problems = len(fresh) + len(stale) + (len(changed) if args.changed else 0)
     print()
-    print(f"基线豁免 {len(exempt)} 项（已登记，见 BASELINE_GAPS）、新增缺口 {len(fresh)} 项")
+    print(
+        f"基线豁免 {len(exempt)} 项（已登记，见 BASELINE_GAPS）、"
+        f"新增缺口 {len(fresh)} 项、豁免过期 {len(stale)} 项"
+    )
     if problems:
-        print("结果: 存在新增完整性缺口，提交快照可能无法在干净检出后运行")
+        print("结果: 存在新增缺口或豁免过期，提交快照完整性未通过")
         return 1
-    print("结果: 通过（无新增缺口；基线缺口均已登记）")
+    print("结果: 通过（无新增缺口；基线缺口均已登记且未过期）")
     return 0
 
 
