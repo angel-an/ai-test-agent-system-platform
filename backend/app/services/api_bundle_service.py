@@ -846,17 +846,44 @@ class ApiBundleService:
 
     @staticmethod
     def _collect_dependency_hints(coll_list: list[Any]) -> list[dict[str, Any]]:
-        """从 Collection 的变量写入推断依赖（如 SessionKey 传递）。"""
+        """从 Collection 的变量写入推断依赖（如 SessionKey 传递）。
+
+        本函数此前的两个缺陷叠加，导致**依赖提示恒为空**、
+        `_create_dependencies` 永远不可能落库任何依赖：
+
+        1. 把入参当成有 ``.raw`` 的包装对象：``getattr(cc, "raw", None)`` 恒为 None，
+           直接 continue。实际上契约里存的就是 ``ParsedRequest`` 本身
+           （``variable_writes`` / ``name`` 是它的直接字段），没有 ``raw``。
+        2. 键名不匹配：解析器返回 ``{"variable", "expression"}``，
+           此处曾读 ``name`` / ``key``。
+
+        现在直接读 ``ParsedRequest`` 的字段，并保留对旧键名的兼容。
+        """
         hints: list[dict[str, Any]] = []
         for cc in coll_list:
-            raw = getattr(cc, "raw", None)
-            if raw is None:
-                continue
-            for write in (raw.variable_writes or []):
+            writes = getattr(cc, "variable_writes", None)
+            if writes is None:
+                # 兼容历史包装对象
+                raw = getattr(cc, "raw", None)
+                writes = getattr(raw, "variable_writes", None) if raw is not None else None
+                request_name = getattr(raw, "name", None) if raw is not None else None
+            else:
+                request_name = getattr(cc, "name", None)
+
+            for write in (writes or []):
+                if not isinstance(write, dict):
+                    continue
+                variable = (
+                    write.get("variable")
+                    or write.get("name")
+                    or write.get("key")
+                )
+                if not variable:
+                    continue
                 hints.append({
-                    "variable": write.get("name") or write.get("key"),
+                    "variable": variable,
                     "extract_expr": write.get("expression") or write.get("value"),
-                    "from_request": raw.name,
+                    "from_request": request_name,
                 })
         return hints
 
@@ -1118,6 +1145,33 @@ class ApiBundleService:
             seen.add(("error_code", expr))
         await self.db.flush()
 
+    @staticmethod
+    def _resolve_dependency_target(
+        variable: str,
+        all_contracts: list[Any],
+        exclude_contract_id: Any,
+    ) -> Any | None:
+        """把变量名落脚到候选契约（依赖的"目标端点"）。
+
+        规则（保守，避免推测）：变量名应**出现在**候选契约的 ``endpoint_key`` 中
+        （如变量 ``sessionKey`` ⊂ ``endpoint_key api_sessionKey``）。
+        匹配不到就返回 ``None``，调用方据此**不落库**该依赖。
+
+        历史缺陷：原地实现写成 ``key in variable``（方向相反），
+        导致永远匹配不到目标、依赖从未可能落库。
+        """
+        if not variable:
+            return None
+        needle = str(variable).lower()
+        for other in all_contracts:
+            key = getattr(other, "endpoint_key", None)
+            if not key or getattr(other, "id", None) == exclude_contract_id:
+                continue
+            normalized_key = str(key).replace("api_", "").lower()
+            if needle in normalized_key or needle in str(key).lower():
+                return other
+        return None
+
     async def _create_dependencies(
         self,
         bundle: ApiDocumentBundle,
@@ -1140,23 +1194,17 @@ class ApiBundleService:
         if not hints:
             return
 
-        by_key = {c.endpoint_key: c for c in all_contracts if c.id != contract.id}
         for hint in hints:
-            variable = hint.get("variable")
-            if not variable:
-                continue
-            target = None
-            for key, other in by_key.items():
-                if key and key.replace("api_", "") in str(variable).lower():
-                    target = other
-                    break
+            target = self._resolve_dependency_target(
+                hint.get("variable"), all_contracts, contract.id
+            )
             if target is None:
                 continue
             self.db.add(ApiDependency(
                 bundle_id=bundle.id,
                 from_contract_id=contract.id,
                 to_contract_id=target.id,
-                variable=str(variable),
+                variable=str(hint.get("variable")),
                 extract_expr=hint.get("extract_expr"),
             ))
         await self.db.flush()
