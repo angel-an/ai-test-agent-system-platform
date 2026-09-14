@@ -54,6 +54,10 @@ BASELINE_GAPS: dict[str, str] = {
         "基线未跟踪；由基线文件 api_test_service.py 引用（本次已改为 naive UTC，仍待纳入提交）",
     "backend/app/services/unified_execution.py":
         "基线未跟踪；由基线文件 api_test_service.py 引用",
+    "backend/app/agents/api/tools/intent_tools.py":
+        "基线未跟踪；由基线文件 api/v2/api_tests.py 引用（平台层，非本次交付）",
+    "backend/app/schemas/intent.py":
+        "基线未跟踪；由基线文件 api/v2/api_tests.py 引用（平台层，非本次交付）",
 }
 
 IMPORT_RE = re.compile(
@@ -120,8 +124,13 @@ def main() -> int:
     tracked = {p.replace("\\", "/") for p in git("ls-files")}
 
     if args.head:
-        committed = git("show", "--name-only", "--pretty=format:", "HEAD")
-        seeds = sorted(p for p in committed if p.startswith(SCOPE_PREFIXES))
+        # 必须用 ls-tree 取**整个提交树**：`git show --name-only HEAD` 只列出该次提交
+        # 改动的文件，用它做种子会把"上一提交引入、本次未改动"的文件全部漏掉。
+        committed = git("ls-tree", "-r", "--name-only", "HEAD")
+        seeds = sorted(
+            p for p in committed
+            if p.startswith(SCOPE_PREFIXES) and not p.startswith("\ufeff")
+        )
         scope_label = "HEAD 提交快照"
     else:
         seeds = sorted(p for p in staged if p.startswith(SCOPE_PREFIXES))
