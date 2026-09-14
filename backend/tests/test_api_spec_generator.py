@@ -21,12 +21,10 @@ from app.services.api_spec_test_generator import (
 from app.services.excel_api_parser import ExcelAPIParser
 from app.services.signing.mx_md5_signer import canonical_msg, mx_md5_sign
 
-SAMPLE = os.environ.get(
-    "MX_SAMPLE_XLSX",
-    # 注意：完整路径含 `美心POS` 层级。曾漏写该层级导致本文件 7 个用例
-    # 因 `skipif not exists` 静默跳过（与 test_excel_api_parser.py 同一类错误）。
-    r"D:\测试管理\项目管理\美心项目\美心POS\API\YX CRM API Spec For Non POS (1).xlsx",
-)
+# 路径统一来自 tests/sample_paths.py（曾因硬编码漏写 `美心POS` 层级导致 7 个用例静默跳过）
+from tests.sample_paths import EXCEL_PATH
+
+SAMPLE = str(EXCEL_PATH)
 
 pytestmark = pytest.mark.skipif(not Path(SAMPLE).exists(), reason=f"美心样本不存在: {SAMPLE}")
 

@@ -14,10 +14,10 @@ import pytest
 from app.services.api_spec_normalizer import APISpecNormalizer
 from app.services.excel_api_parser import ExcelAPIParser
 
-SAMPLE = os.environ.get(
-    "MX_SAMPLE_XLSX",
-    r"D:\测试管理\项目管理\美心项目\美心POS\API\YX CRM API Spec For Non POS (1).xlsx",
-)
+# 路径统一来自 tests/sample_paths.py（曾因硬编码漏写 `美心POS` 层级导致静默跳过）
+from tests.sample_paths import EXCEL_PATH
+
+SAMPLE = str(EXCEL_PATH)
 
 pytestmark = pytest.mark.skipif(
     not Path(SAMPLE).exists(), reason=f"美心样本不存在: {SAMPLE}"

@@ -15,7 +15,9 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
-MX_DIR = Path(r"D:\测试管理\项目管理\美心项目\美心POS\API")
+from tests.sample_paths import MX_SAMPLE_DIR
+
+MX_DIR = MX_SAMPLE_DIR
 EXCEL = MX_DIR / "YX CRM API Spec For Non POS (1).xlsx"
 COLLECTION = MX_DIR / "美心.postman_collection.json"
 ENVIRONMENT = MX_DIR / "UAT_eatizen HK CPO.postman_environment.json"

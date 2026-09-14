@@ -33,9 +33,9 @@ if str(BACKEND) not in sys.path:
 
 from app.services.postman_collection_parser import PostmanCollectionParser  # noqa: E402
 
-DEFAULT_COLLECTION = Path(
-    r"D:\测试管理\项目管理\美心项目\美心POS\API\美心.postman_collection.json"
-)
+from tests.sample_paths import COLLECTION_PATH
+
+DEFAULT_COLLECTION = COLLECTION_PATH
 
 VAR_REF_RE = re.compile(r"\{\{(\w+)\}\}")
 VAR_WRITE_RE = re.compile(

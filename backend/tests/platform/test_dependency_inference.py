@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-REAL_COLLECTION = Path(
-    r"D:\测试管理\项目管理\美心项目\美心POS\API\美心.postman_collection.json"
-)
+from tests.sample_paths import COLLECTION_PATH
+
+REAL_COLLECTION = COLLECTION_PATH
 
 
 def _collection(items: list[dict]) -> bytes:

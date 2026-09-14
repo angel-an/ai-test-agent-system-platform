@@ -18,7 +18,9 @@ from app.services.excel_api_parser import ExcelAPIParser
 from app.services.postman_collection_parser import PostmanCollectionParser
 from app.services.postman_environment_parser import PostmanEnvironmentParser
 
-MX = Path(r"D:\测试管理\项目管理\美心项目\美心POS\API")
+from tests.sample_paths import MX_SAMPLE_DIR
+
+MX = MX_SAMPLE_DIR
 EXCEL = MX / "YX CRM API Spec For Non POS (1).xlsx"
 COLLECTION = MX / "美心.postman_collection.json"
 ENVIRONMENT = MX / "UAT_eatizen HK CPO.postman_environment.json"
