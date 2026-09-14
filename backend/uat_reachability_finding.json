@@ -1,10 +1,16 @@
 {
-  "investigated_at": "2026-09-14T18:19:11+08:00",
+  "investigated_at": "2026-09-14T18:29:10+08:00",
   "environment": {
     "host_from_user": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
     "host_from_environment_file": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
     "test_mobile": "18320101265",
-    "credentials_source": "UAT_eatizen HK CPO.postman_environment.json 的 api-appid / api-secret"
+    "credentials_source": "UAT_eatizen HK CPO.postman_environment.json 的 api-appid / api-secret",
+    "login_credentials_provided": {
+      "mobilePhone": "18320101265",
+      "countryCode": "852",
+      "brandCode": "MX1",
+      "note": "用户提供的登录凭据；本轮仅做只读查重，未执行登录/注册等写操作"
+    }
   },
   "findings": [
     {
@@ -26,13 +32,25 @@
     {
       "item": "appid + 签名的有效性",
       "result": "**未能验证**。签名只在 COP 接口上生效，而该接口在本网关未注册，因此无法判断 appid/签名是否正确。这一点必须如实保留，不能宣称通过。"
+    },
+    {
+      "item": "按 Collection 真实签名契约调用 checkMobileDuplicat",
+      "result": "已按样本自身的 pre-request 脚本重建签名：MD5(appid + secret + ts + 原始 body 字符串)、ts 为毫秒、并附带 model=api / method=checkMobileDuplicat / request-channel=cop 请求头。两种 body（最小字段集 / 贴近样本字段集）分别在两个域名各试一次。"
+    },
+    {
+      "item": "调用结果",
+      "result": "console.uat -> 404（网关自身 NDJSON 错误体，path=/cop/json）；uat-mkt -> 503（ALB，含根路径）。即 COP 服务在这两个域名上均不可用。"
+    },
+    {
+      "item": "生成器与 Collection 的签名差异（本轮查明）",
+      "result": "生成器用 canonical_msg（紧凑 JSON）并只发 appid/ts/sign 三个头；Collection 用**原始 body 字符串**签名，并额外发 model/method/request-channel，ts 用毫秒。两者是不同的约定 —— 生成器按 Excel 导读实现，与真实 Collection 不一致，需按真实契约修正（属 P1 范围，已记录）。"
     }
   ],
-  "conclusion": "blocked-by-environment：网络已通（代理关闭后可达），但目标接口在本 UAT 网关未注册（COP 全 404），其它服务要求登录态（401 no login）。因此真实业务请求仍未打通，不能表述为业务接口验证通过。",
+  "conclusion": "blocked-by-environment：网络已通、签名与请求头已按 Collection 真实契约重建，但 COP 服务（api_checkMobileDuplicat 所属）在 console.uat 返回 404、在 uat-mkt 返回 503，两个域名均不可用。因此真实业务请求仍未打通，**不能表述为业务接口验证通过**；appid/secret 的有效性也仍未被验证。",
   "unblock_options": [
-    "确认 api_checkMobileDuplicate 在 UAT 的真实网关/域名（当前样本记录的两个域名都不可用）",
-    "或提供可用的登录态/token 以调用 ICDP 类查询接口",
-    "或确认 COP 服务在 UAT 的部署状态（是否未发布）"
+    "确认 COP 服务在 UAT 的部署网关（样本记录的两个域名均不可用：一个 404、一个 503）",
+    "或确认 COP 服务是否已发布到该 UAT 环境",
+    "或提供可用的登录态/token，改走 ICDP 类查询接口（/api/icdp/* 路由存在但返回 401 no login）"
   ],
   "safety": {
     "requests_sent": "全部为只读查询（GET / 手机号查重 POST），未发起任何写操作",
