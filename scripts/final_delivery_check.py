@@ -84,6 +84,42 @@ def check_closure() -> list[str]:
     return [line for line in (result.stdout or "").splitlines() if line.strip()]
 
 
+def check_completeness() -> list[str]:
+    """校验提交快照的后端 import 依赖都已跟踪。
+
+    为什么必须单独检查：`check_staged_closure.py` 只覆盖前端 `@/` 别名，且只判定
+    文件"在磁盘上存在"，识别不了"被跟踪但改动未暂存"以及"从未被跟踪"的情况。
+    实测事故：P0 首次提交时 `models/api_endpoint.py` 的 `normalized_path` 字段、
+    `api/v2/__init__.py` 的 `api_bundles` 注册均未暂存，导致提交快照仍带缺陷，
+    而当时所有校验都是通过的。
+    """
+    result = subprocess.run(
+        [sys.executable, "-X", "utf8", str(ROOT / "scripts" / "check_delivery_completeness.py"),
+         "--head"],
+        cwd=str(ROOT), capture_output=True,
+    )
+    stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+    ok = result.returncode == 0
+    summary = next(
+        (line.strip() for line in stdout.splitlines()
+         if "未被跟踪且未暂存的依赖" in line),
+        "",
+    )
+    exempt = next(
+        (line.strip() for line in stdout.splitlines() if line.strip().startswith("基线豁免")),
+        "",
+    )
+    print(f"[完整性] {'通过' if ok else '存在缺口'} {summary}")
+    if exempt:
+        print(f"         {exempt}")
+    if ok:
+        return []
+    return [
+        line.strip() for line in stdout.splitlines()
+        if line.strip().startswith("[缺失]")
+    ] or [stdout.strip()]
+
+
 def check_ignore_rules() -> list[str]:
     """ui/lib 源码必须可跟踪；构建产物/依赖/虚拟环境必须仍被忽略。"""
     problems: list[str] = []
@@ -123,6 +159,7 @@ def main() -> int:
     problems: list[str] = []
     problems += check_encoding(files)
     problems += check_closure()
+    problems += check_completeness()
     problems += check_ignore_rules()
 
     print()
