@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -438,10 +439,37 @@ class ApiBundleService:
             for s in excel_specs
         }
         skipped_no_path = 0
+        saved_contracts: list[ApiInterfaceContract] = []
+        saved_members: list[list[Any]] = []
         for contract_data in match_result.contracts:
             saved = await self._upsert_contract(bundle, contract_data, spec_by_key)
             if saved is None:
                 skipped_no_path += 1
+                continue
+            saved_contracts.append(saved)
+            saved_members.append(list(contract_data.get("collection") or []))
+
+        # ---- 4b. 依赖边（全局视图：同 folder 内更早写入 + 后续引用） ----
+        # 必须在全部契约落库后计算：跨契约的"写入/引用"配对需要同时看到生产者与消费者。
+        # 无证据时为空列表，不推测（见 _producer_consumer_edges 的规则说明）。
+        if saved_contracts:
+            edge_input = [
+                {
+                    "contract_key": f"{(c.method or '').upper()} {c.normalized_path}",
+                    "collection": members,
+                }
+                for c, members in zip(saved_contracts, saved_members)
+            ]
+            edges = self._producer_consumer_edges(edge_input)
+            by_key = {
+                f"{(c.method or '').upper()} {c.normalized_path}": c
+                for c in saved_contracts
+            }
+            for edge in edges:
+                source = by_key.get(str(edge.get("from_key") or ""))
+                if source is None:
+                    continue
+                source.dependencies = (source.dependencies or []) + [edge]
 
         # ---- 5. 变量落库（幂等） ----
         if environment is not None:
@@ -768,6 +796,8 @@ class ApiBundleService:
                 "schema": {"fields": request_fields},
             },
             "_source_types": source_types,
+            # 供 _producer_consumer_edges 定位契约（幂等键）
+            "contract_key": key,
         }
         response_payload = {
             "fields": response_fields,
@@ -808,7 +838,8 @@ class ApiBundleService:
         contract.response = response_payload
         contract.auth = raw_spec.get("auth")
         contract.assertions = assertions_payload
-        contract.dependencies = self._collect_dependency_hints(coll_list)
+        # dependencies 由 parse_bundle 在全部契约落库后统一写入
+        # （_producer_consumer_edges 需要全局视图：跨契约的写入/引用配对）
         contract.pending_confirmations = pending
         contract.source_refs = source_refs
         # 已导入的契约保持 imported，其余按是否有待确认项置 matched/conflicted
@@ -848,27 +879,26 @@ class ApiBundleService:
     def _collect_dependency_hints(coll_list: list[Any]) -> list[dict[str, Any]]:
         """从 Collection 的变量写入推断依赖（如 SessionKey 传递）。
 
-        本函数此前的两个缺陷叠加，导致**依赖提示恒为空**、
-        `_create_dependencies` 永远不可能落库任何依赖：
+        入参是契约里的 ``collection`` 列表，元素是 ``MatchCandidate``
+        （**不是** ``ParsedRequest``）：真正的请求对象在其 ``.raw`` 上，
+        因此必须先取 ``raw`` 再读 ``variable_writes``。
 
-        1. 把入参当成有 ``.raw`` 的包装对象：``getattr(cc, "raw", None)`` 恒为 None，
-           直接 continue。实际上契约里存的就是 ``ParsedRequest`` 本身
-           （``variable_writes`` / ``name`` 是它的直接字段），没有 ``raw``。
-        2. 键名不匹配：解析器返回 ``{"variable", "expression"}``，
-           此处曾读 ``name`` / ``key``。
+        本函数历史上的**两个**缺陷：
+        1. 键名不匹配：解析器输出 ``{"variable","expression"}``，
+           此处读 ``name`` / ``key``；
+        2. 访问链错误：直接对 ``MatchCandidate`` 读 ``variable_writes`` 得到 None
+           并被静默跳过。两者叠加使提示恒为空，
+           `_create_dependencies` 永远不可能落库任何依赖。
 
-        现在直接读 ``ParsedRequest`` 的字段，并保留对旧键名的兼容。
+        现在按 ``MatchCandidate.raw`` 访问，并兼容直接传入 ``ParsedRequest`` 的调用。
         """
         hints: list[dict[str, Any]] = []
         for cc in coll_list:
-            writes = getattr(cc, "variable_writes", None)
-            if writes is None:
-                # 兼容历史包装对象
-                raw = getattr(cc, "raw", None)
-                writes = getattr(raw, "variable_writes", None) if raw is not None else None
-                request_name = getattr(raw, "name", None) if raw is not None else None
-            else:
-                request_name = getattr(cc, "name", None)
+            raw = getattr(cc, "raw", None)
+            # 兼容：调用方可能直接传 ParsedRequest（其自身没有 .raw 包装）
+            request_obj = raw if raw is not None else cc
+            writes = getattr(request_obj, "variable_writes", None)
+            request_name = getattr(request_obj, "name", None)
 
             for write in (writes or []):
                 if not isinstance(write, dict):
@@ -886,6 +916,96 @@ class ApiBundleService:
                     "from_request": request_name,
                 })
         return hints
+
+    @staticmethod
+    def _producer_consumer_edges(contracts_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """按 folder 顺序 + 变量写入/引用计算**可证明**的依赖边。
+
+        可证明依赖 = 存在一个生产者契约 A 与消费者契约 B，使得：
+        A 的某个 Collection 请求**写入了变量 v**（test script 中 ``pm.*.set``），
+        B 的某个 Collection 请求**引用了** ``{{v}}``，
+        且两者在**同一 folder** 内（A 次序更早，B 更晚）。
+
+        设计原则（用户要求）：**没有证据的依赖保持为空，不推测**。
+        因此：
+        - 变量名**不**与端点名做匹配（变量名与接口名无必然关系，
+          早期实现用 ``variable in endpoint_key`` 是错的、恒不匹配）；
+        - 跨 folder 不假设顺序（folder 之间无确定执行次序）；
+        - 缺少任一证据（写入或引用）即不成边。
+
+        返回 ``[{"from_key","to_key","variable"}]``（键为 method+normalized_path）。
+        """
+        # 1) 收集每个契约的请求节点（folder 路径 + 次序 + 写入/引用）
+        @dataclass
+        class _Node:
+            key: str
+            folder: tuple[str, ...]
+            item_index: int
+            writes: set[str]
+            reads: set[str]
+
+        nodes: list[_Node] = []
+        for contract in contracts_data:
+            member_key = contract.get("contract_key")
+            if not member_key:
+                continue
+            for candidate in (contract.get("collection") or []):
+                raw = getattr(candidate, "raw", None)
+                request_obj = raw if raw is not None else candidate
+                writes = {
+                    str(w.get("variable") or w.get("name") or w.get("key")).strip()
+                    for w in (getattr(request_obj, "variable_writes", None) or [])
+                    if isinstance(w, dict) and (w.get("variable") or w.get("name") or w.get("key"))
+                }
+                reads = {
+                    str(v).strip()
+                    for v in _VAR_RE.findall(json.dumps(
+                        getattr(request_obj, "body", None) or {}, ensure_ascii=False
+                    ))
+                }
+                # 也扫描 url/header 中的变量引用（查询参数常带 {{var}}）
+                for attr in ("url_raw", "headers", "query"):
+                    value = getattr(request_obj, attr, None)
+                    if value is None:
+                        continue
+                    reads |= {
+                        str(v).strip()
+                        for v in _VAR_RE.findall(json.dumps(value, ensure_ascii=False))
+                    }
+                nodes.append(_Node(
+                    key=str(member_key),
+                    folder=tuple(getattr(request_obj, "folder_path", ()) or ()),
+                    item_index=int(getattr(request_obj, "item_index", 0) or 0),
+                    writes={w for w in writes if w},
+                    reads={r for r in reads if r},
+                ))
+
+        # 2) 生产者索引：(folder, variable) -> 写入节点列表
+        producers: dict[tuple[tuple[str, ...], str], list[_Node]] = {}
+        for node in nodes:
+            for var in node.writes:
+                producers.setdefault((node.folder, var), []).append(node)
+
+        # 3) 消费者遍历：同 folder、次序更晚、写入者不是自己
+        edges: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for node in nodes:
+            for var in sorted(node.reads):
+                for producer in producers.get((node.folder, var), []):
+                    if producer.key == node.key:
+                        continue
+                    if producer.item_index >= node.item_index:
+                        continue  # 必须是"更早"的写入者
+                    signature = (producer.key, node.key, var)
+                    if signature in seen:
+                        continue
+                    seen.add(signature)
+                    edges.append({
+                        "from_key": producer.key,
+                        "to_key": node.key,
+                        "variable": var,
+                    })
+        return edges
 
     async def _upsert_variables_from_environment(
         self,
@@ -1157,18 +1277,23 @@ class ApiBundleService:
         （如变量 ``sessionKey`` ⊂ ``endpoint_key api_sessionKey``）。
         匹配不到就返回 ``None``，调用方据此**不落库**该依赖。
 
-        历史缺陷：原地实现写成 ``key in variable``（方向相反），
-        导致永远匹配不到目标、依赖从未可能落库。
+        历史缺陷（两个都真实存在过）：
+        1. 方向写反：曾写成 ``key in variable``；
+        2. 大小写不一致：曾写成 ``needle in key.lower()``，而 ``needle`` 保持原样
+           （``sessionKey``），与已小写的 key 比较恒不成立 —— 必须先统一小写。
         """
         if not variable:
             return None
-        needle = str(variable).lower()
+        needle = str(variable).strip().lower()
+        if not needle:
+            return None
         for other in all_contracts:
             key = getattr(other, "endpoint_key", None)
             if not key or getattr(other, "id", None) == exclude_contract_id:
                 continue
-            normalized_key = str(key).replace("api_", "").lower()
-            if needle in normalized_key or needle in str(key).lower():
+            key_lower = str(key).lower()
+            normalized_key = key_lower.replace("api_", "")
+            if needle in normalized_key or needle in key_lower:
                 return other
         return None
 
@@ -1178,11 +1303,14 @@ class ApiBundleService:
         contract: ApiInterfaceContract,
         all_contracts: list[ApiInterfaceContract],
     ) -> None:
-        """把依赖提示解析为 contract→contract 的 ApiDependency（幂等）。
+        """把**可证明**的依赖边落成 ``ApiDependency``（幂等）。
 
-        只处理能确定落脚点的情形：Collection 的变量写入若与另一个契约的
-        ``endpoint_key`` 相关，则建立依赖。无法确定的依赖仅保留在
-        ``contract.dependencies`` 供人工确认，不落表。
+        数据来源：``contract.dependencies`` 保存的是
+        `_producer_consumer_edges()` 计算的边（``from_key`` / ``to_key`` / ``variable``），
+        其证据链为"同 folder 内、次序更早的请求写入变量 v，且本契约的请求引用 {{v}}"。
+
+        **不再**用"变量名与 endpoint_key 匹配"来落脚：变量名与接口名没有必然关系，
+        该规则恒不匹配（历史缺陷）。无法证明的依赖不落表。
         """
         existing = (await self.db.execute(
             select(ApiDependency).where(ApiDependency.from_contract_id == contract.id)
@@ -1190,21 +1318,30 @@ class ApiBundleService:
         if existing:
             return
 
-        hints = contract.dependencies or []
-        if not hints:
+        edges = contract.dependencies or []
+        if not edges:
             return
 
-        for hint in hints:
-            target = self._resolve_dependency_target(
-                hint.get("variable"), all_contracts, contract.id
-            )
-            if target is None:
+        # 幂等键 = (from, to, variable)；本契约只处理 from_key 指向自己的边
+        own_key = f"{(contract.method or '').upper()} {contract.normalized_path}"
+        by_key = {
+            f"{(c.method or '').upper()} {c.normalized_path}": c
+            for c in all_contracts
+        }
+
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            if edge.get("from_key") != own_key:
+                continue
+            target = by_key.get(str(edge.get("to_key") or ""))
+            if target is None or target.id == contract.id:
                 continue
             self.db.add(ApiDependency(
                 bundle_id=bundle.id,
                 from_contract_id=contract.id,
                 to_contract_id=target.id,
-                variable=str(hint.get("variable")),
-                extract_expr=hint.get("extract_expr"),
+                variable=str(edge.get("variable") or ""),
+                extract_expr=edge.get("extract_expr"),
             ))
         await self.db.flush()

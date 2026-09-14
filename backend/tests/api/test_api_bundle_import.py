@@ -107,7 +107,11 @@ COLLECTION = {
             "event": [{
                 "listen": "test",
                 "script": {"exec": [
-                    "pm.test('status 200', function () { pm.response.to.have.status(200); });"
+                    "pm.test('status 200', function () { pm.response.to.have.status(200); });",
+                    # 变量写入：为 api_getMemberAct 的 {{sessionKey}} 提供依赖证据
+                    # （P0-3：只有"写入 + 后续引用"才构成可证明依赖）
+                    "const jsonData = pm.response.json();",
+                    "pm.environment.set('sessionKey', jsonData.Data.SessionKey);",
                 ]},
             }],
         },
@@ -253,6 +257,32 @@ async def parse(client, bundle_name: str, *, excel=True, collection=True, enviro
         )
     return await client.post(f"{BASE}/parse-bundle", data=data, files=files)
 
+
+
+class _SessionCtx:
+    """从 fixture 的 `get_db` override 取一个会话（用于直接查库断言）。
+
+    避免改动 `client` fixture 的 yield 签名（既有 30+ 用例都按 `client` 使用），
+    同时让依赖落库这类断言能直接查表而不是只依赖响应体。
+    """
+
+    def __init__(self, client):
+        self._client = client
+
+    async def __aenter__(self):
+        from app.api.deps import get_db
+
+        dep = self._client._transport.app.dependency_overrides[get_db]
+        self._gen = dep()
+        return await self._gen.__anext__()
+
+    async def __aexit__(self, *exc):
+        await self._gen.aclose()
+        return False
+
+
+def _session(client):
+    return _SessionCtx(client)
 
 
 def _unconfirmed(blocked) -> list:
@@ -534,6 +564,114 @@ class TestRollback:
     async def test_get_unknown_bundle_returns_404(self, client):
         resp = await client.get(f"{BASE}/{uuid.uuid4()}")
         assert resp.status_code == 404
+
+
+class TestDependencyPersistenceEndToEnd:
+    """依赖落库的端到端验收（真实 PostgreSQL，非仅内存路径）。
+
+    背景：P0-3 修掉了 3 个叠加缺陷（读不存在的 `.raw`、键名不匹配、匹配方向反写），
+    它们使"依赖落库"在任何数据下都不可能发生。此前只有内存路径的单元断言，
+    本组补上"经 parse-bundle → confirm 后 ApiDependency 表真的有行"的证据。
+
+    样本取自默认 COLLECTION：`api_checkMobileDuplicate` 写 `sessionKey`
+    （test script），`api_getMemberAct` 引用 `{{sessionKey}}`（请求体）。
+    """
+
+    async def test_contract_dependencies_hint_is_collected(self, client):
+        """契约侧必须收集到**可证明的依赖边**（此前恒为空）。
+
+        边结构为 {from_key, to_key, variable}，证据链 = 同 folder 内更早的请求写入变量，
+        本契约的请求引用该变量。变量名本身**不**与端点名匹配。
+        """
+        parsed = await parse(client, "dep-A")
+        bundle_id = parsed.json()["data"]["bundle_id"]
+
+        from sqlalchemy import select
+
+        from app.models.api_asset import ApiInterfaceContract
+
+        async with _session(client) as session:
+            rows = (await session.execute(
+                select(ApiInterfaceContract).where(ApiInterfaceContract.bundle_id == uuid.UUID(bundle_id))
+            )).scalars().all()
+            edges = [edge for c in rows for edge in (c.dependencies or [])]
+
+        assert edges, "应收集到依赖边（api_checkMobileDuplicate 写入 sessionKey）"
+        for edge in edges:
+            assert set(edge) >= {"from_key", "to_key", "variable"}, edge
+        variables = {edge["variable"] for edge in edges}
+        assert "sessionKey" in variables, f"边的变量: {variables}"
+        # 生产者必须是写入方（collection-only 契约）
+        from_keys = {edge["from_key"] for edge in edges}
+        assert any("checkmobileduplicate" in k.lower() for k in from_keys), from_keys
+
+    async def test_dependency_row_is_persisted_after_confirm(self, client):
+        """confirm 后 api_dependencies 必须有落库行，且指向正确目标契约。"""
+        from sqlalchemy import select
+
+        from app.models.api_asset import ApiDependency, ApiInterfaceContract
+
+        parsed = await parse(client, "dep-B")
+        bundle_id = parsed.json()["data"]["bundle_id"]
+        ok = await confirm_all(client, bundle_id)
+        assert ok.status_code == 200, ok.text
+
+        async with _session(client) as session:
+            deps = (await session.execute(
+                select(ApiDependency).where(ApiDependency.bundle_id == uuid.UUID(bundle_id))
+            )).scalars().all()
+
+        assert deps, "依赖必须真实落库（这是 P0-3 三个缺陷的直接回归断言）"
+        target_keys = set()
+        async with _session(client) as session:
+            for dep in deps:
+                assert dep.variable, "依赖必须记录传递的变量名"
+                row = (await session.execute(
+                    select(ApiInterfaceContract).where(
+                        ApiInterfaceContract.id == dep.to_contract_id
+                    )
+                )).scalar_one_or_none()
+                assert row is not None, "依赖目标契约必须存在"
+                target_keys.add(row.endpoint_key)
+        assert target_keys, "依赖应有目标契约"
+
+    async def test_dependency_persistence_is_idempotent(self, client):
+        """重复 confirm 不得重复插入依赖（`_create_dependencies` 有 existing 前置检查）。"""
+        from sqlalchemy import func, select
+
+        from app.models.api_asset import ApiDependency
+
+        parsed = await parse(client, "dep-C")
+        bundle_id = parsed.json()["data"]["bundle_id"]
+        await confirm_all(client, bundle_id)
+
+        async with _session(client) as session:
+            first = (await session.execute(
+                select(func.count(ApiDependency.id)).where(
+                    ApiDependency.bundle_id == uuid.UUID(bundle_id)
+                )
+            )).scalar() or 0
+
+        second = await client.post(f"{BASE}/{bundle_id}/confirm", json={})
+        assert second.status_code == 200, second.text
+
+        async with _session(client) as session:
+            after = (await session.execute(
+                select(func.count(ApiDependency.id)).where(
+                    ApiDependency.bundle_id == uuid.UUID(bundle_id)
+                )
+            )).scalar() or 0
+
+        assert after == first, f"重复 confirm 不应新增依赖: {first} -> {after}"
+
+    async def test_assets_endpoint_reports_dependencies(self, client):
+        """资产统计接口应把依赖数暴露出来（供验收与前端展示）。"""
+        parsed = await parse(client, "dep-D")
+        bundle_id = parsed.json()["data"]["bundle_id"]
+        await confirm_all(client, bundle_id)
+        assets = (await client.get(f"{BASE}/{bundle_id}/assets")).json()["data"]
+        assert "dependencies" in assets
+        assert assets["dependencies"] >= 1, f"应至少 1 条依赖，实际 {assets['dependencies']}"
 
 
 # ---------------------------------------------------------------------------
