@@ -1,47 +1,36 @@
 {
   "endpoint": "api_checkMobileDuplicate",
-  "url": "https://console.uat.eatizen.com.hk/yundt-saas-gateway/api/json/api_checkMobileDuplicate",
+  "url": "https://console.uat.eatizen.com.hk/yundt-saas-gateway/cop/json",
   "method": "POST",
   "risk": "read-only（手机号查重，不产生数据变更）",
-  "started_at": "2026-09-14T09:42:14+00:00",
-  "request_body": "{\"Touchpoint\":\"W\",\"Language\":\"TC\",\"MobilePhone\":\"18320101265\"}",
+  "started_at": "2026-09-14T10:15:01+00:00",
+  "request_body": "{\"api\":\"checkMobileDuplicate\",\"v\":\"1.0\",\"model\":\"api\",\"channel\":\"pos\",\"Touchpoint\":\"W\",\"Language\":\"TC\",\"MobilePhone\":\"18320101265\"}",
   "request_headers_redacted": {
     "Content-Type": "application/json",
     "appid": "<len=16>",
-    "ts": "20260914174214",
+    "ts": "20260914181501",
     "sign": "<len=32>"
   },
-  "response_status": 403,
+  "response_status": 404,
   "response_summary": {
-    "raw_prefix": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>403 Forbidden</title><style>body,html{height:100%;display:flex;flex-direction:column}.ei,.et{text-align:center}.ei{margin-top:auto}.ecode{font-weight:400;font-size:68px;color:#ff7e2c}.et{margin-bottom:auto}.eext{margin-bottom:24px;"
+    "keys": [
+      "error",
+      "message",
+      "path",
+      "requestId",
+      "status",
+      "timestamp"
+    ]
   },
-  "duration_ms": 1196,
+  "duration_ms": 1846,
   "status": "failed",
-  "error": "HTTPError 403",
-  "response_body_raw": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><title>403 Forbidden</title><style>body,html{height:100%;display:flex;flex-direction:column}.ei,.et{text-align:center}.ei{margin-top:auto}.ecode{font-weight:400;font-size:68px;color:#ff7e2c}.et{margin-bottom:auto}.eext{margin-bottom:24px;font-weight:600;font-size:24px}.edesc p{margin:5px 0}.footer{border-top:1px solid#F4F4F4;position:fixed;text-align:center;line-height:45px;height:45px;width:100%;bottom:0;font-size:16px;font-weight:500;letter-spacing:normal;color:#AAAAAA;a{color:#0064C8;text-decoration:none}}</style></head><body><div class=\"ei\"><div class=\"ecode\">403</div></div><div class=\"et\"><div class=\"eext\">Sorry, you have been blocked</div><div class=\"edesc\"><p>Denied by http_custom</p><p>RequestID: 9b66b4a317893789369814609e</p><p>RuleID: 23009130</p></div></div><div class=\"footer\">Performance & Security by <a href=\"https://www.alibabacloud.com/help/en/edge-security-acceleration/esa/product-overview/what-is-esa\">ESA</a></div></body></html>",
-  "redaction_note": "归档前对 appid / sign / secret 等凭据类字段统一脱敏（只留长度），不落明文。",
-  "route_findings": [
-    {
-      "candidate": "POST /api/json/api_checkMobileDuplicate @ console.uat",
-      "note": "Excel 契约里的文档占位写法（含 key=xxxxx），非 UAT 真实路由",
-      "status": 403
-    },
-    {
-      "candidate": "POST /cop/json @ uat-mkt.eatizen.com.hk",
-      "note": "环境文件 url + Collection folder 'cop' 的真实路由",
-      "status": 503
-    },
-    {
-      "candidate": "GET /api/icdp/v1/memberInfoBestore @ console.uat",
-      "note": "Collection 中记录的真实只读查询端点",
-      "status": 403
-    },
-    {
-      "candidate": "GET <gateway root> @ console.uat / uat-mkt",
-      "note": "根路径同样被拒 -> 拒绝发生在网关/ALB 层，非请求构造层",
-      "status": 403
-    }
-  ],
-  "conclusion": "blocked-by-network：本机到该 UAT 环境的请求在网关/ALB 层即被拒（403/503），根路径亦如此。因此**无法判定**签名与请求体格式是否正确 —— 需网络放行后重试。",
-  "updated_at": "2026-09-14T10:05:41+00:00"
+  "error": "HTTPError 404",
+  "response_body": {
+    "timestamp": "2026-09-14 18:15:04",
+    "path": "/cop/json",
+    "status": 404,
+    "error": "Not Found",
+    "message": null,
+    "requestId": "9a946b3b-81652"
+  }
 }

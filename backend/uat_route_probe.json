@@ -1,0 +1,86 @@
+{
+  "probed_at": "2026-09-14T18:16:17+08:00",
+  "note": "仅只读探测；凭据未落盘",
+  "results": [
+    {
+      "host": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/cop/json",
+      "status": 404,
+      "marker": "路径不存在",
+      "duration_ms": 418,
+      "response_prefix": "{\"timestamp\":\"2026-09-14 18:16:13\",\"path\":\"/cop/json\",\"status\":404,\"error\":\"Not Found\",\"message\":null,\"requestId\":\"d22821e7-81653\"}"
+    },
+    {
+      "host": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/api/json",
+      "status": 404,
+      "marker": "路径不存在",
+      "duration_ms": 99,
+      "response_prefix": "{\"timestamp\":\"2026-09-14 18:16:13\",\"path\":\"/api/json\",\"status\":404,\"error\":\"Not Found\",\"message\":null,\"requestId\":\"f4ce7eed-81654\"}"
+    },
+    {
+      "host": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/api/json/api_checkMobileDuplicate",
+      "status": 404,
+      "marker": "路径不存在",
+      "duration_ms": 86,
+      "response_prefix": "{\"timestamp\":\"2026-09-14 18:16:13\",\"path\":\"/api/json/api_checkMobileDuplicate\",\"status\":404,\"error\":\"Not Found\",\"message\":null,\"requestId\":\"9f53f3ec-81655\"}"
+    },
+    {
+      "host": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/cop/json/api_checkMobileDuplicate",
+      "status": 404,
+      "marker": "路径不存在",
+      "duration_ms": 141,
+      "response_prefix": "{\"timestamp\":\"2026-09-14 18:16:13\",\"path\":\"/cop/json/api_checkMobileDuplicate\",\"status\":404,\"error\":\"Not Found\",\"message\":null,\"requestId\":\"c37ca8af-81656\"}"
+    },
+    {
+      "host": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/api/icdp/v1/memberInfoBestore",
+      "status": 200,
+      "marker": "命中/其它",
+      "duration_ms": 120,
+      "response_prefix": "{\"resultCode\":401,\"resultMsg\":\"no login\"}"
+    },
+    {
+      "host": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/cop/json",
+      "status": 503,
+      "marker": "后端不可用",
+      "duration_ms": 1053,
+      "response_prefix": "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n<hr><center>alb</center>\r\n</body>\r\n</htm"
+    },
+    {
+      "host": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/api/json",
+      "status": 503,
+      "marker": "后端不可用",
+      "duration_ms": 821,
+      "response_prefix": "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n<hr><center>alb</center>\r\n</body>\r\n</htm"
+    },
+    {
+      "host": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/api/json/api_checkMobileDuplicate",
+      "status": 503,
+      "marker": "后端不可用",
+      "duration_ms": 897,
+      "response_prefix": "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n<hr><center>alb</center>\r\n</body>\r\n</htm"
+    },
+    {
+      "host": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/cop/json/api_checkMobileDuplicate",
+      "status": 503,
+      "marker": "后端不可用",
+      "duration_ms": 826,
+      "response_prefix": "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n<hr><center>alb</center>\r\n</body>\r\n</htm"
+    },
+    {
+      "host": "https://uat-mkt.eatizen.com.hk/yundt-saas-gateway",
+      "path": "/api/icdp/v1/memberInfoBestore",
+      "status": 503,
+      "marker": "后端不可用",
+      "duration_ms": 933,
+      "response_prefix": "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n<hr><center>alb</center>\r\n</body>\r\n</htm"
+    }
+  ]
+}

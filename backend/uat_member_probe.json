@@ -1,0 +1,61 @@
+{
+  "probed_at": "2026-09-14T18:18:29+08:00",
+  "base": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+  "note": "只读查询（GET/无副作用），不涉及写操作",
+  "results": [
+    {
+      "label": "memberInfoBestore GET",
+      "path": "/api/icdp/v1/memberInfoBestore",
+      "method": "GET",
+      "phone": "13800000000",
+      "status": 200,
+      "response_prefix": "{\"resultCode\":401,\"resultMsg\":\"no login\"}",
+      "duration_ms": 380
+    },
+    {
+      "label": "memberInfoBestore GET",
+      "path": "/api/icdp/v1/memberInfoBestore",
+      "method": "GET",
+      "phone": "18320101265",
+      "status": 200,
+      "response_prefix": "{\"resultCode\":401,\"resultMsg\":\"no login\"}",
+      "duration_ms": 120
+    },
+    {
+      "label": "memberInfoBestore POST",
+      "path": "/api/icdp/v1/memberInfoBestore",
+      "method": "POST",
+      "phone": "13800000000",
+      "status": 200,
+      "response_prefix": "{\"resultCode\":401,\"resultMsg\":\"no login\"}",
+      "duration_ms": 124
+    },
+    {
+      "label": "memberInfoBestore POST",
+      "path": "/api/icdp/v1/memberInfoBestore",
+      "method": "POST",
+      "phone": "18320101265",
+      "status": 200,
+      "response_prefix": "{\"resultCode\":401,\"resultMsg\":\"no login\"}",
+      "duration_ms": 112
+    },
+    {
+      "label": "cs cases page GET",
+      "path": "/api/icdp/v1/cs/cases/page",
+      "method": "GET",
+      "phone": "13800000000",
+      "status": 200,
+      "response_prefix": "{\"resultCode\":401,\"resultMsg\":\"no login\"}",
+      "duration_ms": 110
+    },
+    {
+      "label": "cs cases page GET",
+      "path": "/api/icdp/v1/cs/cases/page",
+      "method": "GET",
+      "phone": "18320101265",
+      "status": 200,
+      "response_prefix": "{\"resultCode\":401,\"resultMsg\":\"no login\"}",
+      "duration_ms": 91
+    }
+  ]
+}
