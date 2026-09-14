@@ -56,38 +56,82 @@ from tests.sample_paths import (  # noqa: E402
 RESULT_FILE = BACKEND / "uat_real_execution_result.json"
 
 #: 允许执行的接口白名单（只读查询类）。**不在白名单的一律不执行。**
+#:
+#: 路径事实来自样本自身（不是推断）：
+#: - 环境文件 `url = https://uat-mkt.eatizen.com.hk/yundt-saas-gateway`
+#: - Collection 中 COP 请求的真实 URL 是 `{{url}}/cop/json`（接口名在**请求体**里）
+#: 早期按 Excel 里的 `/api/json/api_xxx?key=xxxxx` 直接调用会得到网关 403，
+#: 因为那是文档占位写法，不是 UAT 的真实路由。
 READONLY_ENDPOINTS = {
+    # 主用：与 Excel 契约 api_checkMobileDuplicate 对应的真实 UAT 路由
     "api_checkMobileDuplicate": {
         "method": "POST",
-        "path": "/api/json/api_checkMobileDuplicate",
-        "body_builder": lambda: {"Touchpoint": "W", "Language": "TC",
-                                 "MobilePhone": UAT_TEST_MOBILE},
+        "path": "/cop/json",
+        "body_builder": lambda: {
+            "api": "checkMobileDuplicate",
+            "v": "1.0",
+            "model": "api",
+            "channel": "pos",
+            "Touchpoint": "W",
+            "Language": "TC",
+            "MobilePhone": UAT_TEST_MOBILE,
+        },
         "risk": "read-only（手机号查重，不产生数据变更）",
+    },
+    # 备选：Collection 中明确记录的查询类接口（真实域名，非 {{url}} 变量）
+    "api_memberInfoBestore": {
+        "method": "GET",
+        "path": "/api/icdp/v1/memberInfoBestore?pageNum=1&pageSize=5",
+        "body_builder": lambda: None,
+        "host_override": "https://console.uat.eatizen.com.hk/yundt-saas-gateway",
+        "risk": "read-only（会员信息查询）",
     },
 }
 
 MISSING = (None, None, None)
 
 
-def _sign(appid: str, secret: str, body: dict) -> dict:
-    """按美心规则生成签名参数（md5(appid+appsercret+ts+msg)，32 位小写）。"""
-    from app.services.signing.mx_md5_signer import mx_md5_sign
+def _mx_timestamp() -> str:
+    """美心时间戳：yyyyMMddHHmmss，Asia/Hong_Kong（契约 ts_timezone）。"""
+    from zoneinfo import ZoneInfo
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    msg = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    return datetime.now(ZoneInfo("Asia/Hong_Kong")).strftime("%Y%m%d%H%M%S")
+
+
+def _build_signed_request(appid: str, secret: str, body: dict) -> dict:
+    """按生成器固化的规则构造请求。
+
+    与 `api_spec_test_generator.generate_playwright_script` 保持一致：
+    - `appid` / `ts` / `sign` 放在**请求头**；
+    - body 是 `canonical_msg(body)` 的紧凑 JSON **字符串**（与签名 msg 完全相同）；
+    - POST 到 BASE_URL（不含 `?key=...` 占位查询串）。
+    """
+    from app.services.signing.mx_md5_signer import canonical_msg, mx_md5_sign
+
+    ts = _mx_timestamp()
+    msg = canonical_msg(body)
     return {
-        "appid": appid,
         "ts": ts,
         "sign": mx_md5_sign(appid, secret, ts, msg),
-        "_msg": msg,
+        "msg": msg,
+        "headers": {
+            "Content-Type": "application/json",
+            "appid": appid,
+            "ts": ts,
+            "sign": mx_md5_sign(appid, secret, ts, msg),
+        },
     }
 
 
+#: 归档时必须脱敏的字段（含 appid —— 凭据即使是标识符也不落明文）
+_REDACT_KEYS = ("sign", "secret", "password", "token", "appid")
+
+
 def _redact(payload: dict) -> dict:
-    """结果归档前的脱敏：签名/密钥类字段只留长度。"""
+    """结果归档前的脱敏：凭据类字段只留长度，不落明文。"""
     out = {}
     for key, value in payload.items():
-        if any(token in key.lower() for token in ("sign", "secret", "password", "token")):
+        if any(token in key.lower() for token in _REDACT_KEYS):
             out[key] = f"<len={len(str(value))}>"
         else:
             out[key] = value
@@ -143,13 +187,13 @@ def main() -> int:
     assert appid and secret
 
     body = spec["body_builder"]()
-    signed = _sign(appid, secret, body)
+    signed = _build_signed_request(appid, secret, body)
     url = f"{uat_base_url()}{spec['path']}"
-    query = {k: v for k, v in signed.items() if k != "_msg"}
 
     print()
-    print(f"执行: POST {url}")
-    print(f"  请求体（脱敏归档用）: {_redact(signed)}")
+    print(f"执行: {spec['method']} {url}")
+    print(f"  请求体（实际发送）: {signed['msg']}")
+    print(f"  请求头: appid={appid} ts={signed['ts']} sign=<len={len(signed['sign'])}>")
 
     started = time.time()
     outcome: dict = {
@@ -158,7 +202,8 @@ def main() -> int:
         "method": spec["method"],
         "risk": spec["risk"],
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "request_summary": _redact(signed),
+        "request_body": signed["msg"],
+        "request_headers_redacted": _redact(dict(signed["headers"])),
         "response_status": None,
         "response_summary": None,
         "duration_ms": None,
@@ -167,9 +212,9 @@ def main() -> int:
     }
 
     request = urllib.request.Request(
-        f"{url}?{'&'.join(f'{k}={v}' for k, v in query.items())}",
-        data=signed["_msg"].encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        url,
+        data=signed["msg"].encode("utf-8"),
+        headers=signed["headers"],
         method="POST",
     )
     try:
@@ -190,11 +235,17 @@ def main() -> int:
     outcome["duration_ms"] = int((time.time() - started) * 1000)
     try:
         parsed = json.loads(raw)
-        outcome["response_summary"] = {
-            k: parsed[k] for k in ("Code", "Message") if k in parsed
-        } or {"keys": sorted(parsed)[:8]} if isinstance(parsed, dict) else {"type": "list"}
+        if isinstance(parsed, dict):
+            outcome["response_summary"] = {
+                k: parsed[k] for k in ("Code", "Message") if k in parsed
+            } or {"keys": sorted(parsed)[:8]}
+            outcome["response_body"] = parsed
+        else:
+            outcome["response_summary"] = {"type": "list", "len": len(parsed)}
+            outcome["response_body"] = parsed
     except json.JSONDecodeError:
-        outcome["response_summary"] = {"raw_prefix": raw[:200]}
+        outcome["response_summary"] = {"raw_prefix": raw[:300]}
+        outcome["response_body_raw"] = raw[:2000]
 
     RESULT_FILE.write_text(
         json.dumps(outcome, ensure_ascii=False, indent=2), encoding="utf-8"

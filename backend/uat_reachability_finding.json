@@ -1,0 +1,20 @@
+{
+  "checked_at": "2026-09-14T17:46:47+0800",
+  "conclusion": "根路径即被拒（403/503），说明拒绝发生在网关/ALB 层而非请求构造（签名/路径）层；本机到该 UAT 环境当前不可达。",
+  "findings": [
+    {
+      "host": "console.uat.eatizen.com.hk",
+      "resolved_ip": "155.102.221.171",
+      "status_on_root": 503,
+      "body_prefix": "<html>\r <head><title>503 Service Temporarily Unavailable</title></head>\r <body bgcolor=\"white\">\r <center><h1>503 Service",
+      "latency_ms": 440
+    },
+    {
+      "host": "uat-mkt.eatizen.com.hk",
+      "resolved_ip": "47.237.183.237",
+      "status_on_root": 503,
+      "body_prefix": "<html>\r <head><title>503 Service Temporarily Unavailable</title></head>\r <body bgcolor=\"white\">\r <center><h1>503 Service",
+      "latency_ms": 902
+    }
+  ]
+}
