@@ -31,6 +31,8 @@
 from __future__ import annotations
 
 import inspect
+import io
+import tokenize
 
 import pytest
 
@@ -158,5 +160,99 @@ class TestLiveRegistrationOutcome:
             error_message="登录未完成（3 次尝试后仍停留在登录页）",
             response_status_code=200,
             expected_status_code=200,
+        )
+        assert decision.decision.value == "skip"
+
+
+# ---------------------------------------------------------------------------
+# 3) API 链路：预检不得复活（2026-10-08 收敛）
+# ---------------------------------------------------------------------------
+class TestApiPathHasSingleDecisionPoint:
+    """API 执行器曾内联一次「预检」`decide()`，与登记侧构成两套证据口径。
+
+    预检以 `expected_status_code or 200` 兜底，登记侧坚持 None 纪律（未观测即 None）。
+    同一次失败因此被判两次：预检产出「状态码不匹配：预期 200，实际 500」
+    （`error_type=status_mismatch`），登记侧产出「服务器错误: HTTP 500」
+    （`error_type=server_error`）—— 描述、error_type、指纹与去重键都可能不同。
+
+    收敛后：**执行器只传证据标志 `allow_create`，唯一的 `decide()` 在登记服务里。**
+    """
+
+    def _src(self) -> str:
+        """取执行器 `_process_idp_defect` 的**代码文本**（剥离注释）。
+
+        必须剥离注释：方法内刻意保留了「此处曾内联调用 decide() / 曾用
+        `or 200` 兜底」的说明性注释；若连注释一并做字面匹配会假阳性
+        （与"把注释里的'信封'当成断言"是同一类误判）。
+
+        实现用 tokenize 定位注释的 (行, 列) 后按列截断，**保留代码原文**
+        （不用 token 拼接，否则 `f(` 会被拆成 `f (`）。
+        """
+        from app.services.api_test_executor import APITestExecutor
+
+        source = inspect.getsource(APITestExecutor._process_idp_defect)
+        lines = source.splitlines()
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT:
+                row, col = tok.start
+                lines[row - 1] = lines[row - 1][:col]
+        return "\n".join(lines)
+
+    def test_executor_does_not_call_decide_inline(self):
+        """执行器不得再内联判定：两处判定共用同一 status_code，skip 结论本就冗余。"""
+        assert "DefectDecisionService.decide(" not in self._src(), (
+            "API 执行器不应再调用 decide()：登记决策唯一权威在 "
+            "DefectRegistrationService.register_from_api_failure()"
+        )
+
+    def test_executor_does_not_fabricate_expected_status(self):
+        """`or 200` 兜底是猜的预期，会把伪造值写进工单，不得复活。"""
+        assert "expected_status_code or 200" not in self._src()
+
+    def test_executor_delegates_evidence_via_allow_create(self):
+        """证据完整性应以 allow_create 表达，而不是在执行器里另做一次决策。"""
+        src = self._src()
+        assert "register_from_api_failure(" in src
+        assert "allow_create=has_complete_evidence" in src
+
+
+class TestExpectedStatusIsNotFabricated:
+    def test_missing_expected_does_not_produce_fake_expectation(self):
+        """expected 未观测到（None）时，不得写出「预期 200」。"""
+        decision = DefectDecisionService.decide(
+            test_status="failed",
+            error_message="API 请求失败",
+            response_status_code=500,
+            expected_status_code=None,
+        )
+        assert decision.decision.value == "create"
+        assert "预期 200" not in decision.failure_summary
+        assert decision.failure_summary == "服务器错误: HTTP 500"
+        assert decision.error_type == "server_error"
+
+    def test_contrast_or_200_fallback_would_fabricate(self):
+        """对照：旧预检的 `or 200` 兜底确实会伪造预期（证明删除预检有价值）。"""
+        stale = DefectDecisionService.decide(
+            test_status="failed",
+            error_message="API 请求失败",
+            response_status_code=500,
+            expected_status_code=200,  # 旧预检的兜底值
+        )
+        assert stale.failure_summary == "状态码不匹配：预期 200，实际 500"
+        assert stale.error_type == "status_mismatch"
+
+    @pytest.mark.parametrize("expected", [None, 200, 500])
+    def test_skip_verdict_is_independent_of_expected_status(self, expected):
+        """skip 结论只取决于 SUT 侧证据（状态码/断言），与 expected 无关。
+
+        这是「删除预检**不会**改变是否登记这一结论」的依据：
+        预检与登记传入的 `response_status_code` 完全相同，
+        而 skip 判定只看 `_has_sut_evidence`，不看 expected。
+        """
+        decision = DefectDecisionService.decide(
+            test_status="failed",
+            error_message="TimeoutError: locator.waitFor: Timeout 15000ms exceeded.",
+            response_status_code=None,
+            expected_status_code=expected,
         )
         assert decision.decision.value == "skip"

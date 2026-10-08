@@ -26,7 +26,6 @@ from app.repositories.api_test_repo import (
 from app.config.minio_client import MinIOClient
 from app.schemas.enums import TestResultStatus
 from app.models.mongodb.api_test_log import APITestDetailLog
-from app.services.defect_decision_service import DefectDecisionService
 from app.services.defect_registration_service import DefectRegistrationService
 
 logger = logging.getLogger(__name__)
@@ -665,11 +664,15 @@ export default defineConfig({{
                         "body": {},
                     }
 
-            # 2. 缺陷决策判断
-            actual_status_code = response_summary.get("status_code") if response_summary else None
-            expected_status_code = request_summary.get("expected_status_code") if request_summary else None
-
-            # 如果没有完整请求证据，降低自动创建置信度
+            # 2. 证据完整性 —— 只决定"能否自动创建"，**登记决策不在此处做**。
+            #
+            #    登记决策的唯一权威是 DefectDecisionService.decide()，由
+            #    DefectRegistrationService.register_from_api_failure() 在执行链路内调用。
+            #    本方法刻意**不再**内联调用 decide()：历史版本在这里做了一次"预检"，
+            #    并以 `expected_status_code or 200` 传参 —— 那个 200 是**猜的不是断言给的**，
+            #    会让描述写出"状态码不匹配：预期 200，实际 500"这类凭空捏造的预期
+            #    （登记侧注释已明确拒绝该写法）。预检与登记两次判定共用同一
+            #    response_status_code，故 skip 结论本就冗余；删掉预检后口径只剩一处。
             if not has_complete_evidence:
                 logger.warning(
                     "[IDPDefect] 测试 '%s' 缺少完整的请求/响应证据，"
@@ -677,69 +680,22 @@ export default defineConfig({{
                     test_name,
                 )
 
-            decision = DefectDecisionService.decide(
-                test_status="failed",
-                error_message=error_message,
-                response_status_code=actual_status_code,
-                expected_status_code=expected_status_code or 200,
-            )
-
-            # 3. 如果决策为跳过，不创建缺陷
-            if decision.decision.value == "skip":
-                logger.info("[IDPDefect] 跳过创建缺陷: %s", decision.reason)
-                return
-
-            # 4. 如果缺少完整证据，标记为 pending（不自动创建）
-            if not has_complete_evidence:
-                # 创建 pending 记录，等待人工确认
-                idp_service = IDPDefectService(self.session)
-                await idp_service.process_test_failure(
-                    test_run_id=run_id,
-                    test_case_id=api_test.test_case_id,
-                    source_project_key=api_test.project.identifier if api_test.project else "UNKNOWN",
-                    decision=decision,
-                    scenario_name=test_name,
-                    endpoint=endpoint or "unknown",
-                    method=method or "GET",
-                    request_summary=request_summary,
-                    response_summary=response_summary,
-                    report_url=None,
-                    allow_create=False,  # 缺少完整证据，禁止自动创建
-                )
-                logger.info("[IDPDefect] 记录已创建为 pending 状态，等待人工确认")
-                return
-
-            # 5. 获取项目标识符
+            # 3. 项目标识符（缺失时交由登记服务按「项目未映射」落 skipped 记录）
             source_project_key = None
             if api_test.project and hasattr(api_test.project, "identifier"):
                 source_project_key = api_test.project.identifier
-
             if not source_project_key:
                 logger.warning(
-                    "[IDPDefect] 跳过创建缺陷: api_test.project 不存在或没有 identifier"
+                    "[IDPDefect] api_test.project 不存在或没有 identifier，"
+                    "登记将按「项目未映射」落 skipped 记录"
                 )
-                # 创建 skipped 记录，标记为 project_mapping_missing
-                idp_service = IDPDefectService(self.session)
-                await idp_service.process_test_failure(
-                    test_run_id=run_id,
-                    test_case_id=api_test.test_case_id,
-                    source_project_key="UNKNOWN",
-                    decision=decision,
-                    scenario_name=test_name,
-                    endpoint=endpoint or "unknown",
-                    method=method or "GET",
-                    request_summary=request_summary,
-                    response_summary=response_summary,
-                    report_url=None,
-                )
-                return
 
-            # 6. 调用统一缺陷登记服务
+            # 4. 调用统一缺陷登记服务 —— API 链路的**唯一**决策点
             registration_service = DefectRegistrationService(self.session)
             await registration_service.register_from_api_failure(
                 test_run_id=run_id,
                 test_case_id=api_test.test_case_id,
-                source_project_key=source_project_key,
+                source_project_key=source_project_key or "UNKNOWN",
                 scenario_name=test_name,
                 endpoint=endpoint or "unknown",
                 method=method or "GET",
@@ -747,6 +703,7 @@ export default defineConfig({{
                 response_summary=response_summary,
                 error_message=error_message,
                 report_url=report_url,
+                allow_create=has_complete_evidence,
             )
 
         except Exception as e:
