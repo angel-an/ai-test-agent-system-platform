@@ -8,6 +8,7 @@ andan
 """
 
 
+import json
 import logging
 import os
 import re
@@ -25,6 +26,13 @@ from app.repositories.api_test_repo import APITestRepository, APITestRunReposito
 from app.schemas.enums import JobStatus
 from app.services.execution.models import ExecutionResult
 from app.services.execution.runner import PlaywrightRunner
+from app.services.web_failure_policy import (
+    ENVIRONMENT_BLOCK_MARKER,
+    classify_environment_block,
+    flake_retry_budget,
+    flake_retry_note,
+    run_attempts_with_policy,
+)
 from app.services.api_runtime_data_service import (
     resolve_api_runtime_config,
     sanitize_api_execution_config,
@@ -39,6 +47,48 @@ from app.models.test_scenario import ScenarioRun, ScenarioStepResult, TestScenar
 from app.services.execution.scenario_report import generate_scenario_report
 
 logger = logging.getLogger(__name__)
+
+#: 只有确实没有任何错误信息、且全部未执行时，才允许用"跳过"解释
+WEB_SKIPPED_HINT = "Web 测试已跳过：缺少运行时登录凭据或脚本前置条件不满足。"
+
+
+def summarize_web_run_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """把 WebTestService 的返回映射为作业判定结果（纯函数，便于回归测试）。
+
+    关键点：
+    - 有错误信息时**不得**判为"跳过"：浏览器/页面被关闭、定位器超时等必须暴露真实原因；
+    - 通过运行同样保留 stdout，否则编译断言的逐条证据无法复核。
+    """
+    summary = {
+        "total": result.get("total_tests", 0) or 0,
+        "passed": result.get("passed_tests", 0) or 0,
+        "failed": result.get("failed_tests", 0) or 0,
+        "skipped": result.get("skipped_tests", 0) or 0,
+    }
+    error_msg = result.get("error_message") or result.get("error")
+    success = result.get("status") != "failed"
+    skipped_only = (
+        not error_msg
+        and summary["total"] > 0
+        and summary["passed"] == 0
+        and summary["failed"] == 0
+        and summary["skipped"] >= summary["total"]
+    )
+    return {
+        "success": success,
+        "status": (
+            JobStatus.SKIPPED.value if skipped_only
+            else JobStatus.COMPLETED.value if success
+            else JobStatus.FAILED.value
+        ),
+        "error_message": (
+            WEB_SKIPPED_HINT if skipped_only else None if success else error_msg
+        ),
+        "stdout": result.get("stdout", "")[:50000] if result.get("stdout") else None,
+        "stderr": result.get("stderr", "")[:50000] if result.get("stderr") else None,
+        "result_summary": summary,
+        "preflight": result.get("preflight"),
+    }
 
 
 def _detect_script_language(content: str) -> str:
@@ -531,11 +581,11 @@ class WebTestExecutor(ScriptExecutor):
         test_config: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Inject a configured login profile without storing secrets in a job."""
+        from app.services.web_preflight import resolve_runtime_credentials
+
         resolved = dict(config or {})
-        profile = (test_config or {}).get("login_profile") or "WEB_TEST_DEFAULT"
-        profile_key = re.sub(r"[^A-Z0-9_]", "_", profile.upper())
-        username = os.getenv(f"{profile_key}_USERNAME") or os.getenv("WEB_TEST_USERNAME")
-        password = os.getenv(f"{profile_key}_PASSWORD") or os.getenv("WEB_TEST_PASSWORD")
+        # 与预检共用同一套解析逻辑（含 login_profile 派生键），避免两处判据漂移
+        username, password = resolve_runtime_credentials(resolved, test_config)
 
         if username and password:
             env = dict(resolved.get("env") or resolved.get("environment_variables") or {})
@@ -584,11 +634,22 @@ class WebTestExecutor(ScriptExecutor):
             config = self._with_runtime_credentials(config, web_test.test_config)
             service = WebTestService(session)
             try:
-                result = await service.run_web_test(
-                    project_identifier=project.identifier,
-                    web_test_id=str(script_id),
-                    execution_config=config,
+                # 有界重试：只针对执行环境类（flake）失败，避免把偶发环境问题当产品缺陷。
+                # 每次尝试都不在服务内部建单，等确定"不再重试"后再统一登记，
+                # 这样既不会为同一次 flake 重复建单，也不会漏登记。
+                outcome = await run_attempts_with_policy(
+                    lambda: service.run_web_test(
+                        project_identifier=project.identifier,
+                        web_test_id=str(script_id),
+                        execution_config=config,
+                        register_defect=False,
+                        parent_test_run_id=config.get("job_test_run_id"),
+                    ),
+                    max_attempts=1 + flake_retry_budget(config),
+                    should_stop=lambda: self._cancelled,
                 )
+                result = outcome["result"]
+                attempts = outcome["attempts"]
 
                 if self._cancelled:
                     return ExecutionResult(
@@ -597,45 +658,64 @@ class WebTestExecutor(ScriptExecutor):
                         error_message="执行已被取消",
                     )
 
+                # 结果摘要先算出来（失败分类需要 stdout 里的证据）
+                mapped = summarize_web_run_result(result)
+                blocked, blocked_reason = classify_environment_block(
+                    str(result.get("error_message") or result.get("error") or ""),
+                    mapped.get("stdout"),
+                )
+                if result.get("status") == "failed" and not blocked:
+                    await service.register_failure_defect(
+                        project_identifier=project.identifier,
+                        web_test=web_test,
+                        test_run_id=result.get("run_id") or None,
+                        error_msg=str(
+                            result.get("error_message") or result.get("error") or "未知错误"
+                        ),
+                        report_attachment_id=result.get("report_path"),
+                        parent_test_run_id=config.get("job_test_run_id"),
+                    )
+                elif result.get("status") == "failed" and blocked:
+                    # 环境阻断（WAF/网关/IP 白名单）：**不建缺陷单**，只如实标记。
+                    # 这既避免持续产出垃圾单，也让报告能说清"不是产品失败"。
+                    print(
+                        "[WebExecutor] 环境阻断，已跳过缺陷登记: %s" % blocked_reason
+                    )
+                elif result.get("status") == "completed" and attempts > 1:
+                    # 重试成功：不留痕就等于伪装成一次通过
+                    print("[WebExecutor] 执行环境类失败后重试成功（已留 FLAKE_RETRY 痕迹）")
+
                 run_id = result.get("run_id")
                 # WebTestService 已内部创建 WebTestRun 并执行
                 # 这里直接按返回结果判断
-                success = result.get("status") != "failed"
+                if blocked:
+                    mapped["result_summary"]["environment_blocked"] = True
+                    mapped["result_summary"]["environment_blocked_reason"] = blocked_reason
+                    marker = (
+                        f"{ENVIRONMENT_BLOCK_MARKER} "
+                        f"{json.dumps({'reason': blocked_reason}, ensure_ascii=False)}"
+                    )
+                    mapped["stdout"] = marker + "\n" + (mapped["stdout"] or "")
+                if mapped.get("preflight"):
+                    mapped["result_summary"]["preflight"] = mapped["preflight"]
+                if attempts > 1:
+                    note = flake_retry_note(attempts, outcome["first_error"])
+                    mapped["stdout"] = note + "\n" + (mapped["stdout"] or "")
+                    mapped["result_summary"]["attempts"] = attempts
+                    mapped["result_summary"]["retried"] = True
                 duration_ms = int(
                     (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
                 )
-                # WebTestService 返回的字段名是 error_message，不是 error
-                error_msg = result.get("error_message") or result.get("error")
-                result_summary = {
-                    "total": result.get("total_tests", 0) or 0,
-                    "passed": result.get("passed_tests", 0) or 0,
-                    "failed": result.get("failed_tests", 0) or 0,
-                    "skipped": result.get("skipped_tests", 0) or 0,
-                }
                 report_path = result.get("report_path")
-                skipped_only = (
-                    result_summary["total"] > 0
-                    and result_summary["passed"] == 0
-                    and result_summary["failed"] == 0
-                    and result_summary["skipped"] >= result_summary["total"]
-                )
                 return ExecutionResult(
-                    success=success,
-                    status=(
-                        JobStatus.SKIPPED.value if skipped_only
-                        else JobStatus.COMPLETED.value if success
-                        else JobStatus.FAILED.value
-                    ),
+                    success=mapped["success"],
+                    status=mapped["status"],
                     duration_ms=duration_ms,
-                    error_message=(
-                        "Web 测试已跳过：缺少运行时登录凭据或脚本前置条件不满足。"
-                        if skipped_only
-                        else None if success else error_msg
-                    ),
-                    stdout=result.get("stdout", "")[:50000] if not success else None,
-                    stderr=result.get("stderr", "")[:50000] if not success else None,
+                    error_message=mapped["error_message"],
+                    stdout=mapped["stdout"],
+                    stderr=mapped["stderr"],
                     report_path=report_path,
-                    result_summary=result_summary,
+                    result_summary=mapped["result_summary"],
                     detail_run_id=str(run_id) if run_id else None,
                 )
 
