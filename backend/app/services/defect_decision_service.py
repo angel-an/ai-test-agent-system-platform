@@ -217,6 +217,15 @@ class DefectDecisionService:
          "环境/执行器类失败（浏览器或会话被关闭）"),
         (r"browser has been closed", "环境/执行器类失败（浏览器已关闭）"),
         (r"Execution context was destroyed", "环境/执行器类失败（执行上下文被销毁）"),
+        # Chromium 进程**原生崩溃**（非 JS 异常）：报文首行即 `Stacktrace:`，后跟
+        # `ptr1=…` / `failure_message_object=…` 等原生栈帧。实测（2026-10-08，TR-192 /
+        # 用例 TC-261933 的 WT-A9C1C11F）该形态经全表未命中 → `decide()` 判 create，
+        # 产出标题就是 `Stacktrace:` 的垃圾单（`idp_defect_records.b6f950c5`）。
+        # 与"预期结果写成 HTTP 200"同族 —— 平台把**执行器自身故障**当成了被测系统现象。
+        # 锚定**报文首行**：本函数用 `re.search` 且未开 `re.MULTILINE`，`^` 即串首
+        # （允许前导空白），只认"首行即原生栈帧"这一形态；正文里提及 Stacktrace 字样
+        # 的合法断言消息不受影响（见 test_defect_type.py 的边界用例）。
+        (r"^\s*Stacktrace:", "环境/执行器类失败（浏览器进程原生崩溃，非 SUT 现象）"),
         (r"Test timeout of \d+ms exceeded", "环境/执行器类失败（测试整体超时）"),
         (r"测试执行超时", "环境/执行器类失败（作业级超时）"),
         (r"net::ERR_", "环境类失败（浏览器网络层错误）"),

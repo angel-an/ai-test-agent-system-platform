@@ -153,6 +153,48 @@ class TestPlaywrightInteractionErrorsAreNotDefects:
             assert "环境/执行器类失败" in r.reason
             assert r.defect_type == ""
 
+    def test_browser_native_crash_is_skipped(self):
+        """Chromium 进程**原生崩溃**不得开成 SUT 缺陷单（2026-10-08 实测 TR-192）。
+
+        报文首行即 `Stacktrace:`，后跟 `ptr1=…` / `failure_message_object=…` 原生栈帧。
+        该形态此前经规则表全表未命中 → `decide()` 判 create，产出标题就是 `Stacktrace:`
+        的垃圾单（`idp_defect_records.b6f950c5`）——平台把**执行器自身故障**当成了 SUT 现象。
+
+        规则锚定**报文首行**（`^`，本函数用 re.search 且未开 MULTILINE），故此处同时
+        固定三件事：① 首行原生栈帧 → SKIP；② 有 SUT 侧证据时不得被吞；③ 正文提及
+        `Stacktrace:` 字样的合法断言消息不触发。
+        """
+        # 平台落库的真实形态（多行、\r\n 分隔）
+        stored = (
+            "Stacktrace:\r\n"
+            "    ptr1=00000140ADA660A1\r\n"
+            "    ptr2=00000140ADA66111\r\n"
+            "    failure_message_object=00000038D39F6BF0"
+        )
+        r = DefectDecisionService.decide(
+            test_status="failed", error_message=stored,
+            response_status_code=None, expected_status_code=None,
+        )
+        assert r.decision == DefectDecision.SKIP, r.reason
+        assert "浏览器进程原生崩溃" in r.reason
+        assert r.defect_type == ""
+
+        # 反向保护：一旦观测到 SUT 侧证据（>=400），原生崩溃字样不得把真缺陷一并吞掉
+        r2 = DefectDecisionService.decide(
+            test_status="failed", error_message=stored,
+            response_status_code=500, expected_status_code=200,
+        )
+        assert r2.decision == DefectDecision.CREATE
+        assert r2.error_type == "status_mismatch"
+
+        # 边界：只认"首行即原生栈帧"，正文里**提及** Stacktrace 字样不触发本规则
+        r3 = DefectDecisionService.decide(
+            test_status="failed",
+            error_message="Error: 工单状态应为「已关闭」，实际为「处理中」（详见 Stacktrace: 附件）",
+            response_status_code=None, expected_status_code=None,
+        )
+        assert r3.decision == DefectDecision.CREATE, r3.reason
+
     def test_other_non_sut_classes_are_skipped(self):
         """其余非 SUT 类失败（依据平台历史缺陷单审计）：同样不得开成 SUT 缺陷单。"""
         cases = {
