@@ -27,6 +27,7 @@ from app.config.minio_client import MinIOClient
 from app.schemas.enums import TestResultStatus
 from app.models.mongodb.api_test_log import APITestDetailLog
 from app.services.defect_registration_service import DefectRegistrationService
+from app.services.web_failure_policy import classify_environment_block
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +258,15 @@ export default defineConfig({{
             json_results_file = work_dir / "results.json"
             if json_results_file.exists():
                 with open(json_results_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    report = json.load(f)
+                # 进程级 stdout 是**环境证据的唯一载体**：`acw_tc` / `cdn_sec_tc` /
+                # `ESA RuleID` / `X-Swift-Error` 这些 WAF/网关签名只出现在这里，
+                # 不在 Playwright 报告的错误文本里。缺陷登记前的环境阻断闸必须拿到它，
+                # 否则该闸会把最典型的 WAF 形态全部漏掉（见 _process_idp_defect 第 3.5 步）。
+                # setdefault：Playwright 报告里 per-test 也有同名 `stdout` 键，**绝不覆盖**。
+                if isinstance(report, dict):
+                    report.setdefault("stdout", result.stdout)
+                return report
             else:
                 # 如果没有 JSON 结果，返回执行状态
                 return {
@@ -346,6 +355,9 @@ export default defineConfig({{
                                 test_name=test.get("title", ""),
                                 results=test.get("results", []),
                                 report_url=report_url,
+                                # 进程级 stdout 透传给环境阻断闸（`_run_playwright_test`
+                                # 正常路径用 setdefault 挂在报告 dict 上）
+                                runner_stdout=test_result.get("stdout"),
                             )
 
             # 更新运行统计
@@ -572,6 +584,7 @@ export default defineConfig({{
         test_name: str,
         results: List[Dict[str, Any]],
         report_url: Optional[str] = None,
+        runner_stdout: Optional[str] = None,
     ):
         """
         处理 IDP 缺陷创建
@@ -689,6 +702,23 @@ export default defineConfig({{
                     "[IDPDefect] api_test.project 不存在或没有 identifier，"
                     "登记将按「项目未映射」落 skipped 记录"
                 )
+
+            # 3.5 环境阻断闸（镜像 web 侧 executors.py:663-683 的"只标记不登记"语义）
+            # WAF / 网关 / IP 白名单拦截在 API 链路同样表现为"测试失败"，但它是**环境问题**：
+            # 既不该建缺陷单（否则持续产出垃圾单），也不该被当成 SUT 现象。
+            # 输入同时喂 error_message 与**进程 stdout** —— 后者才是 `acw_tc` /
+            # `ESA RuleID` / `X-Swift-Error` 这些实战签名的主要形态（2026-09-24 起 UAT 实测）。
+            # **不设"证据优先"例外**：WAF 403 在 API 链路正是以"真实观测到的响应"出现，
+            # 给它例外等于把刚堵的洞重新打开；web 侧闸门本就是无条件短路，此处对齐。
+            # 本闸只管"是否登记"，登记与否的**判定权威**仍在 DefectDecisionService.decide()。
+            blocked, blocked_reason = classify_environment_block(error_message, runner_stdout)
+            if blocked:
+                logger.warning(
+                    "[IDPDefect] 环境阻断（%s），已跳过缺陷登记（不建单）: %s",
+                    blocked_reason,
+                    test_name,
+                )
+                return
 
             # 4. 调用统一缺陷登记服务 —— API 链路的**唯一**决策点
             registration_service = DefectRegistrationService(self.session)
