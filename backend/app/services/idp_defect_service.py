@@ -59,6 +59,7 @@ class IDPDefectService:
         report_url: Optional[str] = None,
         allow_create: bool = True,
         source_type: str = "api",
+        parent_test_run_id: Optional[UUID] = None,
     ) -> IDPDefectRecord:
         """
         处理测试失败，创建 IDP 缺陷
@@ -76,24 +77,13 @@ class IDPDefectService:
             report_url: 测试报告地址
             allow_create: 是否允许自动创建
             source_type: 来源类型 (api/web/security)
+            parent_test_run_id: 所属 TestRun（Web 场景下 test_run_id 是 WebTestRun，
+                需要额外的 TestRun 维度才能做"同一次运行内去重"）
 
         Returns:
             IDPDefectRecord: 缺陷记录
         """
-        # 1. 解析项目映射
-        mapping = IDPProjectResolver.resolve(source_project_key)
-        if not mapping:
-            return await self._create_skipped_record(
-                test_run_id=test_run_id,
-                test_case_id=test_case_id,
-                source_project_key=source_project_key,
-                fingerprint="",
-                reason="项目未匹配",
-                decision=decision,
-                source_type=source_type,
-            )
-
-        # 2. 生成缺陷指纹
+        # 1. 先算指纹：去重与"项目未映射"分支都要用，且必须在任何写入之前
         fingerprint = DefectFingerprintService.generate_from_api_result(
             source_project_key=source_project_key,
             method=method,
@@ -101,17 +91,34 @@ class IDPDefectService:
             error_type=decision.error_type,
             failure_summary=decision.failure_summary,
         )
+        #: 同一次运行内的去重维度：Web 用 TestRun（跨 WebTestRun 尝试），API 用自身
+        dedup_run_id = parent_test_run_id or test_run_id
 
-        # 3. 检查同一次运行内是否已处理
+        # 2. 同一次运行内已登记过同一失败 → 直接复用，避免重试/多次尝试重复建单
         existing = await self.record_repo.get_by_fingerprint_and_run(
-            fingerprint, test_run_id
+            fingerprint, dedup_run_id
         )
         if existing:
             logger.info(
-                "[IDPDefectService] 同一次运行内已存在相同缺陷记录: %s",
+                "[IDPDefectService] 同一次运行内已存在相同缺陷记录，跳过重复登记: %s",
                 existing.id,
             )
             return existing
+
+        # 3. 解析项目映射
+        mapping = IDPProjectResolver.resolve(source_project_key)
+        if not mapping:
+            return await self._create_skipped_record(
+                test_run_id=test_run_id,
+                test_case_id=test_case_id,
+                source_project_key=source_project_key,
+                fingerprint=fingerprint or "",
+                reason="项目未匹配",
+                decision=decision,
+                source_type=source_type,
+                parent_test_run_id=parent_test_run_id,
+                run_lineage_id=dedup_run_id,
+            )
 
         # 4. 检查跨运行去重（如果之前已创建成功）
         duplicate = await self.record_repo.get_duplicate_by_fingerprint(
@@ -162,8 +169,9 @@ class IDPDefectService:
         # 8. 创建缺陷记录（pending 状态）
         record = await self.record_repo.create(
             source_type=source_type,
-            source_run_id=test_run_id,
+            source_run_id=dedup_run_id,
             source_case_id=test_case_id,
+            # 注意：test_run_id 列有指向 api_test_runs 的外键，非 api 来源必须留空
             test_run_id=test_run_id if source_type == "api" else None,
             test_case_id=test_case_id if source_type == "api" else None,
             source_project_key=source_project_key,
@@ -199,6 +207,11 @@ class IDPDefectService:
                 "priorityId": decision.priority_id,  # 联调确认必填: 2
             }
 
+            # 缺陷类型（IDP 导入模板要求；非必填但建议传入）。
+            # 联调未确认独立字段名，双通道投递：结构化字段 + 描述首行，不丢信息。
+            if getattr(decision, "defect_type", ""):
+                issue_data["defectType"] = decision.defect_type
+
             # 可选字段（联调确认允许为空，但建议传入）
             if mapping.default_sprint_id:
                 issue_data["sprintId"] = mapping.default_sprint_id
@@ -218,8 +231,11 @@ class IDPDefectService:
 
             # 更新记录为 created 状态
             # 联调确认响应字段：issueId, issueNum
-            issue_id = result.get("issueId")
-            issue_key = result.get("issueNum")
+            # dry-run 返回 snake_case（issue_id/issue_key），真实 API 返回
+            # camelCase（issueId/issueNum）；两处键都做兼容，否则 dry-run 灰度
+            # 时 key/url 恒为空，无法确认链路已通。
+            issue_id = result.get("issueId") or result.get("issue_id")
+            issue_key = result.get("issueNum") or result.get("issue_key")
             # 使用 IDP 前端地址生成可点击链接（优先使用前端 URL）
             web_base = getattr(settings, 'idp_web_base_url', settings.idp_base_url).rstrip('/')
             issue_url = f"{web_base}/agile/issues/{issue_id}" if issue_id else None
@@ -257,12 +273,15 @@ class IDPDefectService:
         reason: str,
         decision: DefectDecisionResult,
         source_type: str = "api",
+        parent_test_run_id: Optional[UUID] = None,
+        run_lineage_id: Optional[UUID] = None,
     ) -> IDPDefectRecord:
         """创建跳过的记录"""
         return await self.record_repo.create(
             source_type=source_type,
-            source_run_id=test_run_id,
+            source_run_id=run_lineage_id or test_run_id,
             source_case_id=test_case_id,
+            # 注意：test_run_id 列有指向 api_test_runs 的外键，非 api 来源必须留空
             test_run_id=test_run_id if source_type == "api" else None,
             test_case_id=test_case_id if source_type == "api" else None,
             source_project_key=source_project_key,
@@ -434,10 +453,11 @@ class IDPDefectService:
         支持 API / Web / 安全 三类测试
         """
         # 提取请求参数（脱敏）
+        defect_type = getattr(decision, "defect_type", "")
         request_params = IDPDefectService._sanitize_request_params(request_summary)
 
         # 提取响应信息
-        response_status = response_summary.get("status_code", "N/A") if response_summary else "N/A"
+        response_status = (response_summary.get("status_code") if response_summary else None) or "N/A"
         response_body = IDPDefectService._sanitize_response_body(response_summary)
         response_headers = IDPDefectService._sanitize_headers(response_summary)
 
@@ -457,11 +477,19 @@ class IDPDefectService:
 
         # ========== 测试类型 ==========
         delta_ops.append({"insert": "测试类型\n", "attributes": {"bold": True}})
+        # ========== 缺陷类型 ==========
+        delta_ops.append({"insert": "缺陷类型\n", "attributes": {"bold": True}})
+        delta_ops.append({"insert": f"{defect_type or '未归类'}\n\n"})
+
         delta_ops.append({"insert": f"{test_type_display}\n\n"})
 
         # ========== 业务项目 ==========
         delta_ops.append({"insert": "业务项目\n", "attributes": {"bold": True}})
-        delta_ops.append({"insert": f"{source_project_key} ({IDPDefectService._get_project_name(source_project_key)})\n\n"})
+        _project_name = IDPDefectService._get_project_name(source_project_key)
+        delta_ops.append({
+            "insert": f"{source_project_key} ({_project_name})\n\n" if _project_name
+            else f"{source_project_key}\n\n"
+        })
 
         # ========== 测试环境 ==========
         delta_ops.append({"insert": "测试环境\n", "attributes": {"bold": True}})
@@ -491,21 +519,51 @@ class IDPDefectService:
                 delta_ops.append({"insert": f"3. 复现步骤:\n{reproduction}\n"})
             delta_ops.append({"insert": "\n"})
         else:
-            # API 测试复现步骤（默认）
-            delta_ops.append({"insert": f"1. 发送 {method} 请求到 {endpoint}\n"})
-            delta_ops.append({"insert": f"2. 使用以下请求参数\n"})
-            delta_ops.append({"insert": f"3. 观察响应结果\n\n"})
+            # API 测试复现步骤（默认）——旧版三步是模板套话（"发送请求/使用以下参数/观察结果"），
+            # 拿到工单的人无法照着复现。这里把能确证的写实，缺什么就如实标缺。
+            delta_ops.append({"insert": f"1. 向 {endpoint} 发送 {method} 请求\n"})
+            if request_params and request_params not in ("N/A", "{}", "null"):
+                delta_ops.append({"insert": "2. 请求体见下方「请求信息 › 请求参数」\n"})
+            else:
+                delta_ops.append({
+                    "insert": "2. ⚠️ 未采集到请求体 —— 需人工补充能复现的最小请求参数\n"
+                })
+            _expected = getattr(decision, "expected_result", None)
+            _observed = getattr(decision, "observed_result", None)
+            if _expected or _observed:
+                delta_ops.append({
+                    "insert": f"3. 观察响应：期望 {_expected or '（见「预期结果」）'}，"
+                              f"实测 {_observed or response_status}\n\n"
+                })
+            else:
+                delta_ops.append({"insert": "3. 观察响应结果，与下方「预期结果」比对\n\n"})
 
         # ========== 预期结果 ==========
+        # 写**用例断言的真实期望值**（由 Playwright 失败消息反推，见
+        # DefectDecisionService.extract_assertion_expectation）。
+        #
+        # 旧实现恒写「HTTP 状态码: 200 OK / 响应结构符合接口契约 / 业务逻辑正确」：
+        # 对「业务失败也返回 HTTP 200」的信封式被测系统，这三行恰好把**缺陷现状**
+        # 描述成了期望行为 —— 开发读工单会认为无需修复（DEFECT-001/925695 实例）。
+        # 提取不到期望值时宁缺毋滥，写"待人工补充"，不做任何推断。
         delta_ops.append({"insert": "预期结果\n", "attributes": {"bold": True}})
         if source_type == "security":
             delta_ops.append({"insert": "不存在安全漏洞\n"})
             delta_ops.append({"insert": "输入已正确过滤和校验\n\n"})
         else:
-            expected = request_summary.get("expected_status_code", "200 OK") if request_summary else "200 OK"
-            delta_ops.append({"insert": f"HTTP 状态码: {expected}\n"})
-            delta_ops.append({"insert": "响应结构符合接口契约\n"})
-            delta_ops.append({"insert": "业务逻辑正确\n\n"})
+            expected_result = getattr(decision, "expected_result", None)
+            assertion_expr = getattr(decision, "assertion_expr", None)
+            if expected_result:
+                delta_ops.append({"insert": f"断言期望值: {expected_result}\n"})
+                if assertion_expr:
+                    delta_ops.append({"insert": f"断言表达式: {assertion_expr}\n"})
+                delta_ops.append({"insert": "（取自用例断言的期望值，非模板推断）\n\n"})
+            else:
+                delta_ops.append({
+                    "insert": "⚠️ 未能从断言中提取期望值 —— 待人工补充\n"
+                              "（自动提单只能拿到断言的通过/失败，拿不到期望值时"
+                              "此处不写任何推断，避免把缺陷描述成「现状即预期」）\n\n"
+                })
 
         # ========== 实际结果 ==========
         delta_ops.append({"insert": "实际结果\n", "attributes": {"bold": True}})
@@ -515,6 +573,9 @@ class IDPDefectService:
             delta_ops.append({"insert": f"漏洞详情: {decision.failure_summary}\n\n"})
         else:
             delta_ops.append({"insert": f"HTTP 状态码: {response_status}\n"})
+            observed_result = getattr(decision, "observed_result", None)
+            if observed_result:
+                delta_ops.append({"insert": f"断言实测值: {observed_result}\n"})
             delta_ops.append({"insert": f"错误类型: {decision.error_type}\n"})
             delta_ops.append({"insert": f"错误详情: {decision.failure_summary}\n\n"})
 
@@ -613,6 +674,11 @@ class IDPDefectService:
             else:
                 sanitized[k] = v
 
+        if not sanitized:
+            # 旧实现返回 "{}"：工单里写成「请求参数: {}」，读者分不清
+            # 是"请求体本就是空对象"还是"平台没采集到"（925695 即如此）。
+            return "（未采集到请求体/请求头）"
+
         return json.dumps(sanitized, ensure_ascii=False, indent=2)
 
     @staticmethod
@@ -640,16 +706,26 @@ class IDPDefectService:
 
     @staticmethod
     def _get_project_name(source_project_key: str) -> str:
-        """
-        根据项目标识符获取项目名称
+        """取**权威**项目名；取不到返回空串（调用方据此省略括号，不编造名称）。
 
-        目前支持的项目映射：
-        - PR-2: 小杨生煎储值免单活动
+        此前这里是一份硬编码字典 ``{"PR-2": "小杨生煎储值免单活动"}``，
+        与权威配置 ``backend/config/idp_projects.yaml`` 的 ``小杨生煎`` 不一致 ——
+        每张自动提单都把项目名写错（实测工单 jf-20260122392-01-2960 中招，
+        描述里写着"PR-2 (小杨生煎储值免单活动)"，而本次需求是限购商品管理）。
+
+        改为单一真相：``idp_projects.yaml``（经 IDPProjectResolver 读取）。
         """
-        project_names = {
-            "PR-2": "小杨生煎储值免单活动",
-        }
-        return project_names.get(source_project_key, "未知项目")
+        try:
+            from app.services.idp_project_resolver import IDPProjectResolver
+
+            mapping = IDPProjectResolver.resolve(source_project_key)
+            if mapping is not None and mapping.source_project_name:
+                return mapping.source_project_name
+        except Exception as exc:  # noqa: BLE001 —— 配置缺失不影响提单主流程
+            logger.warning(
+                "[IDPDefect] 读取项目名失败，描述中省略项目名: %s (%s)", source_project_key, exc
+            )
+        return ""
 
     @staticmethod
     def _sanitize_headers(summary: Optional[dict]) -> str:

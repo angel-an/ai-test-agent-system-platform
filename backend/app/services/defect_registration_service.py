@@ -116,6 +116,7 @@ class DefectRegistrationService:
         screenshot_url: Optional[str] = None,
         report_url: Optional[str] = None,
         allow_create: bool = True,
+        parent_test_run_id: Optional[UUID] = None,
     ):
         """
         从 Web 测试失败登记缺陷
@@ -134,12 +135,15 @@ class DefectRegistrationService:
             report_url: 报告地址
             allow_create: 是否允许自动创建
         """
-        # 决策判断
+        # 决策判断：仅在**真的观测到**响应状态码时才与 200 比较。
+        # 否则预期状态码留空，让判定回落到真实错误信息，而不是凭空造一个
+        # "状态码不匹配：预期 200，实际 500"。
+        observed_status = response_summary.get("status_code") if response_summary else None
         decision = DefectDecisionService.decide(
             test_status="failed",
             error_message=error_message,
-            response_status_code=response_summary.get("status_code") if response_summary else None,
-            expected_status_code=200,
+            response_status_code=observed_status,
+            expected_status_code=200 if observed_status is not None else None,
         )
 
         if decision.decision.value == "skip":
@@ -156,7 +160,8 @@ class DefectRegistrationService:
         }
 
         web_response_summary = {
-            "status_code": response_summary.get("status_code", 500) if response_summary else 500,
+            # 未观测到状态码时保持为空，不默认成 500（默认值会被当成真实观测值使用）
+            "status_code": observed_status,
             "headers": response_summary.get("headers", {}) if response_summary else {},
             "body": response_summary.get("body", {}) if response_summary else {},
         }
@@ -174,6 +179,7 @@ class DefectRegistrationService:
             report_url=report_url,
             allow_create=allow_create,
             source_type="web",
+            parent_test_run_id=parent_test_run_id,
         )
 
     # ========================================================================
