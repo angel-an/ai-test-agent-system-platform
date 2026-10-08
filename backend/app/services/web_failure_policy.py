@@ -90,7 +90,29 @@ ENVIRONMENT_BLOCKED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("waf_forbidden", re.compile(r"\b403\b.*(Forbidden|WAF|ESA|拦截|禁止)|(Forbidden|WAF|ESA).{0,20}\b403\b", re.IGNORECASE)),
     ("waf_esa", re.compile(r"ESA\s*RuleID|RuleID\s*\d{6,}|http_custom", re.IGNORECASE)),
     ("waf_cookie", re.compile(r"acw_tc|cdn_sec_tc", re.IGNORECASE)),
-    ("gateway_5xx", re.compile(r"\b503\b.{0,40}(Service Unavailable|orig response 5xx|X-Swift-Error)", re.IGNORECASE)),
+    # 网关 5xx：**只认网关私有特征**（``orig response 5xx`` / ``X-Swift-Error``）。
+    #
+    # 2026-10-08 收紧：原口径还接受裸 ``Service Unavailable``，但那是**标准 HTTP
+    # reason phrase** —— 真实 SUT 自身故障返回 503 时，文本与网关 503 完全一致，
+    # **无法区分**。逐条实测（改动前）：
+    #
+    # ================================================  ==========  ================
+    # 输入                                              判定        性质
+    # ================================================  ==========  ================
+    # ``503 X-Swift-Error: upstream``                   blocked     真阳性（网关）
+    # ``503 orig response 5xx``                         blocked     真阳性（网关）
+    # ``503 Service Unavailable``                        blocked     ❌ 误伤（标准短语）
+    # ``HTTP 503 Service Unavailable``                   blocked     ❌ 误伤
+    # ``Received: 503 Service Unavailable``              blocked     ❌ 误伤（断言消息）
+    # ================================================  ==========  ================
+    #
+    # 误伤的后果是**不对称的**：被判阻断 → 两侧都不登记 ⇒ 真实 SUT 503 **被吞单**
+    # （与"把缺陷写成没问题"同族：给错结论）。故取"宁可漏拦、不吞真缺陷"，
+    # 与网关**不可区分**的形态一律不判阻断，交判定层
+    # :meth:`DefectDecisionService.decide` 依 SUT 证据裁决。
+    # 代价：网关自身 503 若**恰好**只带 reason phrase 会漏拦 → 走判定层，
+    # 可能产出噪声单（少数、且人工易识别），属可接受的保守侧。
+    ("gateway_5xx", re.compile(r"\b503\b.{0,40}(orig response 5xx|X-Swift-Error)", re.IGNORECASE)),
     ("access_denied", re.compile(r"Access Denied|请求被拦截|访问被拒绝", re.IGNORECASE)),
     # 登录页没渲染：WAF 拦截时 UAT 的典型表现（选择器等不到，而网络本身是通的）
     ("login_page_not_rendered", re.compile(r"waiting for locator\(['\"]#login_username['\"]\)", re.IGNORECASE)),

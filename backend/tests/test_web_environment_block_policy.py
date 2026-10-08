@@ -65,11 +65,46 @@ class TestEnvironmentBlockDetection:
         assert reason == "waf_esa"
 
     def test_gateway_5xx_is_environment_block(self):
-        blocked, reason = classify_environment_block(
-            "503 Service Unavailable: X-Swift-Error: orig response 5xx error"
-        )
-        assert blocked is True
-        assert reason == "gateway_5xx"
+        """网关 5xx 阻断**只认网关私有特征**（2026-10-08 收紧后）。
+
+        样本刻意**不含** ``Service Unavailable``：旧样本里三种特征混在一句，
+        即使把 ``orig response 5xx`` / ``X-Swift-Error`` 全删掉，
+        裸 reason phrase 仍会让它通过 —— 那是"因错误理由而绿"。
+        """
+        for text in (
+            "503 X-Swift-Error: upstream connect error",
+            "503 orig response 5xx",
+        ):
+            blocked, reason = classify_environment_block(text)
+            assert blocked is True, text
+            assert reason == "gateway_5xx", text
+
+    def test_plain_sut_503_is_not_environment_block(self):
+        """⚠️ 反向保护：**真实 SUT 503 不得被判环境阻断**（2026-10-08 收紧）。
+
+        ``Service Unavailable`` 是标准 HTTP reason phrase，与网关 503 在文本上
+        **不可区分**。旧口径把它当网关特征 → 真实后端 503 被判"环境阻断" →
+        web/API 两侧都不登记 ⇒ **漏报真缺陷**（与"把缺陷写成没问题"同族）。
+        口径取"宁可漏拦、不吞真缺陷"。
+        """
+        for text in (
+            "503 Service Unavailable",
+            "HTTP/1.1 503 Service Unavailable",
+            "Received: 503 Service Unavailable",
+            "Error: 退出登录接口异常 HTTP 503 Service Unavailable",
+        ):
+            blocked, reason = classify_environment_block(text)
+            assert blocked is False, f"{text!r} 被误判为环境阻断（reason={reason}）"
+
+    def test_sut_503_adjacent_forms_are_still_not_blocked(self):
+        """邻近形态边界（收紧前后都不命中，防止正则被"顺手放大"）。"""
+        for text in (
+            "503 Service Temporarily Unavailable",
+            "Service Unavailable",  # 无 503
+            "503\nService Unavailable",  # `.` 不跨行
+        ):
+            blocked, _ = classify_environment_block(text)
+            assert blocked is False, text
 
     def test_plain_assertion_failure_is_not_environment_block(self):
         blocked, reason = classify_environment_block(

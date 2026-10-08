@@ -127,6 +127,10 @@ LIVE_OUTCOME_CASES = [
     ('ENVIRONMENT_BLOCKED {"reason": "login_http_status", "status": 403}', "blocked"),
     # --- 反向保护：真业务断言失败仍然开单（不是"一律不登记"）---
     ("Error: expect(received).toBe(200)\n未找到工单列表子菜单", "create"),
+    # --- 2026-10-08 gateway_5xx 收紧后的反向保护：真实 SUT 503 不再被"环境阻断"吞掉 ---
+    # 收紧前这两条 = "blocked"（不登记、漏报）；收紧后必须走进判定层 → create。
+    ("Error: expect(received).toBe(200)\nReceived: 503 Service Unavailable", "create"),
+    ("退出登录接口异常：HTTP/1.1 503 Service Unavailable", "create"),
 ]
 
 
@@ -162,6 +166,82 @@ class TestLiveRegistrationOutcome:
             expected_status_code=200,
         )
         assert decision.decision.value == "skip"
+
+
+class TestRealSut503IsNotSwallowed:
+    """2026-10-08 `gateway_5xx` 收紧：真实 SUT 503 从"被吞"变为"登记"。
+
+    收紧内容：`gateway_5xx` 去掉裸 ``Service Unavailable`` 备选，只留网关私有特征
+    （``orig response 5xx`` / ``X-Swift-Error``）。原因见
+    `web_failure_policy.ENVIRONMENT_BLOCKED_PATTERNS` 注释与
+    `gateway_5xx收紧-共用策略变更-交付说明-20261008.md`。
+
+    **两处都要钉**：① 不得再误拦（本类）；② 不得过度收紧把真网关拦截放进来
+    （`test_gateway_private_signatures_still_block`）。
+    """
+
+    #: 真实的"后端自身 503"文本形态（API 边界文本 / Playwright 断言消息 / 中文包装）
+    SUT_503_TEXTS = (
+        "503 Service Unavailable",
+        "HTTP/1.1 503 Service Unavailable",
+        "Received: 503 Service Unavailable",
+        "Error: 退出登录接口异常 HTTP 503 Service Unavailable",
+    )
+
+    def test_gate_one_does_not_block_plain_sut_503(self):
+        """闸门一（环境阻断）不得命中标准 reason phrase 形态。"""
+        for text in self.SUT_503_TEXTS:
+            blocked, reason = classify_environment_block(text)
+            assert blocked is False, f"{text!r} 被误判为环境阻断（reason={reason}）"
+
+    def test_gateway_private_signatures_still_block(self):
+        """收紧不得过度：网关私有特征必须**仍然**阻断。"""
+        for text in (
+            "503 X-Swift-Error: upstream connect error",
+            "503 orig response 5xx",
+            "503 Service Unavailable: X-Swift-Error: orig response 5xx error",
+        ):
+            blocked, reason = classify_environment_block(text)
+            assert blocked is True and reason == "gateway_5xx", text
+
+    def test_live_outcome_flips_from_blocked_to_create(self):
+        """活链路（闸门一 + 闸门二）：收紧前 = ``blocked``，收紧后 = ``create``。
+
+        这就是交付说明里"真实 SUT 503 从被吞变为登记"的**实测依据**：
+        `_live_registration_outcome` 与 `executors.py` WebTestExecutor 等价。
+        """
+        for text in self.SUT_503_TEXTS:
+            assert _live_registration_outcome(text) == "create", text
+
+    def test_api_path_with_observed_503_creates_medium_priority(self):
+        """API 链路：观测到 503 = SUT 侧证据 ⇒ 开单，且按 5xx 规则定级为「中」。
+
+        （`register_from_api_failure` 把 `response_summary["status_code"]` 传给
+        `decide()`，故 API 链路带真状态码；Web 链路 `response_summary` 恒为 `{}`，
+        只能靠文本——两条链路的证据形态不同，结论一致。）
+        """
+        decision = DefectDecisionService.decide(
+            test_status="failed",
+            error_message="API 请求失败: 503 Service Unavailable",
+            response_status_code=503,
+            expected_status_code=None,
+        )
+        assert decision.decision.value == "create"
+        assert decision.error_type == "server_error"
+        assert decision.priority_code == "priority-2"
+
+    def test_retry_policy_is_unchanged_by_the_tightening(self):
+        """口径澄清：收紧只改**登记**，不改**重试** —— 裸 503 仍然不重试。
+
+        `is_retryable_web_failure` 是**白名单**（`RETRYABLE_PATTERNS`）：裸 503 不在其中，
+        故收紧前是"因环境阻断而不重试"、收紧后是"未命中可重试模式而不重试"，
+        **结论一致**。若将来要让真实 SUT 503 参与重试，属另一项裁定，不要顺手改
+        （否则会与"环境类失败有界重试"的既有口径混在一起）。
+        """
+        from app.services.web_failure_policy import is_retryable_web_failure
+
+        for text in self.SUT_503_TEXTS:
+            assert is_retryable_web_failure(text) is False, text
 
 
 # ---------------------------------------------------------------------------
