@@ -377,6 +377,33 @@ def create_entry_run():
             "rows": _assertions(raw)}
 
 
+#: rev99：``expect_accept`` 正路径极性——服务端按期望受理（resultCode=0）⇒ pass。
+#: 与 expect_reject 互斥，因此要从 _scenario 模板里剥掉 expect_reject。
+def _accept_scenario() -> dict:
+    sc = _scenario("POS-ACCEPT", suffix="/v1/purchaseLimit/modify")
+    sc.pop("expect_reject")
+    sc["expect_accept"] = {
+        "api_path_hint": "/v1/purchaseLimit/modify",
+        "result_code": "0",
+        "allow": {"path_prefix": GATEWAY + "/v1/purchaseLimit/modify",
+                  "methods": ["PUT"]},
+    }
+    return sc
+
+
+ACCEPT_SCENARIOS = [_accept_scenario()]
+
+
+@pytest.fixture(scope="module")
+def accept_run():
+    """单独一轮：``expect_accept`` 极性（rev99）——modify 返回 resultCode=0（受理）。"""
+    plan = _local_plan(ACCEPT_SCENARIOS)
+    result, received, raw = _run_local_browser(
+        plan=plan, endpoints=["/v1/purchaseLimit/modify"], tag="accept")
+    return {"result": result, "received": received, "raw": raw,
+            "rows": _assertions(raw)}
+
+
 # --------------------------------------------------------------------------- #
 # 验收
 # --------------------------------------------------------------------------- #
@@ -478,3 +505,19 @@ class TestNegativeScenarioBrowser:
         lines = [l for l in create_entry_run["raw"].splitlines() if "NEGATIVE_PHASE" in l]
         payload = json.loads(lines[-1].split("NEGATIVE_PHASE ", 1)[1])
         assert (payload["configured"], payload["executed"], payload["pass"]) == (1, 1, 1)
+
+
+class TestAcceptScenarioBrowser:
+    """rev99 ``expect_accept`` 极性的浏览器级验收（与拒绝轮同 harness）。"""
+
+    def test_accept_scenario_passes_on_business_success(self, accept_run):
+        """服务端按期望受理（resultCode=0）⇒ pass「服务端按期望受理」。"""
+        rows = _by_scenario(accept_run["rows"])
+        assert set(rows) == {"POS-ACCEPT"}, rows
+        row = rows["POS-ACCEPT"]
+        assert row["outcome"] == "pass", row
+        assert "按期望受理" in row["observed"]
+        assert row["case_id"] == "TC-200998"
+        # 提交真实到达服务端（写隔离按 accept.allow 放行）
+        writes = [p for m, p in accept_run["received"] if m == "PUT"]
+        assert any(p.startswith(GATEWAY + "/v1/purchaseLimit/modify") for p in writes), writes

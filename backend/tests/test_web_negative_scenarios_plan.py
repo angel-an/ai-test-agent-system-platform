@@ -317,7 +317,8 @@ class TestPlanIntegration:
         assert allow["methods"] == ["PUT"]
         script = render_form_executor(plan)
         # 执行器按 allow 构造规则（不再把响应匹配用的子串当前缀）
-        assert "allow.path_prefix || expect.api_path_hint" in script
+        # rev99：变量改名 expectX（accept 优先），语义不变——两种极性同构收窄。
+        assert "allow.path_prefix || expectX.api_path_hint" in script
         assert "allow.host_suffix || pageHost" in script
         # 不装隔离就不提交（fail-closed）
         assert "写隔离策略未安装成功，为避免未知写副作用拒绝执行" in script
@@ -358,3 +359,68 @@ class TestPlanIntegration:
         loc = {**BASE_LOCATORS, "negative_scenarios": [VALID]}
         loc.pop("fields")
         assert build_form_plan(compile_cases([CASE]), loc) is None
+
+
+# --------------------------------------------------------------------------- #
+# rev99：期望受理极性（expect_accept，与 expect_reject 互斥）
+# --------------------------------------------------------------------------- #
+VALID_ACCEPT = {
+    "scenario_id": "POS-EMAIL-SINGLE",
+    "rule_ref": "单收件人发送应成功",
+    "target_entry": "custom",
+    "case_id": "TC-837310",
+    "rule_id": "FR-CS-EMAIL-SINGLE",
+    "setup": [
+        {"action": "select_row", "row_index": 1},
+        {"action": "click", "labels": ["Email a Link"]},
+        {"action": "wait", "ms": 1500},
+        {"action": "fill", "field": "Emails", "value": "a@b.com"},
+    ],
+    "submit_label": ["Send"],
+    "expect_accept": {
+        "api_path_hint": "/cs/cases/send-email",
+        "result_code": "0",
+        "allow": {"path_prefix": "/yundt-saas-gateway/api/icdp/v1/cs/cases/send-email",
+                  "methods": ["POST"]},
+    },
+}
+
+
+class TestAcceptScenarioParsing:
+    def test_valid_accept_scenario_is_normalized(self):
+        scenarios, rejects = parse_negative_scenarios([VALID_ACCEPT])
+        assert rejects == []
+        assert len(scenarios) == 1
+        sc = scenarios[0]
+        assert sc["expect_accept"]["api_path_hint"] == "/cs/cases/send-email"
+        assert sc["expect_accept"]["result_code"] == "0"
+        assert sc["expect_accept"]["allow"]["methods"] == ["POST"]
+        # 互斥：accept 模式下 expect_reject 清空（运行期按 accept 优先分支）
+        assert sc["expect_reject"]["api_path_hint"] == ""
+
+    def test_accept_and_reject_mutex_is_rejected(self):
+        raw = dict(VALID_ACCEPT, expect_reject=VALID["expect_reject"])
+        scenarios, rejects = parse_negative_scenarios([raw])
+        assert scenarios == []
+        assert rejects[0]["reason"] == "expect_accept 与 expect_reject 互斥"
+
+    def test_accept_missing_api_path_hint_is_rejected(self):
+        raw = dict(VALID_ACCEPT, expect_accept={"result_code": "0"})
+        scenarios, rejects = parse_negative_scenarios([raw])
+        assert scenarios == []
+        assert rejects[0]["reason"] == "缺少 expect_accept.api_path_hint"
+
+    def test_accept_relative_allow_path_prefix_is_rejected(self):
+        raw = dict(VALID_ACCEPT, expect_accept={
+            **VALID_ACCEPT["expect_accept"],
+            "allow": {"path_prefix": "cs/cases/send-email"}})
+        scenarios, rejects = parse_negative_scenarios([raw])
+        assert scenarios == []
+        assert rejects[0]["reason"] == "allow.path_prefix 必须是绝对路径前缀"
+
+    def test_scenarios_only_plan_is_executable_with_accept(self):
+        """只有场景（无字段级检查）+ accept 极性：与拒绝极性同权，executable=True。"""
+        plan = _plan([VALID_ACCEPT])
+        assert plan["executable"] is True
+        assert plan["checks"] == []
+        assert len(plan["negative_scenarios"]) == 1

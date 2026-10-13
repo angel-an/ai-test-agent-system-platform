@@ -152,6 +152,30 @@ class RejectExpect:
 
 
 @dataclass(frozen=True)
+class AcceptExpect:
+    """期望服务端**受理**的判定条件（正路径业务规则场景，rev99）。
+
+    与 :class:`RejectExpect` **互斥**：一个场景要么「期望拒绝」要么「期望受理」
+    （计划期强制，配置同时给两个直接拒绝）。动机（67197 正向对照）：负路径通道
+    原本只有拒绝极性，单收件人发送**应成功**的规则会被判成「受理了应被拒绝的请求」
+    ——业务规则两种极性都真实存在，通道必须是双向的。
+    判定口径：HTTP 5xx ⇒ blocked（疑似服务端缺陷，与拒绝极性同判，不受本配置影响）；
+    HTTP 2xx/3xx 且业务信封 ``resultCode == result_code`` ⇒ pass；
+    其余（业务拒绝 / HTTP 4xx 拒绝）⇒ blocked「服务端拒绝了应受理的请求」。
+    """
+
+    api_path_hint: str
+    #: 期望的**成功**业务码（信封 resultCode 等于该值即视为按期望受理）。
+    result_code: str = "0"
+    allow: WriteAllow = WriteAllow()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"api_path_hint": self.api_path_hint,
+                "result_code": self.result_code,
+                "allow": self.allow.to_dict()}
+
+
+@dataclass(frozen=True)
 class NegativeScenario:
     """一个业务规则级负路径场景（声明式）。"""
 
@@ -161,6 +185,7 @@ class NegativeScenario:
     setup: tuple[SetupStep, ...] = ()
     submit_label: tuple[str, ...] = ()
     expect_reject: RejectExpect = RejectExpect(api_path_hint="")
+    expect_accept: AcceptExpect = AcceptExpect(api_path_hint="")
     case_id: str = ""
     rule_id: str = ""
 
@@ -172,6 +197,9 @@ class NegativeScenario:
             "setup": [s.to_dict() for s in self.setup],
             "submit_label": list(self.submit_label),
             "expect_reject": self.expect_reject.to_dict(),
+            # rev99 正路径极性：与 expect_reject 互斥（计划期强制），运行期按
+            # expect_accept.api_path_hint 是否非空选择判定分支。
+            "expect_accept": self.expect_accept.to_dict(),
             # 归属：场景把结论记到哪条用例/需求规则上。留空则只输出证据、不归属，
             # 由台账按 `source=negative_scenario` 单独归类（不冒充"用例已执行"）。
             "case_id": self.case_id,
@@ -268,7 +296,57 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
                                 "detail": bad_step})
                 continue
 
+            raw_accept = entry.get("expect_accept")
             raw_expect = entry.get("expect_reject") or {}
+            if isinstance(raw_accept, dict) and raw_accept:
+                # rev99 正路径极性：与 expect_reject 互斥（两个都配 = 语义矛盾，宁可拒绝）
+                if raw_expect:
+                    rejects.append({"scenario_id": sid,
+                                    "reason": "expect_accept 与 expect_reject 互斥",
+                                    "detail": "一个场景只能声明一种极性（受理或拒绝）"})
+                    continue
+                hint = str(raw_accept.get("api_path_hint") or "").strip()
+                if not hint:
+                    rejects.append({"scenario_id": sid,
+                                    "reason": "缺少 expect_accept.api_path_hint",
+                                    "detail": "同 RejectExpect：匹配服务端响应 + 收窄写隔离白名单"})
+                    continue
+                raw_allow = raw_accept.get("allow") or {}
+                if not isinstance(raw_allow, dict):
+                    rejects.append({"scenario_id": sid,
+                                    "reason": "expect_accept.allow 必须是对象",
+                                    "detail": type(raw_allow).__name__})
+                    continue
+                path_prefix = str(raw_allow.get("path_prefix") or hint).strip()
+                if not path_prefix.startswith("/"):
+                    rejects.append({
+                        "scenario_id": sid, "reason": "allow.path_prefix 必须是绝对路径前缀",
+                        "detail": f"{path_prefix!r}（写隔离按 path.startsWith 匹配）",
+                    })
+                    continue
+                methods = tuple(m.upper() for m in _as_str_list(raw_allow.get("methods"))) \
+                    or ("POST", "PUT", "PATCH")
+                scenarios.append(NegativeScenario(
+                    scenario_id=sid,
+                    rule_ref=str(entry.get("rule_ref") or ""),
+                    target_entry=target_entry,
+                    setup=tuple(steps),
+                    submit_label=tuple(_as_str_list(entry.get("submit_label"))),
+                    expect_reject=RejectExpect(api_path_hint=""),
+                    expect_accept=AcceptExpect(
+                        api_path_hint=hint,
+                        result_code=str(raw_accept.get("result_code", "0")),
+                        allow=WriteAllow(
+                            host_suffix=str(raw_allow.get("host_suffix") or "").strip(),
+                            path_prefix=path_prefix,
+                            methods=methods,
+                        ),
+                    ),
+                    case_id=str(entry.get("case_id") or ""),
+                    rule_id=str(entry.get("rule_id") or ""),
+                ).to_dict())
+                seen.add(sid)
+                continue
             if not isinstance(raw_expect, dict):
                 rejects.append({"scenario_id": sid, "reason": "expect_reject 必须是对象",
                                 "detail": type(raw_expect).__name__})
@@ -281,7 +359,7 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
                     "scenario_id": sid, "reason": "缺少 expect_reject.api_path_hint",
                     "detail": "规则级场景必须真实提交；需要它匹配服务端响应、并把写隔离白名单"
                               "收窄到单接口，否则提交会被阻断（宁可在计划期拒绝，也"
-                              "不产出永远 unverified 的场景）",
+                              "不产出永远 unverified 的场景；正路径场景请改用 expect_accept）",
                 })
                 continue
             code_not = str(raw_expect.get("result_code_not", "0"))
@@ -3085,9 +3163,11 @@ _FORM_EXECUTOR_TS = r"""
       // "同源直连、路径等于 hint"的简单情形。
       const negRules: Array<{host?: string; path_prefix?: string; methods?: string[]}> = [];
       for (const sc of scenarios) {
-        const expect = sc.expect_reject || {};
-        const allow = expect.allow || {};
-        const prefix = String(allow.path_prefix || expect.api_path_hint || '');
+        // rev99：写隔离放行规则两种极性同构——accept 场景同样收窄到声明的单接口。
+        const expectX = ((sc.expect_accept || {}).api_path_hint)
+          ? sc.expect_accept : (sc.expect_reject || {});
+        const allow = expectX.allow || {};
+        const prefix = String(allow.path_prefix || expectX.api_path_hint || '');
         if (!prefix) continue;
         const allowMethods = Array.isArray(allow.methods) ? allow.methods : [];
         negRules.push({
@@ -3141,7 +3221,12 @@ _FORM_EXECUTOR_TS = r"""
         for (const sc of scenarios) {
           const label = labelOf(sc);
           const expect = sc.expect_reject || {};
-          const hint = String(expect.api_path_hint || '');
+          // rev99 正路径极性：expect_accept 与 expect_reject 互斥（计划期强制），
+          // 这里按 accept 优先取目标接口标识——否则 accept 场景的 hint 为空串会
+          // 让 includes('') 匹配到**每一个**非 GET 响应，证据被噪声淹没。
+          const acceptCfg = (sc.expect_accept && sc.expect_accept.api_path_hint)
+            ? sc.expect_accept : null;
+          const hint = String((acceptCfg || expect).api_path_hint || '');
           const codeNot = String(expect.result_code_not == null ? '0' : expect.result_code_not);
           const msgs: string[] = Array.isArray(expect.message_contains)
             ? expect.message_contains.map((s: any) => String(s)) : [];
@@ -3235,7 +3320,33 @@ _FORM_EXECUTOR_TS = r"""
             const msgHit = msgs.find((m) => m && hit.body.includes(m)) || '';
             const evidence = `HTTP ${hit.status} ${hit.url} requestId:${hit.requestId || '-'}`
               + ` body:${String(hit.body || '').slice(0, 160)}`;
-            if (serverFault) {
+            if ((sc.expect_accept || {}).api_path_hint) {
+              // [rev99] 期望受理极性（与期望拒绝互斥，计划期强制）：
+              //   5xx ⇒ 疑似服务端缺陷（与拒绝极性同判——期望受理的请求也崩了，同样是缺陷）；
+              //   2xx/3xx + resultCode==期望 ⇒ pass「按期望受理」；
+              //   2xx + resultCode≠期望 ⇒ blocked「拒绝了应受理的请求」（规则未生效）；
+              //   4xx ⇒ blocked「以 HTTP 非 2xx 拒绝了应受理的请求」。
+              const expectCode = String((sc.expect_accept as any).result_code != null
+                ? (sc.expect_accept as any).result_code : '0');
+              if (serverFault) {
+                record(sc, 'blocked',
+                  `疑似服务端缺陷：目标接口返回 HTTP ${statusNum}（服务端故障），期望受理（expect_accept）的请求也未被正常处理 —— `
+                  + `规则「${sc.rule_ref || sc.scenario_id}」无法验证；${evidence}；`
+                  + `定位凭据：requestId=${hit.requestId || '未在响应头暴露'}`);
+              } else if (httpOk && bodyCode !== null && bodyCode === expectCode) {
+                record(sc, 'pass',
+                  `服务端按期望受理（配置 expect_accept，resultCode=${bodyCode}）；${evidence}（${label}）`);
+              } else if (httpOk) {
+                record(sc, 'blocked',
+                  `疑似缺陷坐实：服务端拒绝了应受理的请求 —— 规则「${sc.rule_ref || sc.scenario_id}」未生效`
+                  + `（实际 resultCode=${bodyCode === null ? '无（响应无业务信封）' : bodyCode}，期望 ${expectCode}）；`
+                  + `${evidence}；定位凭据：requestId=${hit.requestId || '未在响应头暴露'}`);
+              } else {
+                record(sc, 'blocked',
+                  `疑似缺陷坐实：服务端以 HTTP ${statusNum} 拒绝了应受理的请求 —— 规则「${sc.rule_ref || sc.scenario_id}」未生效；`
+                  + `${evidence}；定位凭据：requestId=${hit.requestId || '未在响应头暴露'}`);
+              }
+            } else if (serverFault) {
               // ① 5xx = 服务端崩溃：既非"按规则拒绝"、也非"受理了非法请求"。
               //    旧实现把 ``httpOk`` 硬编码成 2xx/3xx，5xx 会一路穿透到最后一个 else，
               //    被记成 pass「服务端按规则拒绝」⇒ **"服务端崩溃"类缺陷永远绿**（67197 的形态）。
