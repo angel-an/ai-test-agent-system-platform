@@ -1463,6 +1463,87 @@ _FORM_EXECUTOR_TS = r"""
       }));
     }
 
+    // 可选：toolbar_modal（O10/rev98：工具条按钮 → 弹窗字段 → 提交——
+    // 与 create_page 同构但**入口不同**：必须先选中列表行，工具条动作才有目标。
+    // 形态实例（67197，WSF-48576977/cs-case-email）：
+    //   勾选列表行 → 工具条「Email a Link」→ 弹窗 #emails/#remark → Send → POST /cs/cases/send-email。
+    // 新增定位器键（均挂在定位器表上，与 fields/form_button 平级）：
+    //   toolbar_button : 工具条按钮名候选数组（button → link → 精确文本三级兜底，同 form_button）；
+    //   row_selector   : 数据行选择器（缺省 .ant-table-tbody tr）；
+    //   row_pick       : "checkbox"（缺省：勾选行内 input[type=checkbox]，找不到则点行兜底）| "row_click"；
+    //   row_index      : 行下标（缺省 0）。
+    // 行就绪判据沿用 rev96 教训：必须等数据行**真实渲染**（只判表头/Total 会点到空表）。
+    if (flow === 'toolbar_modal') {
+      const rowSel = String((FORM_PLAN.locators as any).row_selector || '.ant-table-tbody tr');
+      let rowReady = false;
+      for (let attempt = 1; attempt <= 3 && !rowReady; attempt++) {
+        try {
+          await scope.locator(rowSel).first()
+            .waitFor({state: 'visible', timeout: attempt === 1 ? 10000 : 5000});
+          rowReady = (await scope.locator(rowSel).count()) > 0;
+        } catch { /* 本轮仍未见到数据行 → 下一轮重试 */ }
+        if (!rowReady) await pg.waitForTimeout(1500);
+      }
+      if (rowReady) {
+        const rowIdx = Math.max(0, Number((FORM_PLAN.locators as any).row_index ?? 0) || 0);
+        try {
+          if (String((FORM_PLAN.locators as any).row_pick || 'checkbox') === 'row_click') {
+            await scope.locator(rowSel).nth(rowIdx).click({timeout: 8000});
+          } else {
+            // 不加 :visible——antd 的 checkbox input 是 opacity:0（Playwright 仍视为可见、可点）；
+            // 加了反而会把 antd 行勾选排除在外（负路径 select_row 的 :visible 只在受控页验证过）。
+            // rev98：**勾选前先看是否已选中**——提交相位每项都会重新 openForm，
+            // 重复点击会把已勾选的行取消掉（实测：第二次 openForm 后弹窗再也打不开）。
+            const box = scope.locator(`${rowSel} input[type=checkbox]`).nth(rowIdx);
+            if (await box.count()) {
+              if (!(await box.isChecked().catch(() => false))) {
+                await box.click({timeout: 8000});
+              }
+            } else {
+              await scope.locator(rowSel).nth(rowIdx).click({timeout: 8000});
+            }
+          }
+          await pg.waitForTimeout(800);
+        } catch { /* 选行失败由后续「表单打不开」统一兜底（如实报错，不装作通过） */ }
+      } else {
+        console.log(`CS_FORM_DIAG toolbar_modal: 未等到数据行（row_selector=${rowSel}）`);
+      }
+      for (const name of ((FORM_PLAN.locators as any).toolbar_button || [])) {
+        try {
+          const btn = scope.getByRole('button', {name: new RegExp(name)}).first();
+          if (await btn.count()) {
+            await btn.click({timeout: 12000});
+            opened = true;
+            break;
+          }
+        } catch { /* 尝试下一个候选名 */ }
+      }
+      if (!opened) {
+        for (const name of ((FORM_PLAN.locators as any).toolbar_button || [])) {
+          try {
+            const lnk = scope.getByRole('link', {name: new RegExp(name)}).first();
+            if (await lnk.count()) {
+              await lnk.click({timeout: 12000});
+              opened = true;
+              break;
+            }
+          } catch { /* 尝试下一个候选名 */ }
+        }
+      }
+      if (!opened) {
+        for (const name of ((FORM_PLAN.locators as any).toolbar_button || [])) {
+          try {
+            const txt = scope.getByText(new RegExp(`^\\s*${name}\\s*$`)).first();
+            if (await txt.count() && await txt.isVisible().catch(() => false)) {
+              await txt.click({timeout: 12000});
+              opened = true;
+              break;
+            }
+          } catch { /* 尝试下一个候选名 */ }
+        }
+      }
+    }
+
     // 可选：先进入「详情/编辑」页（timeline 类流程要从列表点进某一单）
     for (const name of (FORM_PLAN.locators.entry_labels || [])) {      try {
         const entry = scope.getByRole('button', {name: new RegExp(name)}).first();
@@ -1484,6 +1565,7 @@ _FORM_EXECUTOR_TS = r"""
     // `FORM_PLAN.locators.form_button is not iterable` 让整条运行硬失败，且看不出是配置缺失）。
     // 这里容错为"没有候选入口"，由后续 opened 判定给出可读的未验证结论。
     const formButtonNames = FORM_PLAN.locators.form_button || [];
+    const toolbarNames = (FORM_PLAN.locators as any).toolbar_button || [];
     for (const name of formButtonNames) {
       try {
         const btn = scope.getByRole('button', {name: new RegExp(name)}).first();
@@ -1535,8 +1617,8 @@ _FORM_EXECUTOR_TS = r"""
     // 表单打不开属定位器/页面结构问题 → 硬失败（不装作通过）
     expect(
       opened,
-      formButtonNames.length === 0
-        ? `无法打开表单：定位器未配置表单入口（form_button 为空）——请检查该模板注册/配置，`
+      (formButtonNames.length + toolbarNames.length) === 0
+        ? `无法打开表单：定位器未配置表单入口（form_button/toolbar_button 均为空）——请检查该模板注册/配置，`
           + `而不是把结论算成"页面没有入口"（flow=${flow}）`
         : `无法打开表单（flow=${flow}，定位器可能失效）`,
     ).toBeTruthy();
@@ -2480,7 +2562,9 @@ _FORM_EXECUTOR_TS = r"""
       // 文本匹配不到时兜底用 footer 主按钮（取消在前、主操作在后）。
       const clickSubmit = async () => {
         const footer = curModal.locator('.ant-modal-footer button');
-        let btn = footer.filter({hasText: /确\s*定|提\s*交|保\s*存|确\s*认|ok/i}).last();
+        // rev98：补 发送/Send（O10 toolbar_modal 的 email 弹窗形态，实测 67197 入口）。
+        // 只扩展候选集合，既有页面仍由排在前面的关键词命中，不影响已覆盖资产。
+        let btn = footer.filter({hasText: /确\s*定|提\s*交|保\s*存|确\s*认|发\s*送|Send|ok/i}).last();
         if (!(await btn.count())) btn = footer.locator('.ant-btn-primary').last();
         if (!(await btn.count())) {
           // rev79：整页表单（direct_url 流程，如 CS RetroClaim/GoodWill 创建页）
