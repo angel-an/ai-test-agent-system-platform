@@ -178,24 +178,34 @@ def _serve(page_html: str) -> tuple[ThreadingHTTPServer, str, list[tuple[str, st
 # --------------------------------------------------------------------------- #
 # 计划：toolbar_modal 定位器表（与生产配置同形：子功能 custom_config.field_locators）
 # --------------------------------------------------------------------------- #
-def _plan(toolbar_button: list[str] | None = None, *, row_pick: str = "checkbox") -> dict:
+def _plan(toolbar_button: list[str] | None = None, *, row_pick: str = "checkbox",
+          probe_only: bool = False) -> dict:
+    if probe_only:
+        # O1c 用：只有 501 探针（驱动提交层），无 accept 检查——
+        # 这样「填 501」先于遮罩出现完成，失败的只有提交点击本身。
+        assertions = [
+            {"kind": "max_length", "data": "501字", "expect": "reject",
+             "field": "Remark", "rule": "限制500個字"},
+        ]
+    else:
+        assertions = [
+            # 500 字上限：换算成真实 500 字符样本（断言 fill 走 selector_hint #remark）
+            {"kind": "max_length", "data": "500字", "expect": "accept",
+             "field": "Remark", "rule": "限制500個字"},
+            # 501 字超限：probe 项驱动**提交相位**（点 Send 真实打服务端）——
+            # 纯 accept 计划的提交相位为空转（实测 submit_phase 全 0），
+            # 这一条是「Send 真的被点到」的触发器；夹具服务端恒受理，
+            # 该 probe 行的结论是什么不影响本测试的链路断言。
+            {"kind": "max_length", "data": "501字", "expect": "reject",
+             "field": "Remark", "rule": "限制500個字"},
+        ]
     case = SimpleNamespace(
         identifier="TC-900001", name="工单管理-Email a Link 多收件人", module="local",
         description="",
         custom_fields={
             "requirement_rule_id": "FR-CS-EMAIL",
             "requirement_rule": {"field": "Remark"},
-            "assertions": [
-                # 500 字上限：换算成真实 500 字符样本（断言 fill 走 selector_hint #remark）
-                {"kind": "max_length", "data": "500字", "expect": "accept",
-                 "field": "Remark", "rule": "限制500個字"},
-                # 501 字超限：probe 项驱动**提交相位**（点 Send 真实打服务端）——
-                # 纯 accept 计划的提交相位为空转（实测 submit_phase 全 0），
-                # 这一条是「Send 真的被点到」的触发器；夹具服务端恒受理，
-                # 该 probe 行的结论是什么不影响本测试的链路断言。
-                {"kind": "max_length", "data": "501字", "expect": "reject",
-                 "field": "Remark", "rule": "限制500個字"},
-            ],
+            "assertions": assertions,
         },
         test_case_steps=[],
     )
@@ -319,3 +329,38 @@ class TestToolbarModalBrowser:
         assert "toolbar_modal" in raw and "无法打开表单容器" in raw, raw[-1500:]
         assert not [r for r in received if r[0] == "POST" and r[1] == ENDPOINT], \
             "行都没选到就发提交 = 假执行"
+
+
+# --------------------------------------------------------------------------- #
+# O1c/rev100：提交点击有界降级——点不动 ⇒ unverified + 队列继续，绝不 blocked 硬失败
+# --------------------------------------------------------------------------- #
+#: 遮罩变体：#remark 触发 input 事件后弹出透明遮罩盖住整个弹窗（含 Send）。
+#: 于是「填 501 探针」照常完成，唯独提交点击被拦截（Playwright 命中检测重试到 8s 超时）。
+OVERLAY_PAGE = (
+    FULL_PAGE.replace(
+        '<div id="email-modal" class="ant-modal" style="display:none">',
+        '<div id="email-modal" class="ant-modal" style="display:none;position:relative">'
+        '<div id="blocker" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:999;display:none"></div>',
+    ).replace(
+        'function sendEmail() {',
+        'document.getElementById("remark").addEventListener("input", function () {\n'
+        '  document.getElementById("blocker").style.display = "block";\n'
+        '});\nfunction sendEmail() {',
+    )
+)
+
+
+class TestSubmitClickBounded:
+    """O1c：提交层单项点击超时（TR-282/283/288 的 blocked 硬失败形态）不再拖死整批。"""
+
+    def test_click_timeout_degrades_to_unverified(self):
+        rc, received, raw = _run(OVERLAY_PAGE, _plan(probe_only=True), "o1c")
+        # 关键判据：以前这种现场是 blocked=1 ⇒ rc!=0；现在必须 rc==0（队列继续）
+        assert rc == 0, raw[-1500:]
+        rows = _assertions(raw)
+        probe = [r for r in rows if "501字" in r.get("name", "")]
+        assert probe, rows
+        assert all(r["outcome"] == "unverified" for r in probe), probe
+        assert any("点击提交失败" in r.get("observed", "") for r in probe), probe
+        # 点击被拦 ⇒ 服务端零请求（没有假执行）
+        assert not [r for r in received if r[0] == "POST" and r[1] == ENDPOINT], received

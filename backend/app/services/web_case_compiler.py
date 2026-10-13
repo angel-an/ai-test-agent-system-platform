@@ -2647,7 +2647,13 @@ _FORM_EXECUTOR_TS = r"""
       let curModal: any = modal;
       // antd v3 中文 locale 的确认按钮渲染为「确 定」（带空格）→ 正则必须容忍空白；
       // 文本匹配不到时兜底用 footer 主按钮（取消在前、主操作在后）。
-      const clickSubmit = async () => {
+      // O1c/rev100：提交点击**有界降级**。实测（TR-282/283/288，WT-6C6D1A99 整页表单）：
+      // 点提交 8s 硬超时抛 TimeoutError → 提交层单项 blocked → summary.blocked=1 硬失败
+      // 拖死整批（与 rev90 预算闸同源的「单 item 拖死整批」第二实例，§11 待办 O1c）。
+      // 口径：先**无等待**探测按钮存在性——footer 与顶栏候选**都空**才是结构性失效
+      //（记 blocked，定位器真失效必须见光）；按钮在但点不动（遮罩/竞态/页面已迁移）
+      // ⇒ 该项记 unverified（无服务端证据，如实）+ 诊断输出，**队列继续**。
+      const findSubmitBtn = async (): Promise<any | null> => {
         const footer = curModal.locator('.ant-modal-footer button');
         // rev98：补 发送/Send（O10 toolbar_modal 的 email 弹窗形态，实测 67197 入口）。
         // 只扩展候选集合，既有页面仍由排在前面的关键词命中，不影响已覆盖资产。
@@ -2658,7 +2664,17 @@ _FORM_EXECUTOR_TS = r"""
           // 没有 .ant-modal-footer——顶栏 Save 按钮直接在页面作用域里找
           btn = anyScope.locator('button:visible').filter({hasText: /保\s*存|Save|Submit/i}).first();
         }
-        await btn.click({timeout: 8000});
+        return (await btn.count()) ? btn : null;
+      };
+      const clickSubmit = async (): Promise<{ok: boolean; reason: string}> => {
+        const btn = await findSubmitBtn();
+        if (!btn) return {ok: false, reason: '未找到提交按钮（modal footer 与顶栏候选均为空）'};
+        try {
+          await btn.click({timeout: 8000});
+          return {ok: true, reason: ''};
+        } catch (e) {
+          return {ok: false, reason: String(e).slice(0, 140)};
+        }
       };
       // antd v3/v4 兼容的错误项选择器
       const ERRORED_ITEM = '.ant-form-item.has-error, .ant-form-item:has(.ant-form-item-explain-error)';
@@ -2842,7 +2858,10 @@ _FORM_EXECUTOR_TS = r"""
           };
           netToken += 1; netLog.length = 0;           // rev69：本用例项开启新的收集窗口
           const sig = await (async () => {
-            await clickSubmit();
+            const first = await clickSubmit();
+            // O1c/rev100：首次点击即失败 = 请求未发出、无可等证据 → 带标记返回，
+            // 由外层记 unverified 并跳过观察窗（不空等 12s 网络轮询）
+            if (!first.ok) return {__submitFailed: first.reason};
             const s1 = await settleRound(6);          // 第一轮 ~2.4s：页面证据优先
             if (s1) return s1;
             // rev69 守卫：兜底填充前确认目标字段状态——若兜底会污染目标字段（probe 值丢失/
@@ -2857,10 +2876,18 @@ _FORM_EXECUTOR_TS = r"""
             if (!guardOk) return await observe();
             await fillEmptyErrored();                 // 其他空必填拦截 → 兜底填充重试
             netToken += 1; netLog.length = 0;         // 重试窗口重新收集，排除首轮干扰
-            await clickSubmit();
+            const second = await clickSubmit();
+            // 首轮已点过、重试点不动：页面可能已迁移/被遮罩——带上诊断走常规分类
+            if (!second.ok) return {...(await observe()), __secondSubmitFailed: second.reason};
             const s2 = await settleRound(8);          // 第二轮 ~3.2s + 确认层放行
             return s2 || (await observe());
           })();
+          // O1c/rev100：首次点击失败 → 无服务端结论可下，如实记 unverified，队列继续
+          if (sig && (sig as any).__submitFailed) {
+            recAll(check, item.name, 'unverified',
+              `提交层：点击提交失败（${(sig as any).__submitFailed}）——未提交，无法取得服务端结论；队列继续`);
+            continue;
+          }
           // rev69：扩展网络观察窗（~12s）——兜底填充的上传任务可能较慢，业务提交请求可能晚到；
           // 期间网络证据与页面证据任一命中即停，最终用最新页面状态判定。
           const isBizUrl = (u: string) => !/upload|file|oss|media|image|\.png|\.jpg|\.xlsx|\.xls/i.test(u);
@@ -2928,6 +2955,8 @@ _FORM_EXECUTOR_TS = r"""
             })();
             console.log('NET_DEBUG ' + JSON.stringify({
               item: item.name, kind: item.kind, remaining, nbBiz: nbBiz.length, nbUp,
+              // O1c/rev100：重试点击失败的原因（首轮已点过、重试点不动时存在）
+              secondSubmitFailed: (sig as any).__secondSubmitFailed || '',
               allNet: netLog.map((n) => ({u: n.url.slice(0, 90), s: n.status, r: n.requestId || ''})).slice(0, 25),
               btns: btnInfo, stillOpen,
               curModalCount: await curModal.count().catch(() => -1),
