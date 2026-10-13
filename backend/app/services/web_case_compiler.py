@@ -1490,17 +1490,26 @@ _FORM_EXECUTOR_TS = r"""
           if (String((FORM_PLAN.locators as any).row_pick || 'checkbox') === 'row_click') {
             await scope.locator(rowSel).nth(rowIdx).click({timeout: 8000});
           } else {
-            // 不加 :visible——antd 的 checkbox input 是 opacity:0（Playwright 仍视为可见、可点）；
-            // 加了反而会把 antd 行勾选排除在外（负路径 select_row 的 :visible 只在受控页验证过）。
-            // rev98：**勾选前先看是否已选中**——提交相位每项都会重新 openForm，
-            // 重复点击会把已勾选的行取消掉（实测：第二次 openForm 后弹窗再也打不开）。
-            const box = scope.locator(`${rowSel} input[type=checkbox]`).nth(rowIdx);
-            if (await box.count()) {
-              if (!(await box.isChecked().catch(() => false))) {
-                await box.click({timeout: 8000});
+            // rev98c（实测 TR-329）：**不能直接点 input**——antd 的 checkbox input 被
+            // .ant-checkbox-inner 方框覆盖（opacity:0 且在底层），Playwright 命中检测
+            // （elementFromPoint 必须是元素或其子孙）永远不过 ⇒ click 超时后被静默吞掉、
+            // 行没选上，点 Email a Link 只会弹"请先选择工单"toast。
+            // 正解（与 cs_login 实战辅助同思路）：点可见的 .ant-checkbox 容器 →
+            // isChecked 自证 → 未选中再用合成 click 兜底（js el.click 不走过顶命中）。
+            const rowLoc = scope.locator(rowSel).nth(rowIdx);
+            const boxInput = rowLoc.locator('input[type=checkbox]').first();
+            if (await boxInput.count()) {
+              if (!(await boxInput.isChecked().catch(() => false))) {
+                const wrap = rowLoc.locator('.ant-checkbox').first();
+                if (await wrap.count()) {
+                  await wrap.click({timeout: 8000}).catch(() => undefined);
+                }
+                if (!(await boxInput.isChecked().catch(() => false))) {
+                  await boxInput.evaluate((el: any) => el.click()).catch(() => undefined);
+                }
               }
             } else {
-              await scope.locator(rowSel).nth(rowIdx).click({timeout: 8000});
+              await rowLoc.click({timeout: 8000});
             }
           }
           await pg.waitForTimeout(800);
@@ -3028,14 +3037,36 @@ _FORM_EXECUTOR_TS = r"""
             if (!(idx >= 0 && idx < total)) {
               return `${where}：row_index=${idx} 越界（可见 checkbox 共 ${total} 个）`;
             }
-            await boxes.nth(idx).click({timeout: 8000});
+            // rev98c（实测 TR-329）：antd checkbox input 被 inner 方框覆盖，
+            // 直接点 input 过不了 Playwright 命中检测 ⇒ 超时静默、行未选中。
+            // 改点其 .ant-checkbox 容器，isChecked 自证，未选中则合成 click 兜底。
+            const boxInput = boxes.nth(idx);
+            if (!(await boxInput.isChecked().catch(() => false))) {
+              const wrap = boxInput.locator('xpath=..');
+              const wrapCls = String(await wrap.getAttribute('class').catch(() => ''));
+              if (wrapCls.includes('ant-checkbox')) {
+                await wrap.click({timeout: 8000}).catch(() => undefined);
+              } else {
+                await boxInput.click({timeout: 8000}).catch(() => undefined);
+              }
+              if (!(await boxInput.isChecked().catch(() => false))) {
+                await boxInput.evaluate((el: any) => el.click()).catch(() => undefined);
+              }
+            }
+            if (!(await boxInput.isChecked().catch(() => false))) {
+              return `${where}：checkbox 点击后仍未选中（antd 结构可能改版）`;
+            }
             await page.waitForTimeout(1000);
             continue;
           }
           if (action === 'fill') {
             const field = String(step.field || '');
             if (!field) return `${where}：fill 缺少 field`;
-            const input = await fieldControl(anyScope, field, {});
+            // rev98：fill 与字段级阶段同权使用定位器表的 selector_hint——
+            // 实测（CS email 弹窗 #emails/#remark）弹窗控件不在 .ant-form-item 结构里，
+            // 空 def 走 has-text 兜底永远落空 ⇒ 场景在 setup 期就 unverified。
+            const setupDefs = ((FORM_PLAN.locators || {}).fields) || {};
+            const input = await fieldControl(anyScope, field, setupDefs[field] || {});
             if (!(await input.count().catch(() => 0))) return `${where}：未定位到字段「${field}」`;
             await input.fill(String(step.value || ''), {timeout: OP_T});
             await input.blur({timeout: OP_T}).catch(() => undefined);
