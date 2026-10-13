@@ -65,6 +65,21 @@ export interface AIGenerateQualityGateInfo {
     created_count: number;
   };
   analysis_report_markdown?: string;
+  /** 生成期断言缺口告警：哪些需求点提取不出可判定断言（null = 无缺口） */
+  assertion_gap_warning?: string | null;
+  /** 断言缺口明细：需求点 → 受影响用例 → 原因与补充建议 */
+  assertion_gap_cases?: Array<{
+    point: string;
+    titles: string[];
+    reason: string;
+    suggestion: string;
+  }>;
+  /** 逐需求点可断言性预览（true = 可关联字段规则、能产出可判定断言） */
+  assertability_preview?: Array<{
+    point: string;
+    assertable: boolean;
+    matched_field?: string | null;
+  }>;
 }
 
 // AI辅助填充测试用例字段的请求参数
@@ -159,6 +174,8 @@ export interface MinimalWebLoopRequest {
   test_run_identifier?: string | null;
   create_test_run?: boolean;
   execution_config?: Record<string, unknown>;
+  /** Web 子功能 ID（执行三要素绑定目标）；不传时后端按用例文本自动匹配 */
+  sub_function_id?: string | null;
 }
 
 export interface MinimalWebLoopResponse {
@@ -181,6 +198,22 @@ export interface MinimalWebLoopResponse {
     script_jobs?: Array<Record<string, unknown>>;
   } | null;
   message?: string;
+  /** 编译回执（A2/rev97）：本次生成了几条可执行检查、丢了什么、为什么。
+   *  warnings 非空或 executable=false 时 UI 必须持久展示——只看"已生成 N 条 Web 冒烟"
+   *  会把"零覆盖骨架"误读成"已覆盖"（资产状态仍显示 completed）。 */
+  compile_receipt?: WebCompileReceipt | null;
+}
+
+export interface WebCompileReceipt {
+  form_locator_source?: string;
+  executable?: boolean;
+  form_executable_checks?: number;
+  negative_scenario_count?: number;
+  assertion_check_count?: number;
+  skipped_assertion_count?: number;
+  pending_locator_count?: number;
+  allow_upload_checks?: boolean;
+  warnings?: string[];
 }
 
 // 从提示词生成测试用例

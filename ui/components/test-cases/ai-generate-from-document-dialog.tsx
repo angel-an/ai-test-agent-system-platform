@@ -1,4 +1,4 @@
-﻿/**
+/**
  * andan
  */
 // TODO  MC80OmFIVnBZMlhscm9ua3VMazZSVnBXWmc9PTo2NWRlN2UwMw==
@@ -33,6 +33,7 @@ import {
   createMinimalWebLoop,
   generateTestCasesFromDocument,
   parseAPIDocFile,
+  type WebCompileReceipt,
 } from "@/lib/api/ai";
 import {
   analyzeRequirement,
@@ -49,7 +50,10 @@ interface AIGenerateFromDocumentDialogProps {
   onOpenChange: (open: boolean) => void;
   projectId: string;
   folderId?: string | null;
-  onSuccess?: (testCases: TestCaseInfo[]) => void;
+  onSuccess?: (
+    testCases: TestCaseInfo[],
+    extra?: { assertionGapWarning?: string | null }
+  ) => void;
   onOpenChat?: (params: {
     prompt: string;
     attachments?: Array<{
@@ -62,6 +66,20 @@ interface AIGenerateFromDocumentDialogProps {
 }
 // eslint-disable  Mi80OmFIVnBZMlhscm9ua3VMazZSVnBXWmc9PTo2NWRlN2UwMw==
 
+/** 编译回执（A2/rev97）→ 持久警告文本；无异常时返回 null。
+ *  回执 warnings 是后端写好的中文长句（含 [zero_executable_checks] 等机读标记），直接逐行展示。 */
+function formatCompileReceipt(receipt: WebCompileReceipt | null | undefined): string | null {
+  if (!receipt) return null;
+  const warns = receipt.warnings ?? [];
+  const summary =
+    `可执行检查 ${receipt.form_executable_checks ?? 0} 条` +
+    ` · 负路径场景 ${receipt.negative_scenario_count ?? 0} 个` +
+    ` · 跳过断言 ${receipt.skipped_assertion_count ?? 0} 条` +
+    ` · 待定定位 ${receipt.pending_locator_count ?? 0} 处`;
+  if (!warns.length && receipt.executable !== false) return null;
+  return [summary, ...warns].join("\n");
+}
+
 export function AIGenerateFromDocumentDialog({
   open,
   onOpenChange,
@@ -70,6 +88,9 @@ export function AIGenerateFromDocumentDialog({
   onSuccess,
   onOpenChat,
 }: AIGenerateFromDocumentDialogProps) {
+  // 开发环境自动填充放行凭证（仅本地，不写入浏览器存储）
+  const devOverrideToken = process.env.NEXT_PUBLIC_REQUIREMENT_GATE_OVERRIDE_TOKEN || "";
+
   const [file, setFile] = React.useState<File | null>(null);
   const [apiDocFile, setApiDocFile] = React.useState<File | null>(null);
   const [additionalPrompt, setAdditionalPrompt] = React.useState("");
@@ -91,6 +112,16 @@ export function AIGenerateFromDocumentDialog({
   const [quality, setQuality] = React.useState<RequirementAnalysisData | null>(null);
   const [qualityLoading, setQualityLoading] = React.useState(false);
   const [qualityError, setQualityError] = React.useState<string | null>(null);
+  // Web 冒烟资产/运行未创建时的原因：必须以**页面持久提示**呈现。
+  // 原先只弹一条约 4 秒的 warning toast，采样稍慢就完全看不到失败痕迹（实测踩过）。
+  const [webLoopError, setWebLoopError] = React.useState<string | null>(null);
+  // 编译回执（A2/rev97）：零可执行检查/上传检查被关等「脚本在、覆盖无」的形态，
+  // 必须持久提示——资产状态仍显示 completed，不提示就等于把骨架读成覆盖。
+  const [webLoopWarning, setWebLoopWarning] = React.useState<string | null>(null);
+  const [overrideToken, setOverrideToken] = React.useState(devOverrideToken);
+  const [overrideReason, setOverrideReason] = React.useState("");
+  const [showOverride, setShowOverride] = React.useState(false);
+  const [overrideApplied, setOverrideApplied] = React.useState(false);
   // 生成会话标识：用于后端门控状态跟踪（同一对话框内保持稳定）
   const [sessionKey] = React.useState(
     () => `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -98,11 +129,22 @@ export function AIGenerateFromDocumentDialog({
 
   const qualityBlocked =
     quality !== null && quality.prd_quality.can_generate_testcases === false;
+  // PDF/图片等二进制文件：前端无法预检，后端生成时才判定；此时也显示人工放行入口
+  const isBinaryFile =
+    file !== null &&
+    !file.type.startsWith("text/") &&
+    !file.name.toLowerCase().endsWith(".txt") &&
+    !file.name.toLowerCase().endsWith(".md");
+  const showOverrideSection = qualityBlocked || (isBinaryFile && outputType === "test_case");
+  // 人工放行：勾选且填写了凭证和原因（≥10字符）后，允许生成
+  const overrideReady =
+    showOverride && overrideToken.trim().length > 0 && overrideReason.trim().length >= 10 &&
+    new Set(Array.from(overrideReason.trim())).size > 1;
   // 需求分析报告模式下仍允许点击（只输出报告，不生成用例）
   const generateDisabled =
     generating ||
     !file ||
-    (outputType === "test_case" && qualityBlocked);
+    (outputType === "test_case" && qualityBlocked && !overrideReady);
 
   // Knowledge space selection
   const [spaces, setSpaces] = React.useState<KnowledgeSpaceInfo[]>([]);
@@ -224,6 +266,7 @@ export function AIGenerateFromDocumentDialog({
     setSelectedSpaceId("__none__");
     setQuality(null);
     setQualityError(null);
+    setOverrideApplied(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -390,7 +433,12 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
         toast.info("正在生成测试用例...");
       }
       // 前端已判定不满足测试设计条件时，不再发起生成请求（后端同样有硬门控兜底）
-      if (outputType === "test_case" && qualityBlocked) {
+      // 例外：用户已勾选人工放行并填写凭证+原因时，允许提交由后端校验
+      if (outputType === "test_case" && qualityBlocked && !overrideReady) {
+        if (showOverride && overrideReason.trim().length < 10) {
+          toast.warning("人工放行原因至少需要填写 10 个字符");
+          return;
+        }
         toast.warning(
           "需求质量不满足测试设计条件，已阻止生成；请先补齐缺失项（见需求质量面板）"
         );
@@ -402,7 +450,10 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
         folder_id: folderId,
         additional_prompt: additionalPrompt.trim() || undefined,
         template,
+        test_mode: testMode,
         knowledge_space_id: selectedSpaceId === "__none__" ? undefined : selectedSpaceId,
+        override_token: showOverride ? overrideToken.trim() || undefined : undefined,
+        override_reason: showOverride ? overrideReason.trim() || undefined : undefined,
         // 门控与追踪字段（阶段一/二）
         output_type: outputType,
         requirement_id: sessionKey,
@@ -443,6 +494,9 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
       const generatedCases = Array.isArray(gated?.test_cases) ? gated.test_cases : [];
 
       if (response.success && generatedCases.length > 0) {
+        if (showOverride && overrideToken) {
+          setOverrideApplied(true);
+        }
         if (apiDocFile && outputType === "test_case") {
           toast.info("正在解析接口文档并创建可执行闭环...");
           const apiDocResponse = await parseAPIDocFile(projectId, {
@@ -482,15 +536,20 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
                 test_case_ids: generatedCaseIds,
                 folder_id: folderId,
                 test_run_identifier: testRunIdentifier,
-                base_url: "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/login",
-                execution_config: {
-                  env: {
-                    WEB_TEST_BASE_URL: "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/login",
-                  },
-                },
+                // 刻意**不**下发 base_url：入口一律由项目「路径配置」解析
+                // （后端 web_case_link_service 会写 web_path_base_url_source=template）。
+                // 早期这里写死小杨生煎 UAT 入口，导致任何非小杨生煎项目都把执行指向小杨生煎。
+                execution_config: {},
               });
               const webTestCount = webLoopResponse.data.web_tests.length;
               webLoopMessage = webTestCount > 0 ? `，追加 ${webTestCount} 条 Web 冒烟` : "";
+              const receiptText1 = formatCompileReceipt(webLoopResponse.data.compile_receipt);
+              setWebLoopWarning(receiptText1);
+              if (receiptText1) {
+                toast.warning("Web 冒烟编译回执需关注", {
+                  description: receiptText1.split("\n")[0],
+                });
+              }
             }
           }
           let executionMessage = "";
@@ -508,26 +567,59 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
           const generatedCaseIds = generatedCases
             .map((testCase) => testCase.id)
             .filter((id): id is string => Boolean(id));
-          const webLoopResponse = await createMinimalWebLoop(projectId, {
-            test_case_ids: generatedCaseIds,
-            folder_id: folderId,
-            create_test_run: true,
-            execution_config: {},
-          });
-          const testRunIdentifier = webLoopResponse.data.test_run?.identifier;
-          if (testRunIdentifier) {
-            toast.info(`正在启动 Web 测试运行 ${testRunIdentifier}...`);
-            await executeTestRun(projectId, testRunIdentifier);
+          // Web 资产/运行未创建（如未绑定子功能、base_url 仍为占位地址）时，
+          // 不影响"用例已生成"的事实——两者分开提示，避免误导。
+          let webLoopMessage = "";
+          let webLoopErrorText = "";
+          try {
+            const webLoopResponse = await createMinimalWebLoop(projectId, {
+              test_case_ids: generatedCaseIds,
+              folder_id: folderId,
+              create_test_run: true,
+              // 同上：不写死入口，交给项目「路径配置」；未配置时后端会返回带错误码的 400，
+              // 由下方 setWebLoopError 持久展示（而不是 4 秒 toast 一闪而过）。
+              execution_config: {},
+            });
+            const testRunIdentifier = webLoopResponse.data.test_run?.identifier;
+            webLoopMessage = `，追加 ${webLoopResponse.data.web_tests.length} 条 Web 冒烟`;
+            const receiptText2 = formatCompileReceipt(webLoopResponse.data.compile_receipt);
+            setWebLoopWarning(receiptText2);
+            if (receiptText2) {
+              toast.warning("Web 冒烟编译回执需关注", {
+                description: receiptText2.split("\n")[0],
+              });
+            }
+            if (testRunIdentifier) {
+              webLoopMessage += `，已启动测试运行 ${testRunIdentifier}`;
+              toast.info(`正在启动 Web 测试运行 ${testRunIdentifier}...`);
+              await executeTestRun(projectId, testRunIdentifier);
+            }
+          } catch (error) {
+            webLoopErrorText = error instanceof Error ? error.message : String(error);
           }
-          toast.success(
-            `已生成 ${generatedCases.length} 条需求用例，追加 ${webLoopResponse.data.web_tests.length} 条 Web 冒烟${
-              testRunIdentifier ? `，已启动测试运行 ${testRunIdentifier}` : ""
-            }`
-          );
+          toast.success(`已生成 ${generatedCases.length} 条需求用例${webLoopMessage}`);
+          if (webLoopErrorText) {
+            // 持久提示 + toast 双通道：toast 易错过，页面提示可用于排查与复现
+            setWebLoopError(webLoopErrorText);
+            setWebLoopWarning(null);
+            toast.warning(`Web 执行未创建：${webLoopErrorText}`);
+          } else {
+            setWebLoopError(null);
+          }
         } else {
           toast.success(`成功生成 ${generatedCases.length} 个测试用例`);
         }
-        onSuccess?.(generatedCases);
+        // 断言缺口说明（生成期即点名）：哪些需求点提取不出可判定断言、
+        // 对应用例将标记「需人工执行」、怎么补——交给父页面持久提示，
+        // 因为本弹窗成功后会立即关闭，弹窗内提示看不到。
+        const assertionGapWarning = gated?.assertion_gap_warning ?? null;
+        if (assertionGapWarning) {
+          toast.warning("部分用例无法提取可判定断言，已标记「需人工执行」", {
+            description: assertionGapWarning,
+            duration: 15000,
+          });
+        }
+        onSuccess?.(generatedCases, { assertionGapWarning });
         onOpenChange(false);
         resetForm();
       } else {
@@ -905,11 +997,34 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
               {quality && !qualityLoading && (
                 <RequirementQualityPanel data={quality} />
               )}
+              {overrideApplied && (
+                <div className="mt-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+                  ✅ 已人工放行（原因：{overrideReason}）
+                </div>
+              )}
               {!quality && !qualityLoading && !qualityError && (
                 <p className="text-xs text-muted-foreground">
                   该文件为 PDF/图片等二进制文档，需求质量判定将在生成时由后端执行。
                 </p>
               )}
+            </div>
+          )}
+
+          {showOverrideSection && outputType === "test_case" && (
+            <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={showOverride} onChange={e => setShowOverride(e.target.checked)} /> 人工放行（需服务端凭证）</label>
+              <p className="text-xs text-muted-foreground">
+                {qualityBlocked
+                  ? "仅用于本地验证或探索性测试；正式环境请补齐需求后重新生成"
+                  : "PDF/图片等二进制文件由后端生成时判定质量；如被阻断可在此提前填写放行信息"}
+              </p>
+              {showOverride && <>
+                <input type="password" value={overrideToken} onChange={e => setOverrideToken(e.target.value)} placeholder="放行凭证" className="w-full rounded border px-2 py-1 text-sm" />
+                <Textarea value={overrideReason} onChange={e => setOverrideReason(e.target.value)} placeholder="填写人工放行原因（至少10个字符）" rows={2} />
+                <p className={overrideReason.trim().length >= 10 ? "text-xs text-green-700" : "text-xs text-amber-700"}>
+                  已输入 {overrideReason.trim().length}/10 个字符{overrideReason.trim().length < 10 ? "，还需补充原因" : "，可以提交"}
+                </p>
+              </>}
             </div>
           )}
 
@@ -1055,9 +1170,41 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
         </div>
 
         <DialogFooter className="gap-2 flex-col sm:flex-row sm:items-center">
-          {outputType === "test_case" && qualityBlocked && (
+          {webLoopError && (
+            <div
+              className="mr-auto w-full rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 sm:max-w-[70%]"
+              data-testid="web-loop-error"
+              role="status"
+            >
+              <div className="font-medium">Web 冒烟自动化未创建</div>
+              <div className="mt-1 break-words">{webLoopError}</div>
+              <div className="mt-1 text-amber-700">
+                用例已生成，但执行侧未建立；请按提示检查项目「路径配置」（入口 URL、登录 profile、导航路径）
+                或子功能绑定后重试。
+              </div>
+            </div>
+          )}
+          {webLoopWarning && (
+            <div
+              className="mr-auto w-full rounded-md border border-amber-500 bg-amber-50 px-3 py-2 text-xs text-amber-900 sm:max-w-[70%]"
+              data-testid="web-loop-receipt-warning"
+              role="status"
+            >
+              <div className="font-medium">Web 冒烟编译回执（需关注）</div>
+              <div className="mt-1 whitespace-pre-line break-words">{webLoopWarning}</div>
+              <div className="mt-1 text-amber-700">
+                资产状态仍会显示「已完成」：以上警告表示本次脚本可能不含可执行检查，请勿据此判定已覆盖。
+              </div>
+            </div>
+          )}
+          {outputType === "test_case" && qualityBlocked && !overrideReady && (
             <p className="mr-auto text-xs text-amber-800" data-testid="generate-blocked-hint">
               需求质量不满足测试设计条件，生成按钮已禁用（详见上方缺失项与阻断原因）。
+            </p>
+          )}
+          {outputType === "test_case" && qualityBlocked && overrideReady && (
+            <p className="mr-auto text-xs text-green-700" data-testid="generate-override-hint">
+              已启用人工放行，将记录审计日志。
             </p>
           )}
           <Button
@@ -1072,7 +1219,7 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
             onClick={handleGenerate}
             disabled={generateDisabled}
             title={
-              outputType === "test_case" && qualityBlocked
+              outputType === "test_case" && qualityBlocked && !overrideReady
                 ? "需求质量不满足测试设计条件，已禁用正式用例生成"
                 : undefined
             }
