@@ -904,13 +904,16 @@ class WebCaseLinkService:
         upload_kinds = declared & {"file_size", "file_format", "upload_file"}
 
         warnings: list[str] = []
+        # 场景（规则级负路径）与字段级检查同权：有场景时执行器照常注入、脚本可执行，
+        # 不能按「零可执行检查」告警——那会把"配了场景、等着跑"误报成"零覆盖"。
+        scenarios = plan.get("negative_scenarios") or []
         if form_plan is None:
             warnings.append(
                 f"[no_form_plan] 未生成表单检查计划（locator_source={locator_source}）："
                 "断言全部留在 pending_locator，本次脚本不含任何表单断言。"
                 "常见原因＝子功能未配置 custom_config.field_locators 且项目内未注册该模板。"
             )
-        elif not checks:
+        elif not checks and not scenarios:
             kinds = sorted({str(s.get("kind") or "") for s in skipped if s.get("kind")})
             warnings.append(
                 f"[zero_executable_checks] 表单计划**零可执行检查**（{len(skipped)} 条被跳过"
@@ -926,8 +929,9 @@ class WebCaseLinkService:
             )
         return {
             "form_locator_source": locator_source,
-            "executable": bool(checks),
+            "executable": bool(checks) or bool(scenarios),
             "form_executable_checks": len(checks),
+            "negative_scenario_count": len(scenarios),
             "assertion_check_count": plan.get("assertion_check_count", 0),
             "skipped_assertion_count": len(skipped),
             "skipped_assertions": [
@@ -1796,9 +1800,12 @@ class WebCaseLinkService:
         form_executor = (
             render_form_executor(form_plan, upload_allow_hosts=upload_allow_hosts,
                                  upload_allow_rules=upload_allow_rules)
-            # executable=False（有跳过、无检查）时不注入执行器：为 0 条检查打开表单只会
+            # executable=False（有跳过、无检查、无场景）时不注入执行器：为 0 条检查打开表单只会
             # 把环境问题变成硬失败；跳过原因由资产审计字段与运行期 [plan-skip] 承载。
-            if form_plan and form_plan.get("checks") else ""
+            # rev98b：「只有规则级负路径场景、没有字段级检查」同样注入——场景是真实可执行
+            # 内容（build_form_plan 对这种形态 executable=True），不注入场景就永远跑不到
+            # （实测 CS email 弹窗：checks=0 + 1 场景，旧闸会产出无执行器的骨架）。
+            if form_plan and (form_plan.get("checks") or form_plan.get("negative_scenarios")) else ""
         )
         # 模板必须与用例业务**正向匹配**：无匹配时 `_resolve_web_template_key` 抛
         # [unsupported_web_template]，绝不退回其它业务模板
@@ -2060,6 +2067,18 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         ]
         return self._route_keyword_hit(self._case_route_text(test_case), keywords)
 
+    def _is_yl_masterdata_case(self, test_case: TestCase) -> bool:
+        """YL 主數據管理（店鋪/商品/支付方式主數據）用例判定。
+
+        關鍵詞取自鎖定需求文檔標題與模塊名；刻意用「主數據管理/主数据管理」
+        組合詞，避免裸「店鋪/商品」誤傷其它業務。
+        """
+        return self._route_keyword_hit(
+            self._case_route_text(test_case),
+            ["主數據管理", "主数据管理", "YL-主數據", "YL-主数据",
+             "店鋪主數據", "店铺主数据", "商品主數據", "支付方式主數據"],
+        )
+
     def _is_enterprise_storage_recharge_case(self, test_case: TestCase) -> bool:
         return self._route_keyword_hit(
             self._case_route_text(test_case), ["企业储值", "储值充值", "储值账户列表"]
@@ -2086,6 +2105,8 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         """
         if self._is_cs_module_case(test_case):
             return "cs_module"
+        if self._is_yl_masterdata_case(test_case):
+            return "yl_masterdata"
         if self._is_enterprise_storage_recharge_case(test_case):
             return "enterprise_storage_recharge"
         if self._is_purchase_limit_case(test_case):
@@ -2100,7 +2121,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
             f"模块={getattr(test_case, 'module', None)!r} "
             f"归一化识别文本={self._case_route_text(test_case)!r}。"
             "请为该业务补充脚本模板（cs_module / enterprise_storage_recharge / "
-            "storage_writeoff / purchase_limit）"
+            "storage_writeoff / purchase_limit / yl_masterdata）"
             "并让用例名称/模块可被正向识别后重试。"
             "⚠️ `module` 由**上传需求文档的文件名 stem** 派生"
             "（api/v2/ai.py:_derive_requirement_module）；"
