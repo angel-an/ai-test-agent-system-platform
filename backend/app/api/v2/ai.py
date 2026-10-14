@@ -634,7 +634,9 @@ def _build_requirement_cases(
         if aliases:
             linked = _match_field_for_point(base_point, aliases)
         rule_id = _rule_id("RQ", filename, title)
-        custom_fields: dict[str, Any] = {"requirement_rule_id": rule_id}
+        custom_fields: dict[str, Any] = {"requirement_rule_id": rule_id,
+                                          # rev106 雙軌標記：默認人工軌，回鏈到字段規則後轉自動
+                                          "executable_track": "manual"}
         description = f"基于上传需求文档《{filename}》生成；场景来源：{title}。"
         if linked is not None:
             rule, alias = linked
@@ -650,9 +652,14 @@ def _build_requirement_cases(
                     "point": title[:120],
                 },
             }
-            custom_fields["assertions"] = _rule_assertions(rule).get(assertion_kind, [])
+            _linked_assertions = _rule_assertions(rule).get(assertion_kind, [])
+            custom_fields["assertions"] = _linked_assertions
+            # rev106 修正：回鏈成功但該場景種類抽不出斷言（如規則無 required 約束時的正向場景）
+            # → 不得標自動軌，否則「空斷言的自動用例」會被當成可執行材料。
             # 来源标记：文档抽取而来（文档变更后可重新生成；人工回写的会标 manual）
             custom_fields["assertions_source"] = "doc_extracted"
+            if _linked_assertions:
+                custom_fields["executable_track"] = "auto"
             description += f"；关联字段规则：{rule.name}（命中别名「{alias}」）。"
         else:
             # 生成期说明：这条用例为什么无法自动执行（非用例错误，是需求粒度不够）
@@ -765,6 +772,8 @@ def _build_companion_cases(
                 "requirement_rule_id": f"COMPANION-{len(cases) + 1:02d}",
                 "requirement_rule": {"field": "通用交互/系統場景", "rule": rule_point},
                 "companion_template": True,
+                # rev106 雙軌標記：伴生場景為通用手工場景，綁定定位器後可轉自動
+                "executable_track": "manual",
                 "source_file": filename,
             },
             test_case_steps=[
@@ -1051,6 +1060,8 @@ def _field_rule_cases(
                     "source": rule.source,
                 },
                 "assertions": assertions.get(assertion_kind, []),
+                # rev106 雙軌標記：帶機器可判定斷言 → 自動軌
+                "executable_track": "auto",
                 # 来源标记：文档抽取而来（人工回写的断言标 manual，见 test_assertion_service）
                 "assertions_source": "doc_extracted",
             },
