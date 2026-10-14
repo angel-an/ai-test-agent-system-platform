@@ -12,8 +12,10 @@ from uuid import UUID
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Query, status, Request, Response, Body
+from fastapi import APIRouter, Query, status, Request, Response, Body, UploadFile, File
+import io
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -27,7 +29,7 @@ from app.schemas.test_case import (
     TestCaseCreate, TestCaseUpdate, TestCaseInfo, TestCaseMinifiedInfo,
     BulkTestCaseRequest, BulkEditWithOperationsRequest, BulkDeleteRequest,
     BulkOperationResponse, ExportBDDRequest, ExportBDDResponse,
-    ExportStatusResponse, TestCaseHistoryResponse
+    ExportStatusResponse, TestCaseHistoryResponse, TestStepCreate
 )
 from app.schemas.common import SuccessResponse, MessageResponse
 from app.schemas.pagination import PaginatedResponse, PaginationInfo
@@ -218,6 +220,167 @@ async def get_folder_test_cases(
             next=next_url,
         ),
     )
+
+#: 外部用例 xlsx 导入：列名 → 字段映射（繁简双写，实测飞书/Excel 导出两种都有）
+_XLSX_HEADER_ALIASES = {
+    "title": ("用例標題", "用例标题", "標題", "标题"),
+    "module": ("模塊", "模块", "所屬模塊", "所属模块"),
+    "device": ("測試設備", "测试设备", "設備", "设备"),
+    "preconditions": ("前置條件", "前置条件"),
+    "steps": ("操作步驟", "操作步骤", "測試步驟", "测试步骤"),
+    "expected": ("預期結果", "预期结果"),
+    "priority": ("優先順序", "优先顺序", "優先級", "优先级"),
+    "case_type": ("用例類型", "用例类型"),
+    "stage": ("適用階段", "适用阶段"),
+}
+
+
+def _split_steps_text(text: str) -> list[dict]:
+    """「步驟1：xxx；步驟2：yyy」→ [{step, result}]；切不出序號时整段为一步。"""
+    import re
+    text = str(text or "").strip()
+    if not text:
+        return []
+    parts = re.split("步驟\s*\d+\s*[:：]", text)
+    heads = re.findall("步驟\s*\d+\s*[:：]", text)
+    if not heads:
+        return [{"step": text, "result": None}]
+    steps: list[dict] = []
+    if parts[0].strip():
+        steps.append({"step": parts[0].strip(), "result": None})
+    for body in parts[1:]:
+        steps.append({"step": body.strip().rstrip(";；"), "result": None})
+    return [s for s in steps if s["step"]]
+
+
+
+#: 用例類型自由文本 → 平台枚舉（映射不出的歸 other 並保留原文於 custom_fields）
+_CASE_TYPE_MAP = (
+    ("功能", "functional"), ("性能", "performance"), ("兼容", "compatibility"),
+    ("安全", "security"), ("回歸", "regression"), ("回归", "regression"),
+    ("煙霧", "smoke_sanity"), ("冒烟", "smoke_sanity"), ("可用性", "usability"),
+    ("易用", "usability"), ("驗收", "acceptance"), ("验收", "acceptance"),
+    ("破壞", "destructive"), ("破坏", "destructive"), ("無障礙", "accessibility"),
+)
+
+
+def _map_case_type(val: str) -> str:
+    v = str(val or "")
+    for key, enum in _CASE_TYPE_MAP:
+        if key in v:
+            return enum
+    return "other"
+
+
+def _map_priority(val: str) -> str:
+    v = str(val or "").strip().upper()
+    if v.startswith(("P0", "P1")):
+        return "high"
+    if v.startswith("P2"):
+        return "medium"
+    if v.startswith("P3"):
+        return "low"
+    return "medium"
+
+
+@router.post(
+    "/folders/{folder_id}/test-cases/import-excel",
+    response_model=SuccessResponse[dict],
+    status_code=status.HTTP_201_CREATED,
+    summary="从 Excel 导入测试用例",
+    description=(
+        "把外部（人工编写）的测试用例 xlsx 导入指定文件夹。"
+        "自动识别表头行（繁/简），解析用例标题/模块/前置/步骤/预期/优先级/类型/阶段；"
+        "步骤文本按「步驟N：」切分存入 test_steps，预期结果挂最后一步。"
+        "导入的用例立即可在前端查看与手工执行；携带断言的用例可经 minimal-loop 绑定转自动执行。"
+    ),
+)
+async def import_test_cases_excel(
+    project_identifier: str,
+    folder_id: UUID,
+    service: TestCaseServiceDep,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep,
+    file: UploadFile = File(...),
+) -> SuccessResponse[dict]:
+    import openpyxl
+
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as exc:  # noqa: BLE001
+        raise BadRequestException(f"无法解析 xlsx 文件: {type(exc).__name__}: {exc}") from exc
+    ws = wb.worksheets[0]
+
+    # 定位表头行与列位
+    header_idx: dict[str, int] = {}
+    header_row_no = 0
+    for row_no, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        cells = [str(c).strip() if c is not None else "" for c in row]
+        mapped = {}
+        for field, aliases in _XLSX_HEADER_ALIASES.items():
+            for alias in aliases:
+                if alias in cells:
+                    mapped[field] = cells.index(alias)
+                    break
+        if "title" in mapped and "steps" in mapped:
+            header_idx = mapped
+            header_row_no = row_no
+            break
+        if row_no > 50:
+            break
+    if not header_idx:
+        raise BadRequestException(
+            "未找到用例表头（需包含「用例標題/用例标题」与「操作步驟/操作步骤」列），前 50 行已扫描")
+
+    def cell(row: tuple, key: str) -> str:
+        idx = header_idx.get(key)
+        if idx is None or idx >= len(row) or row[idx] is None:
+            return ""
+        return str(row[idx]).strip()
+
+    created, errors = [], []
+    for row_no, row in enumerate(ws.iter_rows(min_row=header_row_no + 1, values_only=True),
+                                 start=header_row_no + 1):
+        title = cell(row, "title")
+        if not title:
+            continue
+        steps = _split_steps_text(cell(row, "steps"))
+        expected = cell(row, "expected")
+        if expected and steps:
+            steps[-1]["result"] = expected
+        try:
+            data = TestCaseCreate(
+                name=title,
+                priority=_map_priority(cell(row, "priority")),
+                preconditions=cell(row, "preconditions") or None,
+                case_type=_map_case_type(cell(row, "case_type")),
+                custom_fields={
+                    "import_source": "xlsx",
+                    "import_file": file.filename or "",
+                    "import_module": cell(row, "module"),
+                    "import_device": cell(row, "device"),
+                    "import_stage": cell(row, "stage"),
+                    "import_case_type_text": cell(row, "case_type"),
+                },
+                test_case_steps=[TestStepCreate(**s) for s in steps] or None,
+            )
+            tc = await service.create_test_case(
+                project_identifier, data, current_user_id, folder_id
+            )
+            await db.commit()
+            created.append({"identifier": getattr(tc, "identifier", ""),
+                            "name": title[:60]})
+        except Exception as exc:  # noqa: BLE001 —— 单行失败不拖垮整批
+            await db.rollback()
+            errors.append({"row": row_no, "name": title[:40],
+                           "error": f"{type(exc).__name__}: {exc}"[:150]})
+
+    return SuccessResponse(success=True, data={
+        "created_count": len(created), "error_count": len(errors),
+        "cases": created[:20], "errors": errors[:20],
+    })
+
 
 @router.get(
     "/test-cases/export-excel",
@@ -535,8 +698,113 @@ async def update_test_case(
     await db.commit()
     return SuccessResponse(success=True, data=test_case)
 
-# ============ 删除测试用例接口 ============
+# ============ 结构化断言批量回写接口（2026-09-29 复核 P2）============
 
+class AssertionBatchItem(BaseModel):
+    """单条用例的断言回写请求。"""
+    identifier: str = Field(..., description="测试用例标识符，如 TC-519063")
+    assertions: list[dict[str, Any]] = Field(..., description="结构化断言列表")
+    rule_id: str | None = Field(default=None, description="需求规则编号，如 R19")
+    rule_field: str | None = Field(default=None, description="规则字段名（便捷参数）")
+    requirement_rule: dict[str, Any] | None = Field(default=None, description="完整规则体（可选）")
+
+
+class AssertionBatchRequest(BaseModel):
+    """批量回写请求（默认 dry_run：只校验与预览，不落库）。"""
+    dry_run: bool = Field(default=True, description="只做校验与编译预览")
+    cases: list[AssertionBatchItem] = Field(..., description="待回写的用例列表")
+
+
+@router.post(
+    "/test-cases/assertions-batch",
+    response_model=SuccessResponse[dict],
+    summary="批量回写结构化断言（含编译预览与来源标记）",
+    description=(
+        "把「需人工执行」的用例批量转成可编译可执行：默认 dry_run=true 只校验断言格式"
+        "并用编译器预演结果；落库时写入 assertions_source=manual 与时间戳，"
+        "便于需求文档变更后列出需要人工复核的断言。"
+    ),
+)
+async def batch_write_case_assertions(
+    project_identifier: str,
+    data: AssertionBatchRequest,
+    service: TestCaseServiceDep,
+    db: DbSessionDep,
+) -> SuccessResponse[dict]:
+    """批量回写断言：**先预览后落库**，且不写死任何业务信息。"""
+    from app.schemas.test_case import TestCaseUpdate
+    from app.services.test_assertion_service import (
+        SOURCE_MANUAL,
+        merge_assertions,
+        preview_assertions,
+    )
+
+    results: list[dict[str, Any]] = []
+    applied = 0
+    for item in data.cases:
+        try:
+            case = await service.get_test_case(project_identifier, item.identifier)
+        except Exception:  # noqa: BLE001 - 不存在/不可读都按 not_found 记账
+            results.append({"identifier": item.identifier, "status": "not_found"})
+            continue
+
+        fields = dict(case.custom_fields or {})
+        rule_field = item.rule_field or (
+            (item.requirement_rule or {}).get("field")
+            or (fields.get("requirement_rule") or {}).get("field")
+        )
+        preview = preview_assertions(
+            item.identifier, item.assertions,
+            name=case.name or "", rule_id=item.rule_id or fields.get("requirement_rule_id") or "",
+            rule_field=rule_field or "",
+        )
+        record = {"identifier": item.identifier, "status": "ok", **preview}
+
+        if preview["valid"] and not data.dry_run:
+            merged = merge_assertions(
+                fields, item.assertions,
+                rule_id=item.rule_id if item.rule_id is not None else fields.get("requirement_rule_id"),
+                rule_field=rule_field,
+                requirement_rule=item.requirement_rule,
+                source=SOURCE_MANUAL,
+            )
+            await service.update_test_case(
+                project_identifier, item.identifier, TestCaseUpdate(custom_fields=merged)
+            )
+            applied += 1
+            record["applied"] = True
+        elif preview["valid"]:
+            record["applied"] = False
+        else:
+            record["status"] = "invalid"
+            record["applied"] = False
+
+        results.append(record)
+
+    if applied:
+        await db.commit()
+
+    summary = {
+        "total": len(results),
+        "ok": sum(1 for r in results if r["status"] == "ok"),
+        "invalid": sum(1 for r in results if r["status"] == "invalid"),
+        "not_found": sum(1 for r in results if r["status"] == "not_found"),
+        "auto_executable": sum(1 for r in results if r.get("auto_executable")),
+        "applied": applied,
+    }
+    return SuccessResponse(success=True, data={
+        "dry_run": data.dry_run,
+        "summary": summary,
+        "results": results,
+        "source": SOURCE_MANUAL if not data.dry_run else None,
+        "note": (
+            "落库的断言会标记 assertions_source=manual；"
+            "需求文档变更后可用该标记列出需要人工复核的断言。"
+        ),
+    })
+
+
+# ============ 删除测试用例接口 ============
 @router.delete(
     "/test-cases/{test_case_identifier}",
     response_model=MessageResponse,
