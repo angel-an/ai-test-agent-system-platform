@@ -339,8 +339,14 @@ def _build_minimal_cases(
     # （名稱/步驟均為通用措辞），帶 test_case_steps，可作手工執行依據。
     companion_cases = _build_companion_cases(filename, test_mode=test_mode,
                                              module_hint=module_hint or module)
+    # rev107：篩選字段用例 + 導入條款用例（人工用例對比發現的兩類結構性缺口）
+    filter_cases = _build_filter_field_cases(
+        field_rules, filename, module_hint=module_hint or module)
+    import_cases = _build_import_clause_cases(
+        structure.full_text if structure is not None else text, filename)
     # 字段规则用例本身携带断言，不产生缺口；缺口只来自叙述条目回链失败的部分
-    return narrative_cases + field_cases + companion_cases, assertion_gaps
+    return (narrative_cases + field_cases + companion_cases
+            + filter_cases + import_cases), assertion_gaps
 
 
 def _is_review_annotation(item: str) -> bool:
@@ -748,6 +754,136 @@ _COMPANION_TEMPLATES: list[tuple[str, str, list[tuple[str, str]], str]] = [
      [("使用無權限賬號訪問或操作", "入口隱藏或操作被拒並給出無權限提示")],
      "權限負向"),
 ]
+
+
+#: rev107-1：篩選字段規則的判定標記（表單字段規則描述不會出現這些詞）
+_FILTER_RULE_MARKERS = ("搜索", "匹配", "篩選", "筛选", "模糊", "範圍", "范围", "查詢", "查询")
+
+
+def _is_filter_field_rule(rule: Any) -> bool:
+    """該字段規則是否來自「篩選查詢區」表（而非新建/編輯表單表）。"""
+    parts = [str(getattr(rule, "name", "") or ""),
+             str(getattr(rule, "description", "") or "")]
+    for c in (getattr(rule, "constraints", None) or []):
+        parts.append(str(getattr(c, "raw", c) or ""))
+    blob = " ".join(parts)
+    return any(marker in blob for marker in _FILTER_RULE_MARKERS)
+
+
+def _build_filter_field_cases(
+    field_rules: list,
+    filename: str,
+    *,
+    module_hint: str = "",
+    limit: int = 40,
+) -> list[TestCaseCreate]:
+    """篩選查詢區字段 → 每字段一條「匹配規則校驗」用例（rev107）。
+
+    人工對比缺口：篩選表（rev104 已入 field_rules）此前只產表單字段用例，
+    篩選字段的精準/模糊/範圍匹配規則無用例承接。此處每字段產一條
+    完整手工形態用例（步驟含查詢與結果核對），executable_track=manual
+    （需真實數據判定）。
+    """
+    cases: list[TestCaseCreate] = []
+    seen: set[str] = set()
+    for rule in field_rules or []:
+        if len(cases) >= limit:
+            break
+        if not _is_filter_field_rule(rule):
+            continue
+        name = str(getattr(rule, "name", "") or "").strip()
+        desc = str(getattr(rule, "description", "") or "").strip()
+        key = f"{name}|{desc[:30]}"
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        rule_point = f"篩選字段「{name}」匹配規則：{desc or '見需求文檔篩選查詢區'}"
+        cases.append(TestCaseCreate(
+            name=f"篩選-{name}-匹配規則校驗"[:120],
+            preconditions="已登錄並打開對應列表頁，列表存在已知測試數據",
+            description=f"來源文件：{filename}；{rule_point}",
+            priority=Priority.MEDIUM,
+            custom_fields={
+                "requirement_rule_id": _rule_id("FLT", filename, key),
+                "requirement_rule": {"field": name, "rule": rule_point,
+                                     "type": str(getattr(rule, "field_type", "") or "")},
+                "filter_field_case": True,
+                "executable_track": "manual",
+                "source_file": filename,
+            },
+            test_case_steps=[
+                {"step": f"在篩選區設置字段「{name}」的查詢條件", "result": "條件設置成功"},
+                {"step": "執行查詢", "result": "列表刷新且只返回符合匹配規則的數據"},
+                {"step": "核對返回結果與匹配規則一致性", "result": f"結果符合：{rule_point}"},
+            ] or None,
+        ))
+    return cases
+
+
+#: rev107-2：導入規則條款的識別（編號條款 + 導入語義詞）
+_IMPORT_CLAUSE_RE = re.compile(r"^\s*\d+\s*[、.．]\s*(.+)$")
+_IMPORT_CLAUSE_MARKERS = ("必填", "失敗", "重複", "保持", "最多", "導入", "导入",
+                          "創建", "创建", "更新", "刪除", "删除", "錯誤", "错误")
+
+
+def _extract_import_clauses(text: str, limit: int = 25) -> list[str]:
+    """從全文抽導入類編號條款（去重、截長），供每條款產一條用例。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in (text or "").splitlines():
+        m2 = _IMPORT_CLAUSE_RE.match(line or "")
+        if not m2:
+            continue
+        clause = m2.group(1).strip()
+        # 純章節標題（如「2.3 導入門店」「2.3.2 導入規則：」）不產用例——無謂語不成條款
+        if re.match(r"^[\d.]+\s*[^，；、]{2,14}$", clause):
+            continue
+        if len(clause) < 8 or len(clause) > 120:
+            continue
+        if not any(k in clause for k in _IMPORT_CLAUSE_MARKERS):
+            continue
+        key = clause[:40]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clause)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _build_import_clause_cases(
+    text: str,
+    filename: str,
+    *,
+    limit: int = 25,
+) -> list[TestCaseCreate]:
+    """導入規則/錯誤原因條款 → 每條款一條用例（rev107）。
+
+    人工對比缺口：導入 6 規則 + 9 錯誤原因此前被敘事抽取上限擠掉。
+    條款型規則一條款一用例（不再套 正/反向/邊界 三模板）。
+    """
+    cases: list[TestCaseCreate] = []
+    for clause in _extract_import_clauses(text, limit=limit):
+        short = clause[:44]
+        cases.append(TestCaseCreate(
+            name=f"導入-{short}校驗"[:120],
+            preconditions="已登錄且具備導入權限；已準備符合/不符合條款的導入文件",
+            description=f"來源文件：{filename}；導入條款：{clause}",
+            priority=Priority.MEDIUM,
+            custom_fields={
+                "requirement_rule_id": _rule_id("IMP", filename, clause[:60]),
+                "requirement_rule": {"field": "導入", "rule": clause},
+                "import_clause_case": True,
+                "executable_track": "manual",
+                "source_file": filename,
+            },
+            test_case_steps=[
+                {"step": f"構造觸發該條款的導入數據（{short}…）", "result": "文件可正常上傳"},
+                {"step": "執行導入並等待處理完成", "result": "導入結果與條款約定一致（成功/失敗及原因提示準確）"},
+            ] or None,
+        ))
+    return cases
 
 
 def _build_companion_cases(
