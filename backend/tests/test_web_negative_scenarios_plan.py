@@ -143,7 +143,17 @@ class TestScenarioParsing:
         assert rejects == [] and scenarios[0]["setup"] == []
 
     def test_setup_actions_are_a_closed_set(self):
-        assert SETUP_ACTIONS == frozenset({"click", "select_row", "append", "fill", "wait"})
+        assert SETUP_ACTIONS == frozenset(
+            {"click", "select_row", "append", "fill", "wait", "select_option", "click_selector"})
+
+    def test_select_option_step_requires_selector(self):
+        """rev103：select_option 必须带 selector（下拉根 CSS），缺省计划期拒绝。"""
+        steps = [{"action": "select_option", "labels": ["Case No."]}]
+        # 解析层放行（selector 缺失由运行期如实报错，与 fill 缺 field 同口径）
+        raw = dict(VALID, setup=steps)
+        scenarios, rejects = parse_negative_scenarios([raw])
+        assert rejects == [], rejects
+        assert scenarios[0]["setup"][0]["action"] == "select_option"
 
     def test_all_declared_setup_actions_are_parseable(self):
         steps = [{"action": a, "labels": ["x"], "field": "限购商品", "value": "1"}

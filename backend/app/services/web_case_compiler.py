@@ -63,7 +63,7 @@ FORM_CHECK_KINDS = frozenset(LOCATOR_DEPENDENT_KINDS | SOFT_CHECK_KINDS | {"rang
 
 #: setup 允许的**动作原语闭集**。未在此集合中的动作一律**拒绝该场景**——
 #: 静默忽略未知动作会变成"配置了但从未执行"，比直接拒绝更危险。
-SETUP_ACTIONS: frozenset[str] = frozenset({"click", "select_row", "append", "fill", "wait"})
+SETUP_ACTIONS: frozenset[str] = frozenset({"click", "select_row", "append", "fill", "wait", "select_option", "click_selector"})
 
 #: 允许的目标入口（仅作审计标注与文案，平台不据此猜步骤）。
 #: 唯一的**行为差异**：``create`` 表示"就用平台已经打开的那个新建表单"——
@@ -3191,6 +3191,44 @@ _FORM_EXECUTOR_TS = r"""
             if (!(await input.count().catch(() => 0))) return `${where}：未定位到字段「${field}」`;
             await input.fill(String(step.value || ''), {timeout: OP_T});
             await input.blur({timeout: OP_T}).catch(() => undefined);
+            continue;
+          }
+          if (action === 'click_selector') {
+            // rev103：按原始 CSS 点击（无文本的图标按钮等，如列表工具条 filter 图标）。
+            // selector 支持 Playwright 扩展（:visible / >> nth=-1 等）。
+            const selCs = String(step.selector || '').trim();
+            if (!selCs) return `${where}：click_selector 缺少 selector`;
+            const elCs = anyScope.locator(selCs).first();
+            if (!(await elCs.count())) return `${where}：未定位到 ${selCs}`;
+            await elCs.click({timeout: 8000});
+            await page.waitForTimeout(Math.max(300, Number(step.ms) || 800));
+            continue;
+          }
+          if (action === 'select_option') {
+            // rev103：antd Select 交互原语（filter 面板等 list 功能点必需）。
+            // selector=下拉根 CSS；labels=选项文本候选。下拉渲染在 portal，
+            // 必须用 anyScope 同一文档查询（rev92 的既有教训）。
+            const sel = String(step.selector || '').trim();
+            if (!sel) return `${where}：select_option 缺少 selector（下拉根 CSS）`;
+            const root = anyScope.locator(sel).first();
+            if (!(await root.count())) return `${where}：未定位到下拉根 ${sel}`;
+            await root.click({timeout: 8000}).catch(() => undefined);
+            await page.waitForTimeout(600);
+            const optLabels = Array.isArray(step.labels)
+              ? step.labels.map((s: any) => String(s)) : [];
+            let picked = false;
+            for (const optText of optLabels) {
+              const opt = anyScope.locator(
+                `.ant-select-dropdown:visible .ant-select-item:has-text("${optText}"),`
+                + ` .ant-select-dropdown:visible li:has-text("${optText}")`,
+              ).first();
+              if (!(await opt.count())) continue;
+              await opt.click({timeout: 5000}).catch(() => undefined);
+              picked = true;
+              break;
+            }
+            if (!picked) return `${where}：下拉选项 ${JSON.stringify(optLabels)} 未命中`;
+            await page.waitForTimeout(400);
             continue;
           }
           return `${where}：未知动作（解析器本应在计划期拒绝该场景）`;
