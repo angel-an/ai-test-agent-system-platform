@@ -1945,8 +1945,22 @@ _FORM_EXECUTOR_TS = r"""
   }
 
   async function runFormChecks() {
-    const modal = await openForm();
-    const fieldDefs: Record<string, any> = FORM_PLAN.locators.fields;
+    // rev101：纯场景计划（零字段检查、无 create 语义场景）**跳过主流程 openForm**——
+    // list 类功能点（导出/排序/搜索）根本没有"表单"可开，硬开只会误点工具条按钮
+    // （实测：toolbar_modal 的 openForm 会真的点 Export/Email a Link 并发请求）。
+    // 场景的 setup 自带入口；create 语义的场景（要用平台已打开的表单）仍预开。
+    const planChecks: any[] = FORM_PLAN.checks || [];
+    const planScenarios: any[] = FORM_PLAN.negative_scenarios || [];
+    const needsCanvas = planScenarios.some(
+      (s: any) => String((s && s.target_entry) || 'custom') === 'create');
+    let modal: any = null;
+    if (planChecks.length > 0 || planScenarios.length === 0 || needsCanvas) {
+      modal = await openForm();
+    } else {
+      console.log('CS_FORM_DIAG scenario-only plan: 跳过主流程 openForm（场景自带入口，'
+        + '无 create 语义场景）');
+    }
+    const fieldDefs: Record<string, any> = (FORM_PLAN.locators || {}).fields || {};
     // 负路径提交队列（rev67）：客户端层拿不到证据的「期望拒绝」断言，进提交层验证。
     // 口径（2026-09-25 用户确认）：只做负路径提交（空必填/非法探针值），正常不会写入合法数据；
     // 被测端若竟然接受 → 记 blocked（疑似缺陷），由末尾硬失败暴露。
@@ -3269,6 +3283,29 @@ _FORM_EXECUTOR_TS = r"""
             // 但 ``target_entry=create`` 的场景**就是**要在这个已打开的新建表单里操作，
             // 关掉反而错——平台不替用户决定，由配置语义说了算。
             if (String(sc.target_entry || 'custom') !== 'create') await closeAnyForm();
+            // rev102：场景间**行选中状态隔离**——清掉上一轮残留的列表勾选。
+            // 实测（TR-337）：场景共享页面状态，"未选中应阻止"类场景继承了上一轮的
+            // 勾选，请求真实发出且被受理 ⇒ 判定层如实判「受理了应被拒绝的请求」——
+            // 这是对 SUT 的**假缺陷指控**。每个场景自声明 setup，残留选择是执行假象。
+            // 注意：每次点击会触发 React 重渲染、后续复选框 detach——必须每轮**重新查询**
+            // 且给每个小操作带上显式短超时（默认 30s 超时 × N 个 = 挂死整轮，实测 TR-339）。
+            // 注意 2（实测探针 2026-10-14）：`:checked` 会同时命中**隐藏固定列克隆表**的
+            // input（antd fixed-left clone 排在 DOM 前面）——必须加 `:visible`，否则点到
+            // 隐藏克隆、可见勾选原封不动，清选形同虚设（TR-340 假缺陷指控的根源）。
+            try {
+              for (let guard = 0; guard < 30; guard++) {
+                const checkedNow = anyScope.locator(
+                  '.ant-table-tbody input[type=checkbox]:checked:visible');
+                if (!(await checkedNow.count().catch(() => 0))) break;
+                const cb = checkedNow.first();
+                const wrap = cb.locator('xpath=..');
+                const wrapCls = String(await wrap.getAttribute('class', {timeout: 800}).catch(() => ''));
+                await (wrapCls.includes('ant-checkbox') ? wrap : cb)
+                  .click({timeout: 3000}).catch(() => undefined);
+                await page.waitForTimeout(300);
+              }
+              await page.waitForTimeout(400);
+            } catch { /* 清选失败不阻断——由场景 setup/判定自然暴露 */ }
             const setupErr = await runSetup(sc);
             if (setupErr) {
               record(sc, 'unverified',
