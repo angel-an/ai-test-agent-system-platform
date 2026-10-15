@@ -78,11 +78,15 @@ def _score_sub_function_match(case_text: str, *name_values: str | None) -> int:
 
 #: Web 脚本模板键 → 资产命名标签。每个键对应一个**按具体业务流编写**的模板，
 #: 没有对应键时不得退回其它业务模板（详见 `_resolve_web_template_key`）。
+#: `yl_masterdata`：2026-10-15 页面提测部署后，包装器 `_generate_yl_masterdata_script`
+#: 已按探针校准结果实现（同日提交）；字段级定位仍由子功能 custom_config.field_locators
+#: 的 selector_hint 驱动（页面为英文标签）。
 _WEB_TEMPLATE_LABELS: dict[str, str] = {
     "cs_module": "CS工单管理",
     "enterprise_storage_recharge": "B端企业储值充值",
     "storage_writeoff": "B端储值免单活动",
     "purchase_limit": "B端会员限购商品管理",
+    "yl_masterdata": "YL主数据管理",
 }
 
 #: 「储值免单活动」业务的**正向**识别词（仅用于确认该业务，不再作为通用兜底）。
@@ -1848,6 +1852,18 @@ class WebCaseLinkService:
                 coverage_snippet=coverage_snippet,
                 form_executor=form_executor,
             )
+        if template_key == "yl_masterdata":
+            # 2026-10-15 提测部署后落地：探针（probe_yl_store_v3/v4）已校准真实菜单
+            # （英文 Master Data Management → Shop Management）、列表路由与整页表单
+            # 结构，包装器按 cs_module 同构实现（登录/OCR/iframe 链路复用）。
+            return self._generate_yl_masterdata_script(
+                test_case,
+                base_url,
+                navigation_path,
+                manifest_block=manifest_block,
+                coverage_snippet=coverage_snippet,
+                form_executor=form_executor,
+            )
         raise ValueError(
             f"[unsupported_web_template] 未知的 Web 脚本模板键: {template_key}"
         )
@@ -2078,6 +2094,318 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
             ["主數據管理", "主数据管理", "YL-主數據", "YL-主数据",
              "店鋪主數據", "店铺主数据", "商品主數據", "支付方式主數據"],
         )
+
+    def _yl_masterdata_child_menu(self, test_case: TestCase) -> tuple[str, list[str]]:
+        """按用例文本推断 YL 主数据的**子菜单**（店鋪/商品/支付方式）。
+
+        返回 ``(业务标签, 子菜单候选集)``。UAT 实测（2026-10-15 探针）菜单为
+        **英文**：Master Data Management → Shop Management；中文候选仅作
+        兼容（UAT 语言切换或后续版本改回中文时不至于整批断链）。
+        """
+        text = self._case_route_text(test_case)
+        if self._route_keyword_hit(text, ["商品主數據", "商品主数据", "Goods Management"]):
+            return "商品主數據", ["Goods Management", "商品主數據", "商品管理", "Goods"]
+        if self._route_keyword_hit(text, ["支付方式主數據", "支付方式主数据", "Payment"]):
+            return "支付方式主數據", ["Payment Method", "支付方式主數據", "支付方式管理", "Payment"]
+        return "店鋪主數據", ["Shop Management", "店鋪主數據", "店鋪管理", "Shop"]
+
+    def _generate_yl_masterdata_script(
+        self,
+        test_case: TestCase,
+        base_url: str,
+        navigation_path: list[str],
+        *,
+        manifest_block: str = "",
+        coverage_snippet: str = "",
+        form_executor: str = "",
+    ) -> str:
+        """YL 主數據管理（店鋪/商品/支付方式主數據）业务模板。
+
+        校准依据（2026-10-15 部署日探针 probe_yl_store_v3/v4，UAT 已提测）：
+        - 登录/验证码 OCR/CRM iframe 链路与 CS 模板完全同构（同一企业控制台），
+          故以 cs_module 模板为底，只改菜单导航与业务文案；
+        - 菜单：CRM 左侧 **Master Data Management**（英文）→ 子菜单按用例业务推断
+          （店鋪=Shop Management）；
+        - 列表页路由 ``#/mainData/shopManage``；「Add Store」为**同页签**跳转到
+          ``#/mainData/shopManage/addStores?mode=add`` 的整页表单（非弹窗），
+          表单容器选择器由子功能 custom_config.field_locators.modal 承载
+          （实测 ``.ant-form``）；
+        - 表单标签为**英文**（Store Name (CN)…），字段定位以 custom_config 里
+          探针实测的 selector_hint 为准；中文 has-text 兜底不再适用（页面无中文标签）。
+        """
+        path_steps = json.dumps(navigation_path, ensure_ascii=False, indent=2)
+        ocr_url = os.environ.get("WEB_TEST_CAPTCHA_OCR_URL") or (
+            f"http://localhost:8000/api/v2/projects/PR-9/web-tests/captcha-ocr"
+        )
+        biz_label, child_labels = self._yl_masterdata_child_menu(test_case)
+        child_labels_json = json.dumps(child_labels, ensure_ascii=False)
+        click_by_text_js = render_click_by_text(
+            menu_selectors="generic", text_fallback="first", dom_click_fallback=True
+        )
+        required_click_js = render_required_click()
+        return f"""import {{ test, expect, type BrowserContext, type FrameLocator, type Locator, type Page }} from '@playwright/test';
+
+const LOGIN_URL = process.env.WEB_TEST_BASE_URL || {json.dumps(base_url, ensure_ascii=False)};
+const USERNAME = process.env.WEB_TEST_USERNAME;
+const PASSWORD = process.env.WEB_TEST_PASSWORD;
+// eatizen UAT 控制台为验证码登录：回调平台验证码 OCR 端点识别
+const CAPTCHA_OCR_URL = process.env.WEB_TEST_CAPTCHA_OCR_URL || {json.dumps(ocr_url)};
+const WEB_VALIDATION_PATH = {path_steps};
+{manifest_block}
+type ClickScope = Page | FrameLocator;
+
+{click_by_text_js}
+
+{required_click_js}
+
+// ---- 菜单定位（与 cs_module 模板同一套，rev64 语义）------------------------
+// antd SubMenu 是开关语义：先读 aria-expanded，已展开绝不重复点击。
+async function visibleMenuTexts(scope: ClickScope): Promise<string[]> {{
+  const items = scope.locator('.ant-menu-item, .ant-menu-submenu-title, [role="menuitem"]');
+  const count = Math.min(await items.count().catch(() => 0), 80);
+  const texts: string[] = [];
+  for (let i = 0; i < count; i += 1) {{
+    const text = (await items.nth(i).innerText().catch(() => '')).replace(/\\s+/g, ' ').trim();
+    if (text) texts.push(text);
+  }}
+  return Array.from(new Set(texts));
+}}
+
+async function submenuTitle(scope: ClickScope, label: string): Promise<Locator | null> {{
+  const candidates = [
+    scope.locator('.ant-menu-submenu-title', {{ hasText: new RegExp(label) }}).first(),
+    scope.getByRole('menuitem', {{ name: new RegExp(label) }}).first(),
+  ];
+  for (const locator of candidates) {{
+    if (await locator.count().catch(() => 0)) return locator;
+  }}
+  return null;
+}}
+
+async function findMenuItem(scope: ClickScope, labels: string[]): Promise<Locator | null> {{
+  const targets: ClickScope[] = [];
+  if (await scope.locator('.ant-menu-submenu-popup').first().count().catch(() => 0)) {{
+    targets.push(scope.locator('.ant-menu-submenu-popup').first() as unknown as ClickScope);
+  }}
+  targets.push(scope);
+  for (const target of targets) {{
+    for (const label of labels) {{
+      const candidates = [
+        target.locator('.ant-menu-item', {{ hasText: new RegExp(label) }}).first(),
+        target.getByRole('menuitem', {{ name: new RegExp(label) }}).first(),
+        target.getByText(new RegExp(label), {{ exact: false }}).first(),
+      ];
+      for (const locator of candidates) {{
+        if (!(await locator.count().catch(() => 0))) continue;
+        try {{
+          await locator.waitFor({{ state: 'visible', timeout: 1500 }});
+          return locator;
+        }} catch {{
+          // 换下一个候选定位器
+        }}
+      }}
+    }}
+  }}
+  return null;
+}}
+
+async function expandSubmenu(
+  scope: ClickScope,
+  labels: string[],
+  childLabels: string[],
+  timeoutMs = 20000,
+): Promise<boolean> {{
+  const deadline = Date.now() + timeoutMs;
+  let clickedOnce = false;
+  while (Date.now() < deadline) {{
+    for (const label of labels) {{
+      const title = await submenuTitle(scope, label);
+      if (!title) continue;
+      try {{
+        await title.waitFor({{ state: 'visible', timeout: 2500 }});
+      }} catch {{
+        continue;
+      }}
+      if ((await title.getAttribute('aria-expanded').catch(() => null)) === 'true') return true;
+      if (await findMenuItem(scope, childLabels)) return true;
+      if (clickedOnce) {{
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }}
+      clickedOnce = true;
+      try {{
+        await title.click({{ timeout: 5000 }});
+      }} catch {{
+        await title.hover({{ timeout: 5000 }}).catch(() => undefined);
+      }}
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      if ((await title.getAttribute('aria-expanded').catch(() => null)) === 'true') return true;
+      if (await scope.locator('.ant-menu-submenu-popup').first().isVisible().catch(() => false)) return true;
+      if (await findMenuItem(scope, childLabels)) return true;
+    }}
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }}
+  return false;
+}}
+
+async function clickMenuItem(scope: ClickScope, labels: string[], timeoutMs = 15000): Promise<boolean> {{
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {{
+    const locator = await findMenuItem(scope, labels);
+    if (locator) {{
+      try {{
+        await locator.click({{ timeout: 5000 }});
+        return true;
+      }} catch {{
+        try {{
+          await locator.hover({{ timeout: 3000 }});
+          await locator.click({{ timeout: 5000, force: true }});
+          return true;
+        }} catch {{
+          // 继续等下一轮
+        }}
+      }}
+    }}
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }}
+  return false;
+}}
+
+async function ocrCaptcha(page: Page): Promise<string | null> {{
+  const img = page.locator('img[src^="data:image"]').first();
+  if (!(await img.count())) return null;
+  try {{
+    const shot = await img.screenshot({{ timeout: 5000 }});
+    const resp = await page.request.post(CAPTCHA_OCR_URL, {{
+      data: {{ image_base64: shot.toString('base64') }},
+      timeout: 20000,
+    }});
+    if (!resp.ok()) return null;
+    const body = await resp.json();
+    const text = ((body && body.data && body.data.text) || '').trim();
+    return text.length >= 4 ? text : null;
+  }} catch {{
+    return null;
+  }}
+}}
+
+async function loginToConsole(page: Page) {{
+  // eatizen UAT：用户名/密码/图形验证码。OCR 可能误读 → 整页重试 10 次，
+  // 每次重新进入登录页刷新验证码；登录成功判据=离开 /login。
+  for (let attempt = 0; attempt < 10; attempt += 1) {{
+    // 环境阻断前置判定：WAF/网关拦截时登录页返回 403/503，页面根本不渲染。
+    const loginResponse = await page.goto(LOGIN_URL, {{ waitUntil: 'domcontentloaded', timeout: 60000 }});
+    const loginStatus = loginResponse ? loginResponse.status() : 0;
+    if (loginStatus === 403 || loginStatus === 503 || loginStatus >= 500) {{
+      throw new Error(
+        `ENVIRONMENT_BLOCKED ${{JSON.stringify({{ reason: 'login_http_status', status: loginStatus }})}} `
+        + `登录页返回 HTTP ${{loginStatus}}（疑似 WAF/网关拦截，非产品缺陷）`,
+      );
+    }}
+    const user = page.locator('#login_username');
+    const pass = page.locator('#login_password');
+    await user.waitFor({{ state: 'visible', timeout: 30000 }});
+    await user.fill(USERNAME);
+    await pass.fill(PASSWORD);
+    const code = await ocrCaptcha(page);
+    if (!code) continue;
+    await page.locator('#login_validateCode').fill(code);
+    await page.locator('button:has-text("Login Immediately"), button.ant-btn-primary').first().click();
+    await page.waitForTimeout(6000);
+    if (!page.url().includes('/login')) return true;
+  }}
+  return false;
+}}
+
+async function openCrm(page: Page, context: BrowserContext) {{
+  // 登录后控制台顶栏有「CRM」入口；可能当前页内嵌，也可能新开页签。
+  const crmPagePromise = context.waitForEvent('page', {{ timeout: 20000 }}).catch(() => null);
+  let clicked = false;
+  for (let attempt = 0; attempt < 3 && !clicked; attempt += 1) {{
+    clicked = await clickByText(page, ['CRM']);
+    if (!clicked) await page.waitForTimeout(2000);
+  }}
+  expect(clicked, '未找到或无法点击：控制台顶部 CRM 入口（已重试 3 次）').toBeTruthy();
+  const newPage = await crmPagePromise;
+  const appPage = newPage || page;
+  await appPage.waitForLoadState('domcontentloaded', {{ timeout: 60000 }}).catch(() => undefined);
+  // 嵌入式 CRM 首屏加载较慢（实测约 15s）：等待左侧菜单或 iframe 出现
+  await appPage.waitForFunction(
+    () => /Master Data Management|Customer Service|Member Center/.test(document.body.innerText) ||
+      document.querySelectorAll('iframe').length > 0,
+    null,
+    {{ timeout: 60000 }},
+  ).catch(() => undefined);
+  await appPage.waitForTimeout(3000);
+  return appPage;
+}}
+
+async function getCrmScope(appPage: Page): Promise<ClickScope> {{
+  const iframe = appPage.locator('iframe').first();
+  if (await iframe.count()) {{
+    await iframe.waitFor({{ state: 'attached', timeout: 30000 }}).catch(() => undefined);
+    return appPage.frameLocator('iframe').first();
+  }}
+  return appPage;
+}}
+
+test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
+  // 默认 30s 用例预算会在登录/跳转阶段被掐断，显式放宽（同 cs_module 口径）。
+  test.setTimeout(1800000);
+  test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 Web 冒烟执行');
+
+  expect(await loginToConsole(page), '企业控制台登录失败（验证码 OCR 重试 10 次后仍未离开登录页）').toBeTruthy();
+
+  const appPage = await openCrm(page, context);
+  let scope = await getCrmScope(appPage);
+  // YL 主数据菜单（UAT 实测为英文：Master Data Management）
+  const parentLabels = ['Master Data Management', '主數據管理', '主数据管理'];
+  const childLabels = {child_labels_json};
+  let expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
+  if (!expanded) {{
+    scope = appPage;
+    expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
+  }}
+  if (!expanded) {{
+    const dump = JSON.stringify(await visibleMenuTexts(scope));
+    console.log(`YL_MENU_DUMP ${{dump}}`);
+    expect(expanded, `未找到或未能展开 Master Data Management 菜单；当前可见菜单=${{dump}}`).toBeTruthy();
+  }}
+  await appPage.waitForTimeout(1500);
+  let childClicked = await clickMenuItem(scope, childLabels, 15000);
+  if (!childClicked) childClicked = await clickMenuItem(appPage, childLabels, 10000);
+  if (!childClicked) {{
+    const dump = JSON.stringify(await visibleMenuTexts(scope));
+    console.log(`YL_SUBMENU_DUMP ${{dump}}`);
+    expect(childClicked, `未找到 {biz_label} 子菜单（候选=${{childLabels.join('/')}}）；当前可见菜单=${{dump}}`).toBeTruthy();
+  }}
+  // 断言：列表已渲染（antd 表格或 Total 分页信息）——15s 轮询（口径同 CS rev2026-10-10）
+  const listProbe = async () =>
+    (await scope.locator('.ant-table, table').first().isVisible().catch(() => false)) ||
+    (await scope.getByText(/Total\\s*\\d+/).first().isVisible().catch(() => false));
+  const listT0 = Date.now();
+  let listRendered = await listProbe();
+  const listDeadline = listT0 + 15000;
+  let listAttempts = 1;
+  while (!listRendered && Date.now() < listDeadline) {{
+    await appPage.waitForTimeout(500);
+    listRendered = await listProbe();
+    listAttempts += 1;
+  }}
+  console.log(`YL_LIST_READY ${{JSON.stringify({{ rendered: listRendered, attempts: listAttempts, elapsedMs: Date.now() - listT0 }})}}`);
+  if (!listRendered) {{
+    const bodyText = (await scope.locator('body').innerText().catch(() => '')).replace(/\\s+/g, ' ').slice(0, 400);
+    console.log(`YL_LIST_DUMP ${{JSON.stringify({{ url: appPage.url(), bodyLen: bodyText.length, body: bodyText }})}}`);
+    await appPage.screenshot({{ path: `yl-list-not-rendered-${{Date.now()}}.png`, fullPage: true }}).catch(() => {{}});
+  }}
+  expect(listRendered, 'YL 主数据列表未渲染（15s 轮询后仍未检测到表格或 Total 分页）').toBeTruthy();
+
+  // rev71：注入的 form_executor / coverage_snippet 引用变量名统一为 appScope
+  const appScope = scope as any;
+
+  // 编译断言执行：由定位器表的 flow 打开表单（executor 自己点 Add Store，避免重复点击）
+{form_executor}{coverage_snippet}}});
+"""
 
     def _is_enterprise_storage_recharge_case(self, test_case: TestCase) -> bool:
         return self._route_keyword_hit(

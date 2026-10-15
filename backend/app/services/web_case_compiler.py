@@ -2671,12 +2671,15 @@ _FORM_EXECUTOR_TS = r"""
         const footer = curModal.locator('.ant-modal-footer button');
         // rev98：补 发送/Send（O10 toolbar_modal 的 email 弹窗形态，实测 67197 入口）。
         // 只扩展候选集合，既有页面仍由排在前面的关键词命中，不影响已覆盖资产。
-        let btn = footer.filter({hasText: /确\s*定|提\s*交|保\s*存|确\s*认|发\s*送|Send|ok/i}).last();
+        // rev108：补 确认/Confirm（YL 店铺主数据整页表单实测 2026-10-15：提交按钮为
+        // 「Confirm/Cancel」平铺在页面底部，无 .ant-modal-footer；旧候选 保存/Save/Submit
+        // 全部落空 → 提交层 16 条断言全部 unverified「未找到提交按钮」）。
+        let btn = footer.filter({hasText: /确\s*定|提\s*交|保\s*存|确\s*认|发\s*送|Send|Confirm|ok/i}).last();
         if (!(await btn.count())) btn = footer.locator('.ant-btn-primary').last();
         if (!(await btn.count())) {
           // rev79：整页表单（direct_url 流程，如 CS RetroClaim/GoodWill 创建页）
           // 没有 .ant-modal-footer——顶栏 Save 按钮直接在页面作用域里找
-          btn = anyScope.locator('button:visible').filter({hasText: /保\s*存|Save|Submit/i}).first();
+          btn = anyScope.locator('button:visible').filter({hasText: /保\s*存|Save|Submit|确\s*认|Confirm/i}).first();
         }
         return (await btn.count()) ? btn : null;
       };
