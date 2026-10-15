@@ -1813,7 +1813,14 @@ _FORM_EXECUTOR_TS = r"""
   }
 
   // 单选组必须在**所属表单项**内定位：整页 :has-text 容易命中其它行。
-  function radioOption(modal: any, field: string, option: string) {
+  // rev109：新增可选 def 参数——字段名与页面标签不同语言时（YL 中文字段名/英文页面），
+  // has-text 按字段名找必落空；配置了 selector_hint 时直接按 hint 定位再按选项文本过滤。
+  // def 由**调用方**传入（fieldDefs 在内层作用域，此处拿不到）。
+  function radioOption(modal: any, field: string, option: string, def?: any) {
+    const h = hintSel(def);
+    if (h) {
+      return modal.locator(h).filter({hasText: option}).first();
+    }
     const item = modal.locator(`.ant-form-item:has-text("${field}")`).first();
     return item.locator('.ant-radio-wrapper').filter({hasText: option}).first();
   }
@@ -2417,7 +2424,32 @@ _FORM_EXECUTOR_TS = r"""
                    value ? `默认显示值=${value}（期望 ${check.option}）` : '未读到下拉当前值（可能未选中）');
             continue;
           }
-          const wrap = radioOption(modal, check.field, check.option);
+          // rev109：开关（antd Switch）默认态——YL 店铺表单的 營業狀態/排隊/訂位/外賣
+          // 都是 switch，人工用例断言「默認開啟/默認關閉」。优先按 selector_hint 定位
+          // （字段名是中文而页面标签是英文，has-text 兜底会落空）；aria-checked 缺失时
+          // 退回 ant-switch-checked 类名判定（antd v3/v4 兼容）。
+          if (String(def0.kind || '') === 'switch') {
+            const root = hintLocator(modal, def0)
+              || modal.locator(`.ant-form-item:has-text("${check.field}") .ant-switch`).first();
+            if (!(await root.count())) {
+              recAll(check, name, 'unverified', '未定位到开关控件（定位现场见 [observation] 行）');
+              continue;
+            }
+            const aria = await root.first().getAttribute('aria-checked').catch(() => null);
+            let on: boolean | null = null;
+            if (aria === 'true') on = true;
+            else if (aria === 'false') on = false;
+            else {
+              const cls = String((await root.first().getAttribute('class').catch(() => '')) || '');
+              on = cls.includes('ant-switch-checked') ? true : (cls ? false : null);
+            }
+            if (on === null) { recAll(check, name, 'unverified', '开关状态不可读（无 aria-checked 且无样式类）'); continue; }
+            const wantOn = /開啟|开启|on|enabled|true/i.test(String(check.option || ''));
+            recAll(check, name, on === wantOn ? 'pass' : 'unverified',
+                   `开关默认状态=${on ? '開啟' : '關閉'}（期望 ${check.option}）`);
+            continue;
+          }
+          const wrap = radioOption(modal, check.field, check.option, fieldDefs[check.field]);
           const checked = await isRadioChecked(wrap);
           recAll(check, name, checked ? 'pass' : 'unverified',
                  checked ? `默认选中=${check.option}` : `未观测到默认选中 ${check.option}`);
@@ -2508,11 +2540,27 @@ _FORM_EXECUTOR_TS = r"""
         }
         if (check.type === 'visibility') {
           await ensureMode(page, modal, check.mode);
-          const option = radioOption(modal, check.field, check.option);
-          if (!(await option.count())) {
-            recAll(check, name, 'unverified', `未找到选项 ${check.option}`); continue;
+          // rev109：切换源是 switch（YL 店铺 排隊/訂位/外賣）时点开关而不是单选——
+          // radioOption 按中文字段名 has-text 找 .ant-radio-wrapper，英文页面上必落空。
+          const vdef = fieldDefs[check.field] || {};
+          let toggled = false;
+          if (String(vdef.kind || '') === 'switch') {
+            const sw = hintLocator(modal, vdef)
+              || modal.locator(`.ant-form-item:has-text("${check.field}") .ant-switch`).first();
+            if (await sw.count()) {
+              await sw.first().click({timeout: 8000});
+              toggled = true;
+            }
+          } else {
+            const option = radioOption(modal, check.field, check.option, vdef);
+            if (await option.count()) {
+              await option.click({timeout: 8000});
+              toggled = true;
+            }
           }
-          await option.click({timeout: 8000});
+          if (!toggled) {
+            recAll(check, name, 'unverified', `未找到切换控件 ${check.field}=${check.option}`); continue;
+          }
           await page.waitForTimeout(900);
           const missing: string[] = [];
           for (const label of check.expect_labels || []) {
