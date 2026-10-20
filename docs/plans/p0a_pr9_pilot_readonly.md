@@ -136,7 +136,7 @@
 **执行命令**（待配置环境后执行）：
 ```bash
 cd backend
-python -m pytest tests/api/pr9_points_mall/test_p1_query.py -v
+python -m pytest tests/api/pr9_points_mall/test_p1_readonly_query.py -v
 ```
 
 ### 5.3 执行后检查

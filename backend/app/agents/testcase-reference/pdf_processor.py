@@ -133,12 +133,22 @@ def extract_pdf_text(pdf_data: bytes, filename: str = "unknown.pdf", cache: Opti
             if enable_multimodal:
                 try:
                     from langchain_community.document_loaders.parsers import LLMImageBlobParser
-                    from langchain.chat_models import init_chat_model
 
                     # 使用豆包模型进行图片解析
                     doubao_api_key = os.getenv("DOUBAO_API_KEY", "")
                     if doubao_api_key:
-                        image_llm = init_chat_model("doubao:doubao-vision", api_key=doubao_api_key)
+                        from langchain_openai import ChatOpenAI
+
+                        image_llm = ChatOpenAI(
+                            base_url=os.getenv(
+                                "DOUBAO_API_BASE",
+                                "https://ark.cn-beijing.volces.com/api/v3",
+                            ),
+                            api_key=doubao_api_key,
+                            model=os.getenv(
+                                "DOUBAO_MODEL", "doubao-seed-2-1-turbo-260628"
+                            ),
+                        )
                         image_parser = LLMImageBlobParser(model=image_llm)
 
                         loader = PyMuPDF4LLMLoader(

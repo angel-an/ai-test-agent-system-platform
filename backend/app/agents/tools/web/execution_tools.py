@@ -32,6 +32,10 @@ from app.models.attachment import Attachment, AttachmentEntityType
 from app.models.web_function import WebSubFunction
 from app.config.minio_client import MinIOClient
 
+# P1: 统一执行入口 — 所有执行路径必须经过预检
+from app.services.unified_execution import execute_with_preflight
+from app.test_platform.runtime_context import RunContext
+
 
 # ============================================================================
 # Python 解释器路径解析
@@ -616,6 +620,11 @@ async def execute_web_script(
     sub_function_ids: Optional[str] = None,
     workspace_mode: str = "auto",
     config: Optional[RunnableConfig] = None,
+    # P1: 新增 run_id 和 mode 参数，用于预检
+    run_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+    artifact_version: Optional[str] = None,
+    mode: str = "safe",
 ) -> str:
     """
     执行 Web 测试脚本（支持 Playwright .spec.ts 和 Python/Playwright .py 脚本）
@@ -687,6 +696,82 @@ async def execute_web_script(
         ... )
     """
     try:
+        # P1: 统一预检门禁 — 所有执行必须经过预检
+        # 如果没有 run_id，自动生成一个（Agent 场景下允许自动生成，
+        # 因为这里的 run_id 仅用于追踪，不涉及 ArtifactPublisher 发布流程）
+        if not run_id:
+            from datetime import datetime as _dt
+            run_id = f"run_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+            logger.info(
+                "[execute_web_script] 自动生成 run_id: %s, project=%s, script=%s",
+                run_id, project_identifier, local_script_path,
+            )
+
+        # 构建 RunContext 并执行预检
+        from app.test_platform.runtime_context import create_run_context
+        context = create_run_context(
+            project_id=project_identifier,
+            run_id=run_id,
+            artifact_id=artifact_id,
+            artifact_version=artifact_version,
+            mode=mode if mode in ("safe", "live") else "safe",
+        )
+
+        # 调用统一执行入口（预检 + 执行）
+        # Agent Tool 场景：跳过 manifest/provenance 检查（脚本通过 write_file 等方式创建，
+        # 不走 ArtifactPublisher 发布流程，因此没有 manifest.json 和 script_provenance.json）
+        result = await execute_with_preflight(
+            context=context,
+            track="web",
+            skip_manifest_check=True,
+            executor=lambda: _execute_web_script_impl(
+                local_script_path=local_script_path,
+                framework=framework,
+                reporter=reporter,
+                project_identifier=project_identifier,
+                sub_function_id=sub_function_id,
+                sub_function_ids=sub_function_ids,
+                workspace_mode=workspace_mode,
+                config=config,
+                run_id=run_id,
+                artifact_id=artifact_id,
+                artifact_version=artifact_version,
+                mode=mode,
+            ),
+        )
+
+        # 如果预检阻断，直接返回阻断信息
+        if result.get("status") == "blocked":
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        # 正常执行完成，返回结果
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({
+            "success": False,
+            "error": f"执行脚本时发生错误: {str(e)}"
+        }, ensure_ascii=False, indent=2)
+
+
+async def _execute_web_script_impl(
+    local_script_path: str,
+    framework: str = "auto",
+    reporter: str = "html",
+    project_identifier: str = "PR-1",
+    sub_function_id: Optional[str] = None,
+    sub_function_ids: Optional[str] = None,
+    workspace_mode: str = "auto",
+    config: Optional[RunnableConfig] = None,
+    run_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+    artifact_version: Optional[str] = None,
+    mode: str = "safe",
+) -> dict[str, Any]:
+    """Web 脚本执行的实际实现（预检通过后调用）。"""
+    try:
         # === P0-2: 修复循环硬性上限检查（优化版：按任务窗口隔离）===
         thread_id = "default"
         if config:
@@ -725,7 +810,7 @@ async def execute_web_script(
                             )
                 except Exception as stat_e:
                     print(f"[Web Script Execution] MAX_HEAL_REACHED 更新子功能 {sf_id} 统计失败: {stat_e}")
-            return json.dumps({
+            return {
                 "success": False,
                 "error": "MAX_HEAL_REACHED",
                 "error_type": "SCRIPT_ERROR",
@@ -741,7 +826,7 @@ async def execute_web_script(
                 "sub_function_id": sub_function_id,
                 "sub_function_ids": sub_function_ids,
                 "recommendation": "请生成失败分析报告，总结失败原因和修复建议，然后结束任务等待用户指示",
-            }, ensure_ascii=False, indent=2)
+            }
         # === 守卫结束 ===
 
         # P0-4: 执行前环境预检，提前发现环境问题
@@ -772,14 +857,14 @@ async def execute_web_script(
                 except Exception as stat_e:
                     print(f"[Web Script Execution] 预检失败更新子功能 {sub_function_id} 统计失败: {stat_e}")
 
-            return json.dumps({
+            return {
                 "success": False,
                 "error": f"ENV_CHECK_FAILED: {pre_check['error']}",
                 "error_type": "ENV_ERROR",
                 "message": pre_check["error"],
                 "suggestion": pre_check.get("suggestion", "请检查环境配置"),
                 "pre_check_failed": True,
-            }, ensure_ascii=False, indent=2)
+            }
         # === 环境预检结束 ===
 
         # 1. 解析脚本路径
@@ -969,13 +1054,13 @@ async def execute_web_script(
                     except Exception as stat_e:
                         print(f"[Web Script Execution] 脚本不存在更新子功能 {sub_function_id} 统计失败: {stat_e}")
 
-                return json.dumps({
+                return {
                     "success": False,
                     "error": f"脚本文件不存在: {script_path}",
                     "hint": f"原始路径: {local_script_path}，已尝试: 1) 直接路径 2) 项目根目录 3) tests 目录",
                     "project_root": str(project_root),
                     "workspace_tests_dir": str(get_workspace_tests_dir(workspace_mode))
-                }, ensure_ascii=False, indent=2)
+                }
 
         # 2.5 自动检测框架（根据文件扩展名）
         detected_framework = framework
@@ -1024,23 +1109,23 @@ async def execute_web_script(
             _part = _part.strip()
             if not _part:
                 # rev23：空白/非法 ID 一律终局拒绝，不静默忽略
-                return json.dumps({
+                return {
                     "success": False,
                     "final": True,
                     "guard": "script_provenance",
                     "reason": "子功能 ID 为空：严格模式要求全部子功能 ID 合法且参与三要素绑定",
                     "message": "子功能 ID 为空，终局拒绝。",
-                }, ensure_ascii=False)
+                }
             try:
                 _auth_sf_ids.append(UUID(_part))
             except (ValueError, AttributeError):
-                return json.dumps({
+                return {
                     "success": False,
                     "final": True,
                     "guard": "script_provenance",
                     "reason": f"非法子功能 ID: {_part}",
                     "message": "存在非法子功能 ID，终局拒绝。",
-                }, ensure_ascii=False)
+                }
         ok, reason = await authorize_script_execution(
             project_identifier,
             script_path,
@@ -1061,13 +1146,13 @@ async def execute_web_script(
                 )
             except Exception as _rq_e:
                 print(f"[Web Script Execution] P0-2：授权失败入队评审任务失败（不阻断）: {_rq_e}")
-            return json.dumps({
+            return {
                 "success": False,
                 "final": True,
                 "guard": "script_provenance",
                 "reason": reason,
                 "message": "脚本未经平台登记或项目归属不符（请先 save_web_test_script 保存并登记后再执行），终局拒绝。",
-            }, ensure_ascii=False)
+            }
         print("[Web Script Execution] 来源授权通过")
 
         execution_result = await _execute_script_internal(
@@ -1267,15 +1352,16 @@ async def execute_web_script(
             )
         # === 计数更新结束 ===
 
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        # P1: 返回 dict（外层 execute_with_preflight 会统一处理 JSON 序列化）
+        return result
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return json.dumps({
+        return {
             "success": False,
             "error": f"执行脚本时发生错误: {str(e)}"
-        }, ensure_ascii=False, indent=2)
+        }
 
 
 async def _run_subprocess_async(

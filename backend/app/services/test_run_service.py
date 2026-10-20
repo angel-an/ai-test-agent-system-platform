@@ -5,6 +5,7 @@
 参考: https://www.browserstack.com/docs/test-management/api-reference/test-runs
 """
 
+import logging
 from typing import Optional
 from uuid import UUID
 
@@ -13,6 +14,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import select
 
 from app.models.test_run import TestRun, TestRunTestCase, TestRunScriptJob
+
+logger = logging.getLogger(__name__)
 from app.models.test_case import TestCase
 from app.repositories.test_run_repo import TestRunRepository, TestRunTestCaseRepository, TestRunScriptJobRepository
 from app.repositories.project_repo import ProjectRepository
@@ -242,7 +245,7 @@ class TestRunService:
                 data.test_cases,
                 data.configurations,
                 data.test_case_assignee or data.assignee,
-            )
+            )  # 创建路径：新生成用例不会是 deprecated；排除项不阻断创建
             await self.repo.update_counts(test_run.id)
             await self.session.refresh(test_run)
 
@@ -258,10 +261,23 @@ class TestRunService:
     ) -> list[TestRunTestCase]:
         """通过标识符添加测试用例"""
         added = []
+        excluded_deprecated: list[str] = []
         for identifier in test_case_identifiers:
             test_case = await self.test_case_repo.get_by_identifier(identifier)
             if not test_case or test_case.project_id != project_id:
                 continue  # 跳过无效的测试用例
+
+            # deprecated=true 的废弃用例不得进入新建/更新的 TestRun
+            # （2026-09-29 复核："已废弃但仍可被执行"是不允许的；历史 run 中的行不动）。
+            # 语义是"拒绝并显式反馈"，不是静默跳过：调用方从返回值拿到排除清单。
+            from app.services.deprecation import is_deprecated
+            if is_deprecated(test_case):
+                logger.warning(
+                    "[test_run] 拒绝已废弃用例 %s（deprecated=true，不加入测试运行）",
+                    identifier,
+                )
+                excluded_deprecated.append(identifier)
+                continue
 
             if configurations:
                 # 为每个配置创建一条记录
@@ -291,7 +307,7 @@ class TestRunService:
 
         if added:
             await self.tc_repo.add_test_cases(test_run_id, added)
-        return added
+        return added, excluded_deprecated
 
     async def update(
         self,
@@ -373,9 +389,28 @@ class TestRunService:
         )
 # pylint: disable  Mi80OmFIVnBZMlhscm9ua3VMazZXa1ZUYXc9PTo4NjgwY2U1Zg==
 
+        # 批量取最新明细原因：latest_result_id 指向 test_results 最新一行，
+        # 一次 IN 查询避免 N+1；取 description（断言级摘要）+ custom_fields.unverified。
+        detail_map: dict = {}
+        result_ids = [item.latest_result_id for item in items if item.latest_result_id]
+        if result_ids:
+            from app.models.test_result import TestResult
+
+            rows = (await self.session.execute(
+                select(TestResult).where(TestResult.id.in_(result_ids))
+            )).scalars().all()
+            for r in rows:
+                cf = r.custom_fields or {}
+                detail_map[str(r.id)] = (
+                    r.description,
+                    cf.get("unverified") if isinstance(cf.get("unverified"), int) else None,
+                )
+
         result = []
         for item in items:
             tc = item.test_case
+            reason, unverified = detail_map.get(str(item.latest_result_id), (None, None)) \
+                if item.latest_result_id else (None, None)
             result.append(TestRunTestCaseInfo(
                 id=item.id,
                 test_run_id=item.test_run_id,
@@ -385,6 +420,8 @@ class TestRunService:
                 configuration_id=item.configuration_id,
                 assignee=item.assignee,
                 latest_status=item.latest_status,
+                latest_reason=reason,
+                latest_unverified=unverified,
                 priority=tc.priority if tc else None,
                 test_case_type=tc.test_case_type if tc else None,
                 folder_id=tc.folder_id if tc else None,
@@ -405,7 +442,7 @@ class TestRunService:
         if not test_run or test_run.project_id != project.id:
             raise NotFoundException(resource_type="测试运行", resource_id=test_run_identifier)
 
-        await self._add_test_cases_by_identifiers(
+        added_rows, excluded_deprecated = await self._add_test_cases_by_identifiers(
             test_run.id,
             project.id,
             data.test_cases,
@@ -413,9 +450,22 @@ class TestRunService:
             data.assignee,
         )
 
+        # 全部被排除（如请求用例均为已废弃）→ 拒绝，不制造"看似成功"的空运行
+        if data.test_cases and not added_rows:
+            raise ValueError(
+                "[all_cases_deprecated_or_invalid] 请求的用例均未纳入运行（已废弃："
+                + "、".join(excluded_deprecated or data.test_cases[:10])
+                + "）。请先移除废弃标记或更换用例；运行未被修改。"
+            )
+
         await self.repo.update_counts(test_run.id)
         await self.session.refresh(test_run)
-        return await self._to_info(test_run, project_identifier)
+        info = await self._to_info(test_run, project_identifier)
+        from app.schemas.test_run import TestRunAddCasesResult
+        return TestRunAddCasesResult(
+            **info.model_dump(),
+            excluded_deprecated_cases=excluded_deprecated,
+        )
 
     async def remove_test_cases(
         self,

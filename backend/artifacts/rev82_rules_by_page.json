@@ -1,0 +1,1810 @@
+{
+ "total_rules": 127,
+ "pages": [
+  {
+   "page": 1,
+   "rules": 2,
+   "forms": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ],
+   "names": [
+    "Case Title",
+    "Case NO."
+   ]
+  },
+  {
+   "page": 2,
+   "rules": 12,
+   "forms": [
+    "CaseCreate"
+   ],
+   "names": [
+    "Created On",
+    "Case Title",
+    "Case No.",
+    "BU",
+    "Branch ID",
+    "Branch Name",
+    "Case Category",
+    "Case Subcategory Level1",
+    "Case Subcategory Level2",
+    "Channel",
+    "Member",
+    "Owner"
+   ]
+  },
+  {
+   "page": 6,
+   "rules": 9,
+   "forms": [
+    "CaseCreate"
+   ],
+   "names": [
+    "Case",
+    "CreatedOn",
+    "ModifiedOn",
+    "Status",
+    "Case DetailsA",
+    "Case Title",
+    "Case No.",
+    "Brand",
+    "Branch"
+   ]
+  },
+  {
+   "page": 8,
+   "rules": 5,
+   "forms": [
+    "CaseCreate"
+   ],
+   "names": [
+    "字段(EN)",
+    "Case",
+    "Created On",
+    "Modified On",
+    "Status"
+   ]
+  },
+  {
+   "page": 10,
+   "rules": 10,
+   "forms": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ],
+   "names": [
+    "Member No.",
+    "Gender",
+    "Email",
+    "Phone",
+    "CurrentMember Tier",
+    "Current PointBalance",
+    "MembershipStart",
+    "MembershipExpiry",
+    "類型",
+    "Phone Call"
+   ]
+  },
+  {
+   "page": 12,
+   "rules": 21,
+   "forms": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ],
+   "names": [
+    "Subject",
+    "Description",
+    "Attachments",
+    "Assign",
+    "Subject",
+    "Regarding",
+    "Start Time/End Time",
+    "Description",
+    "Assign",
+    "Description",
+    "Assign",
+    "Attachment"
+   ]
+  },
+  {
+   "page": 13,
+   "rules": 12,
+   "forms": [
+    "RetroClaim",
+    "CaseCreate"
+   ],
+   "names": [
+    "Business Date",
+    "Branch Code",
+    "Invoice Number",
+    "status reason",
+    "BU",
+    "Created On",
+    "Invoice Amount",
+    "Member",
+    "Phone Number",
+    "Modified On",
+    "Reasons",
+    "Operation"
+   ]
+  },
+  {
+   "page": 14,
+   "rules": 5,
+   "forms": [
+    "RetroClaim",
+    "CaseCreate"
+   ],
+   "names": [
+    "Case Title",
+    "InvoiceNumber",
+    "Member",
+    "Member ID",
+    "PhoneNumber"
+   ]
+  },
+  {
+   "page": 15,
+   "rules": 4,
+   "forms": [
+    "RetroClaim",
+    "CaseCreate"
+   ],
+   "names": [
+    "基礎信息",
+    "status reason",
+    "Member",
+    "Case"
+   ]
+  },
+  {
+   "page": 17,
+   "rules": 4,
+   "forms": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ],
+   "names": [
+    "Business Date",
+    "Branch Code",
+    "GoodWill Type",
+    "status reason"
+   ]
+  },
+  {
+   "page": 18,
+   "rules": 8,
+   "forms": [
+    "GoodWill",
+    "CaseCreate"
+   ],
+   "names": [
+    "BU",
+    "Created On",
+    "Value",
+    "Member",
+    "Phone Number",
+    "Modified On",
+    "Reasons",
+    "Operation"
+   ]
+  },
+  {
+   "page": 19,
+   "rules": 8,
+   "forms": [
+    "GoodWill",
+    "CaseCreate"
+   ],
+   "names": [
+    "Case Title",
+    "GoodWillType",
+    "Member",
+    "Owner",
+    "BusinessDate",
+    "BU",
+    "基礎信息",
+    "status reason"
+   ]
+  },
+  {
+   "page": 21,
+   "rules": 15,
+   "forms": [
+    "Task",
+    "CaseCreate"
+   ],
+   "names": [
+    "Subject",
+    "Case Title",
+    "Regarding",
+    "Due Date",
+    "Owner",
+    "Assist",
+    "Status",
+    "Subject",
+    "Regarding",
+    "Due Date",
+    "Case Title",
+    "Assist"
+   ]
+  },
+  {
+   "page": 25,
+   "rules": 9,
+   "forms": [
+    "RetroClaim",
+    "CaseCreate"
+   ],
+   "names": [
+    "篩選項",
+    "审批類型",
+    "审批狀態",
+    "創建時間",
+    "審批單號",
+    "審批類型",
+    "創建時間",
+    "創建人",
+    "審批人"
+   ]
+  },
+  {
+   "page": 26,
+   "rules": 3,
+   "forms": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ],
+   "names": [
+    "審批狀態",
+    "最終生效狀態",
+    "操作"
+   ]
+  }
+ ],
+ "rules": [
+  {
+   "page": 1,
+   "name": "Case Title",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 1,
+   "name": "Case NO.",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Created On",
+   "required": false,
+   "constraints": [],
+   "desc": "工單創建時間，到時分",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Case Title",
+   "required": false,
+   "constraints": [],
+   "desc": "工單標題，點擊支持跳轉到工單詳情",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Case No.",
+   "required": false,
+   "constraints": [],
+   "desc": "工單編號",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "BU",
+   "required": false,
+   "constraints": [],
+   "desc": "工單關聯的BU名稱",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Branch ID",
+   "required": false,
+   "constraints": [],
+   "desc": "門店ID",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Branch Name",
+   "required": false,
+   "constraints": [],
+   "desc": "門店名稱",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Case Category",
+   "required": false,
+   "constraints": [],
+   "desc": "工單類型",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Case Subcategory Level1",
+   "required": false,
+   "constraints": [],
+   "desc": "類型二級分類",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Case Subcategory Level2",
+   "required": false,
+   "constraints": [],
+   "desc": "類型三級分類",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Channel",
+   "required": false,
+   "constraints": [],
+   "desc": "工單登記來源",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Member",
+   "required": false,
+   "constraints": [],
+   "desc": "工單登記的會員名稱",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 2,
+   "name": "Owner",
+   "required": false,
+   "constraints": [],
+   "desc": "工單創建人名稱",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "Case",
+   "required": false,
+   "constraints": [],
+   "desc": "",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "CreatedOn",
+   "required": false,
+   "constraints": [],
+   "desc": "創建工單后的時間",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "ModifiedOn",
+   "required": false,
+   "constraints": [],
+   "desc": "最新修改工單的時間",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "Status",
+   "required": false,
+   "constraints": [
+    "default"
+   ],
+   "desc": "創建工單后，默認為In Progress",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "Case DetailsA",
+   "required": false,
+   "constraints": [],
+   "desc": "",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "Case Title",
+   "required": true,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "1. 必填2. 限制輸入50個字符3. 未輸入提示：請輸入工單標題",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "Case No.",
+   "required": false,
+   "constraints": [],
+   "desc": "工單創建成功后，自動生成；生成規則：CS-年月日-時分；CS-20260101-0101",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "Brand",
+   "required": false,
+   "constraints": [
+    "options",
+    "default"
+   ],
+   "desc": "默認YL選項，支持選擇ETZ",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 6,
+   "name": "Branch",
+   "required": false,
+   "constraints": [],
+   "desc": "數據來源CRM-Shop Management-店鋪名稱（英文）",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 8,
+   "name": "字段(EN)",
+   "required": false,
+   "constraints": [],
+   "desc": "是否可編輯（僅限非Approved、Rejected、Resolved、Closed狀態可編輯）",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 8,
+   "name": "Case",
+   "required": false,
+   "constraints": [],
+   "desc": "",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 8,
+   "name": "Created On",
+   "required": false,
+   "constraints": [],
+   "desc": "--",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 8,
+   "name": "Modified On",
+   "required": false,
+   "constraints": [],
+   "desc": "--",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 8,
+   "name": "Status",
+   "required": false,
+   "constraints": [],
+   "desc": "1. 支持編輯工單狀態",
+   "form_hint": [
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "Member No.",
+   "required": false,
+   "constraints": [],
+   "desc": "會員編碼",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "Gender",
+   "required": false,
+   "constraints": [],
+   "desc": "性別，展示英文",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "Email",
+   "required": false,
+   "constraints": [],
+   "desc": "會員郵箱",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "Phone",
+   "required": false,
+   "constraints": [],
+   "desc": "會員注冊電話",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "CurrentMember Tier",
+   "required": false,
+   "constraints": [],
+   "desc": "會員等級，展示英文",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "Current PointBalance",
+   "required": false,
+   "constraints": [],
+   "desc": "會員積分",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "MembershipStart",
+   "required": false,
+   "constraints": [],
+   "desc": "入會時間",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "MembershipExpiry",
+   "required": false,
+   "constraints": [],
+   "desc": "會員到期時間",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "類型",
+   "required": false,
+   "constraints": [],
+   "desc": "展示内容描述",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 10,
+   "name": "Phone Call",
+   "required": false,
+   "constraints": [],
+   "desc": "1. 創建人名稱",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Subject",
+   "required": true,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "必填内容，限制50個字符",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Description",
+   "required": false,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "非必填内容，限制500個字符",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Attachments",
+   "required": false,
+   "constraints": [
+    "file_size"
+   ],
+   "desc": "非必選内容，上傳文件不限格式，上傳文件大小不超過10m，上傳后顯示文件標題，不支持預覽，支持手動刪除，僅限上傳一個附件",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Assign",
+   "required": false,
+   "constraints": [],
+   "desc": "非必選内容，獲取擁有cs模塊權限的員工（數據來自人員管理），支持多選；被@的員工，將在消息中心接收到消息提醒",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Subject",
+   "required": true,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "必填内容，限制50個字符",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Regarding",
+   "required": false,
+   "constraints": [
+    "default"
+   ],
+   "desc": "在timeline創建的task内容，默認關聯對應的case，不可以修改",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Start Time/End Time",
+   "required": false,
+   "constraints": [],
+   "desc": "開始和結束時間，如在結束時間后還未處理完成，Task對應的狀態為“overdue”",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Description",
+   "required": false,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "非必填内容，限制500個字符",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Assign",
+   "required": false,
+   "constraints": [],
+   "desc": "非必選内容，獲取擁有cs模塊權限的員工（數據來自人員管理），支持多選；被@的員工，將在消息中心接收到消息提醒",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Description",
+   "required": true,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "必填内容，限制500個字符",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Assign",
+   "required": false,
+   "constraints": [],
+   "desc": "非必選内容，獲取擁有cs模塊權限的員工（數據來自人員管理），支持多選；被@的員工，將在消息中心接收到消息提醒",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Attachment",
+   "required": false,
+   "constraints": [
+    "file_size"
+   ],
+   "desc": "非必選内容，上傳文件不限格式，上傳文件大小不超過10m，上傳后顯示文件標題，不支持預覽，支持手動刪除，僅限上傳一個附件",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "reply",
+   "required": false,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "限制100個字符",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Attachment",
+   "required": false,
+   "constraints": [
+    "file_size"
+   ],
+   "desc": "非必選内容，上傳文件限定：PNG, JPG, JPEG, PDF, DOCX, XLSX。上傳文件大小不超過4MB，上傳",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Subject",
+   "required": true,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "必填内容，限制50個字符",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Call From",
+   "required": true,
+   "constraints": [],
+   "desc": "必選内容，數據來自人員管理和會員管理",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Call To",
+   "required": true,
+   "constraints": [],
+   "desc": "必選内容，數據來自人員管理和會員管理",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Phone Number",
+   "required": false,
+   "constraints": [],
+   "desc": "非必填，手動輸入，不需要校驗",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Direction",
+   "required": false,
+   "constraints": [],
+   "desc": "非必選",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Description",
+   "required": false,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "非必填内容，限制500個字符",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 12,
+   "name": "Regarding",
+   "required": false,
+   "constraints": [
+    "default"
+   ],
+   "desc": "在timeline創建的Phone Call内容，默認關聯對應的case，不可以修改",
+   "form_hint": [
+    "PhoneCall",
+    "Task",
+    "Post",
+    "Note",
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Business Date",
+   "required": false,
+   "constraints": [],
+   "desc": "業務時間，創建retro claim時的數據",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Branch Code",
+   "required": false,
+   "constraints": [],
+   "desc": "分店編碼，創建retro claim時的數據",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Invoice Number",
+   "required": false,
+   "constraints": [],
+   "desc": "發票號碼，創建retro claim時的數據",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "status reason",
+   "required": false,
+   "constraints": [],
+   "desc": "狀態，（未在EDW有對應訂單）Pending For EDW、（待審批）PendingFor Approval、（已審批",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "BU",
+   "required": false,
+   "constraints": [],
+   "desc": "業務員名稱，關聯的case數據",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Created On",
+   "required": false,
+   "constraints": [],
+   "desc": "創建時間，創建retro claim時的數據",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Invoice Amount",
+   "required": false,
+   "constraints": [],
+   "desc": "發票金額，創建retro claim時的數據",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Member",
+   "required": false,
+   "constraints": [],
+   "desc": "創建retro claim時的的會員名稱",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Phone Number",
+   "required": false,
+   "constraints": [],
+   "desc": "關聯的會員電話",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Modified On",
+   "required": false,
+   "constraints": [],
+   "desc": "最新修改時間",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Reasons",
+   "required": false,
+   "constraints": [
+    "max_length"
+   ],
+   "desc": "描述，限制500個字符",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 13,
+   "name": "Operation",
+   "required": false,
+   "constraints": [],
+   "desc": "1. 操作按鈕；包含“Edit”，“Delete”按钮；刪除時需要有彈窗提示；有頁面操作權限的都可以刪除2. 增加“Re",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 14,
+   "name": "Case Title",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 14,
+   "name": "InvoiceNumber",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 14,
+   "name": "Member",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 14,
+   "name": "Member ID",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 14,
+   "name": "PhoneNumber",
+   "required": false,
+   "constraints": [],
+   "desc": "精準搜索",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 15,
+   "name": "基礎信息",
+   "required": false,
+   "constraints": [],
+   "desc": "",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 15,
+   "name": "status reason",
+   "required": false,
+   "constraints": [],
+   "desc": "狀態展示1. 可以手動調整的狀態有：Closed、Cancelled、Reopened、Completed2. 不可手動",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 15,
+   "name": "Member",
+   "required": true,
+   "constraints": [],
+   "desc": "必填，選取會員名稱",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 15,
+   "name": "Case",
+   "required": true,
+   "constraints": [
+    "default"
+   ],
+   "desc": "1. 如在retroclaim模塊創建的，必選選擇case，需要手動選擇；如是在case内創建的，默認為當前case，不",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 17,
+   "name": "Business Date",
+   "required": false,
+   "constraints": [],
+   "desc": "業務時間，創建goodwill時的數據",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 17,
+   "name": "Branch Code",
+   "required": false,
+   "constraints": [],
+   "desc": "分店編碼，創建goodwill時的數據",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 17,
+   "name": "GoodWill Type",
+   "required": false,
+   "constraints": [],
+   "desc": "發票號碼，創建goodwill時的數據；類型包括：調整積分（AdjustPoints）、調整成長值（Adjust Gro",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 17,
+   "name": "status reason",
+   "required": false,
+   "constraints": [],
+   "desc": "狀態，（待審批）Pending For Approval、（已審批）Approved、（已拒絕）Rejected、（已完",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 18,
+   "name": "BU",
+   "required": false,
+   "constraints": [],
+   "desc": "BU",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 18,
+   "name": "Created On",
+   "required": false,
+   "constraints": [],
+   "desc": "Created On",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 18,
+   "name": "Value",
+   "required": false,
+   "constraints": [],
+   "desc": "Value",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 18,
+   "name": "Member",
+   "required": false,
+   "constraints": [],
+   "desc": "Member",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 18,
+   "name": "Phone Number",
+   "required": false,
+   "constraints": [],
+   "desc": "Phone Number",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 18,
+   "name": "Modified On",
+   "required": false,
+   "constraints": [],
+   "desc": "Modified On",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 18,
+   "name": "Reasons",
+   "required": false,
+   "constraints": [],
+   "desc": "Reasons",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 18,
+   "name": "Operation",
+   "required": false,
+   "constraints": [],
+   "desc": "Operation",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 19,
+   "name": "Case Title",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 19,
+   "name": "GoodWillType",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 19,
+   "name": "Member",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 19,
+   "name": "Owner",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 19,
+   "name": "BusinessDate",
+   "required": false,
+   "constraints": [],
+   "desc": "時間範圍内篩選",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 19,
+   "name": "BU",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 19,
+   "name": "基礎信息",
+   "required": false,
+   "constraints": [],
+   "desc": "",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 19,
+   "name": "status reason",
+   "required": false,
+   "constraints": [],
+   "desc": "狀態包括：（待審批）Pending Approval、（已審批）Approved、（已拒絕）Rejected、（已完結）",
+   "form_hint": [
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Subject",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Case Title",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Regarding",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Due Date",
+   "required": false,
+   "constraints": [],
+   "desc": "截至時間選擇",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Owner",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Assist",
+   "required": false,
+   "constraints": [],
+   "desc": "支持模糊搜索",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Status",
+   "required": false,
+   "constraints": [],
+   "desc": "枚舉：Active，Closed，Overdue",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Subject",
+   "required": false,
+   "constraints": [],
+   "desc": "點擊跳轉到對應Case-timeline的task内容",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Regarding",
+   "required": false,
+   "constraints": [],
+   "desc": "展示，不可點擊",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Due Date",
+   "required": false,
+   "constraints": [],
+   "desc": "task的截至日期",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Case Title",
+   "required": false,
+   "constraints": [],
+   "desc": "task關聯的case，點擊跳轉到CaseDetail",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Assist",
+   "required": false,
+   "constraints": [],
+   "desc": "協助人姓名",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Status",
+   "required": false,
+   "constraints": [],
+   "desc": "狀態，創建完成后為“Active”，關閉后為“Closed”，超過結束時間為“Overdue”",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Created On",
+   "required": false,
+   "constraints": [],
+   "desc": "task創建的時間",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 21,
+   "name": "Operation",
+   "required": false,
+   "constraints": [],
+   "desc": "操作按鈕；包含刪除操作按鈕",
+   "form_hint": [
+    "Task",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "篩選項",
+   "required": false,
+   "constraints": [],
+   "desc": "篩選項",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "审批類型",
+   "required": false,
+   "constraints": [],
+   "desc": "审批類型",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "审批狀態",
+   "required": false,
+   "constraints": [],
+   "desc": "审批狀態",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "創建時間",
+   "required": false,
+   "constraints": [],
+   "desc": "創建時間",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "審批單號",
+   "required": false,
+   "constraints": [],
+   "desc": "1. CS-年月日-時分秒",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "審批類型",
+   "required": false,
+   "constraints": [],
+   "desc": "包括：Adjust Points、Adjust Growth Value、Adjust Stamp、SendCoupon",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "創建時間",
+   "required": false,
+   "constraints": [],
+   "desc": "顯示該審批記錄的創建時間格式：Y-M-D hh:mm:ss",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "創建人",
+   "required": false,
+   "constraints": [],
+   "desc": "顯示創建該記錄的員工名稱",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 25,
+   "name": "審批人",
+   "required": false,
+   "constraints": [],
+   "desc": "1. CS操作的審批人，預先記錄需參與審批的員工名稱（且需展示該審批員工的審批狀態）a. 待審批：員工未審批，且整體審批",
+   "form_hint": [
+    "RetroClaim",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 26,
+   "name": "審批狀態",
+   "required": false,
+   "constraints": [],
+   "desc": "審批狀態",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 26,
+   "name": "最終生效狀態",
+   "required": false,
+   "constraints": [],
+   "desc": "最終生效狀態",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  },
+  {
+   "page": 26,
+   "name": "操作",
+   "required": false,
+   "constraints": [],
+   "desc": "操作",
+   "form_hint": [
+    "RetroClaim",
+    "GoodWill",
+    "CaseCreate"
+   ]
+  }
+ ]
+}

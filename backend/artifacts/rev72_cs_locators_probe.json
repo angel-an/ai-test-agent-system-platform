@@ -1,0 +1,442 @@
+{
+ "pages": [
+  {
+   "tag": "cs_cases_list",
+   "url": "https://mkt.uat.eatizen.com.hk/saas-imarketing-web-pc/#/cs/case/list",
+   "ids": [
+    {
+     "id": "smooth-dnd-style-definitions",
+     "tag": "STYLE",
+     "type": "text/css",
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": false
+    },
+    {
+     "id": "app",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": true
+    },
+    {
+     "id": "_yx_sy",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "app undefined",
+     "vis": true
+    },
+    {
+     "id": "2603361721682333979$Menu",
+     "tag": "UL",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-menu ant-menu-sub ant-menu-inline",
+     "vis": true
+    },
+    {
+     "id": "",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "Page_pageBlock-1KnXQVcN Page_pageBlockFill-1kjkzzq",
+     "vis": true
+    },
+    {
+     "id": "ngeaatjr4f",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-table ant-table-middle ant-table-scroll-positi",
+     "vis": true
+    },
+    {
+     "id": "editor",
+     "tag": "SCRIPT",
+     "type": "text/plain",
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": false
+    }
+   ],
+   "labels": [],
+   "tabs": []
+  },
+  {
+   "tag": "cs_case_create",
+   "url": "https://mkt.uat.eatizen.com.hk/saas-imarketing-web-pc/#/cs/case/create",
+   "ids": [
+    {
+     "id": "app",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": true
+    },
+    {
+     "id": "_yx_sy",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "app undefined",
+     "vis": true
+    },
+    {
+     "id": "2603361721682333979$Menu",
+     "tag": "UL",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-menu ant-menu-sub ant-menu-inline",
+     "vis": true
+    },
+    {
+     "id": "editor",
+     "tag": "SCRIPT",
+     "type": "text/plain",
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": false
+    }
+   ],
+   "labels": [],
+   "tabs": []
+  },
+  {
+   "tag": "cs_retro_list",
+   "url": "https://mkt.uat.eatizen.com.hk/saas-imarketing-web-pc/#/cs/retro-claim/list",
+   "ids": [
+    {
+     "id": "app",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": true
+    },
+    {
+     "id": "_yx_sy",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "app undefined",
+     "vis": true
+    },
+    {
+     "id": "2603361721682333979$Menu",
+     "tag": "UL",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-menu ant-menu-sub ant-menu-inline",
+     "vis": true
+    },
+    {
+     "id": "",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "Page_pageBlock-1KnXQVcN Page_pageBlockFill-1kjkzzq",
+     "vis": true
+    },
+    {
+     "id": "jiesos5ell",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-table ant-table-middle ant-table-scroll-positi",
+     "vis": true
+    },
+    {
+     "id": "editor",
+     "tag": "SCRIPT",
+     "type": "text/plain",
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": false
+    }
+   ],
+   "labels": [],
+   "tabs": []
+  },
+  {
+   "tag": "cs_retro_create",
+   "url": "https://mkt.uat.eatizen.com.hk/saas-imarketing-web-pc/#/cs/retro-claim/create",
+   "ids": [
+    {
+     "id": "app",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": true
+    },
+    {
+     "id": "_yx_sy",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "app undefined",
+     "vis": true
+    },
+    {
+     "id": "2603361721682333979$Menu",
+     "tag": "UL",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-menu ant-menu-sub ant-menu-inline",
+     "vis": true
+    },
+    {
+     "id": "",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "Page_pageBlock-1KnXQVcN Page_pageBlockFill-1kjkzzq",
+     "vis": true
+    },
+    {
+     "id": "manualStatus",
+     "tag": "DIV",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "RetroClaimFormLess_statusSelect-RGPO_NCR ant-selec",
+     "vis": true
+    },
+    {
+     "id": "statusReason",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": null,
+     "ro": true,
+     "cls": "ant-input ant-input-disabled",
+     "vis": true
+    },
+    {
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": null,
+     "ro": true,
+     "cls": "ant-input",
+     "vis": true
+    },
+    {
+     "id": "memberId",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": null,
+     "ro": false,
+     "cls": "ant-input",
+     "vis": false
+    },
+    {
+     "id": "caseLabel",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": "Please Select",
+     "ro": true,
+     "cls": "ant-input",
+     "vis": true
+    },
+    {
+     "id": "caseId",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": null,
+     "ro": false,
+     "cls": "ant-input",
+     "vis": false
+    },
+    {
+     "id": "businessDate",
+     "tag": "SPAN",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-calendar-picker",
+     "vis": true
+    },
+    {
+     "id": "branchCode",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": null,
+     "ro": true,
+     "cls": "ant-input",
+     "vis": true
+    },
+    {
+     "id": "invoiceNumber",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": null,
+     "ro": false,
+     "cls": "ant-input",
+     "vis": true
+    },
+    {
+     "id": "invoiceAmount",
+     "tag": "INPUT",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-input-number-input",
+     "vis": true
+    },
+    {
+     "id": "reasons",
+     "tag": "TEXTAREA",
+     "type": null,
+     "ph": null,
+     "ro": false,
+     "cls": "ant-input",
+     "vis": true
+    },
+    {
+     "id": "modifiedOn",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": null,
+     "ro": true,
+     "cls": "ant-input ant-input-disabled",
+     "vis": true
+    },
+    {
+     "id": "ownerName",
+     "tag": "INPUT",
+     "type": "text",
+     "ph": null,
+     "ro": true,
+     "cls": "ant-input ant-input-disabled",
+     "vis": true
+    },
+    {
+     "id": "editor",
+     "tag": "SCRIPT",
+     "type": "text/plain",
+     "ph": null,
+     "ro": false,
+     "cls": "",
+     "vis": false
+    }
+   ],
+   "labels": [
+    {
+     "label": "Status Reason",
+     "id": "statusReason",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Member",
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "",
+     "id": "memberId",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Case Title",
+     "id": "caseLabel",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "",
+     "id": "caseId",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Business Date",
+     "id": "businessDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Branch Code",
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "Invoice Number",
+     "id": "invoiceNumber",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Invoice Amount",
+     "id": "invoiceAmount",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Reasons",
+     "id": "reasons",
+     "tag": "TEXTAREA",
+     "ro": false
+    },
+    {
+     "label": "Modified On",
+     "id": "modifiedOn",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Owner",
+     "id": "ownerName",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Approval 1",
+     "id": "",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Approval Result Description",
+     "id": "",
+     "tag": "TEXTAREA",
+     "ro": false
+    }
+   ],
+   "tabs": []
+  }
+ ],
+ "screenshots": [
+  "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\artifacts\\rev72_probe_cs_cases_list.png",
+  "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\artifacts\\rev72_probe_cs_case_create.png",
+  "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\artifacts\\rev72_probe_cs_retro_list.png",
+  "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\artifacts\\rev72_probe_cs_retro_create.png"
+ ]
+}

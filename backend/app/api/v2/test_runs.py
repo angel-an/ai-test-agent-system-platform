@@ -7,11 +7,13 @@
 
 from typing import Optional, Any, Dict
 import io
+import logging
 import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Query, status, HTTPException
+from fastapi import APIRouter, Depends, Query, status, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 
@@ -19,6 +21,7 @@ from app.api.deps import (
     TestRunServiceDep,
     PaginationDep,
     DbSessionDep,
+    get_current_superuser,
 )
 from app.schemas.common import SuccessResponse, MessageResponse
 from app.schemas.pagination import PaginatedResponse, PaginationInfo
@@ -26,6 +29,7 @@ from app.schemas.test_run import (
     TestRunCreate,
     TestRunUpdate,
     TestRunInfo,
+    TestRunAddCasesResult,
     TestRunListInfo,
     TestRunTestCaseInfo,
     AddTestCasesRequest,
@@ -38,11 +42,14 @@ from app.schemas.test_run import (
     RecentTestRunItem,
     TestRunScriptJobInfo,
     ScriptSelection,
+    TestRunRetentionRequest,
 )
 from app.schemas.enums import AutomationStatus, TestRunActiveState, TestResultStatus, Priority, TestCaseType, TestRunState, ScriptType, JobStatus
+from app.services.web_case_result_mapper import stdout_has_executable_assertions
 from app.models.project import Project
 from app.models.test_case import TestCase
-from app.models.test_run import TestRun, TestRunScriptJob
+from app.models.test_run import TestRun, TestRunScriptJob, TestRunTestCase
+from app.models.user import User
 
 from app.services.execution.engine import ScriptExecutionEngine
 
@@ -50,6 +57,8 @@ router = APIRouter(
     prefix="/projects/{project_identifier}/test-runs",
     tags=["测试运行"],
 )
+
+logger = logging.getLogger(__name__)
 
 # 全局执行引擎实例（简化版本，不需要 mongodb）
 _execution_engine: ScriptExecutionEngine | None = None
@@ -95,6 +104,33 @@ async def _sync_script_test_case_automation_status(
     if test_case:
         test_case.automation_status = AutomationStatus.AUTOMATED
 
+async def _deprecated_cases_in_run(db: Any, test_run_id: Any) -> list[str]:
+    """运行内已废弃用例标识（2026-09-29 复核："废弃禁止后续执行，保留历史结果"）。
+
+    历史 TestResult/TestRunTestCase 行不改写；这里只拦截执行/重试入口。
+    """
+    from app.services.deprecation import is_deprecated
+
+    rows = (await db.execute(
+        select(TestCase)
+        .join(TestRunTestCase, TestRunTestCase.test_case_id == TestCase.id)
+        .where(TestRunTestCase.test_run_id == test_run_id)
+    )).scalars().all()
+    return [c.identifier for c in rows if is_deprecated(c)]
+
+
+def _reject_deprecated_run(deprecated: list[str], action: str) -> None:
+    if deprecated:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"[deprecated_cases_in_run] 该测试运行包含已废弃用例，禁止{action}："
+                + "、".join(deprecated[:10])
+                + "。请先将这些用例从运行中移除；其历史结果保留，不参与本次执行。"
+            ),
+        )
+
+
 @router.post(
     "/{test_run_identifier}/execute",
     response_model=SuccessResponse[Dict[str, Any]],
@@ -116,6 +152,11 @@ async def execute_test_run(
     """
     # 获取测试运行详情
     test_run = await service.get_by_identifier(project_identifier, test_run_identifier)
+
+    # 废弃用例拦截（执行入口）：含 deprecated 用例的运行不得执行，历史结果保留
+    _reject_deprecated_run(
+        await _deprecated_cases_in_run(db, test_run.id), "执行",
+    )
 
     # 检查状态
     if test_run.run_state == TestRunState.IN_PROGRESS:
@@ -277,6 +318,34 @@ async def update_test_run(
 
 # noqa  Mi80OmFIVnBZMlhscm9ua3VMazZUR0prUVE9PToyZjY1MzkyOQ==
 
+@router.get(
+    "/{test_run_identifier}/generation-metrics",
+    response_model=SuccessResponse[dict[str, Any]],
+    summary="运行级四指标（生成用例数/规则用例数/编译断言数/实际执行资产数）",
+    description=(
+        "四个指标口径独立、互不折算，并返回不可编译用例清单与偏差告警。"
+        "用于避免把「1 个冒烟资产通过」读成「N 条生成用例已逐条验证」。"
+    ),
+)
+async def get_generation_metrics(
+    project_identifier: str,
+    test_run_identifier: str,
+    db: DbSessionDep,
+) -> SuccessResponse[dict[str, Any]]:
+    """运行级四指标（口径见 metric_definitions；不可编译用例见 uncompiled_cases）。"""
+    from app.services.run_generation_metrics import collect_run_generation_metrics
+
+    try:
+        data = await collect_run_generation_metrics(
+            db,
+            project_identifier=project_identifier,
+            test_run_identifier=test_run_identifier,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return SuccessResponse(success=True, data=data)
+
+
 @router.post(
     "/{test_run_identifier}/delete",
     response_model=MessageResponse,
@@ -368,9 +437,10 @@ async def list_test_run_test_cases(
 
 @router.post(
     "/{test_run_identifier}/test-cases",
-    response_model=SuccessResponse[TestRunInfo],
+    response_model=SuccessResponse[TestRunAddCasesResult],
     summary="添加测试用例到测试运行",
-    description="向测试运行中添加测试用例",
+    description="向测试运行中添加测试用例；已废弃（deprecated=true）用例会被拒绝并显式列入 "
+    "excluded_deprecated_cases，全部被排除时返回 400 且不修改运行",
 )
 async def add_test_cases_to_run(
     project_identifier: str,
@@ -378,7 +448,7 @@ async def add_test_cases_to_run(
     data: AddTestCasesRequest,
     service: TestRunServiceDep,
     db: DbSessionDep,
-) -> SuccessResponse[TestRunInfo]:
+) -> SuccessResponse[TestRunAddCasesResult]:
     """
     添加测试用例到测试运行
 
@@ -386,9 +456,12 @@ async def add_test_cases_to_run(
     - **configuration_ids**: 配置 ID 列表
     - **assignee**: 负责人邮箱
     """
-    test_run = await service.add_test_cases(
-        project_identifier, test_run_identifier, data
-    )
+    try:
+        test_run = await service.add_test_cases(
+            project_identifier, test_run_identifier, data
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.commit()
     return SuccessResponse(success=True, data=test_run)
 
@@ -858,8 +931,27 @@ async def download_script_job_report(
     if not job.report_path:
         raise HTTPException(status_code=404, detail="该脚本作业没有可下载的报告")
 
+    # report_path 的两种语义（rev63-fix）：
+    # - Web 执行链（WebTestExecutor → run_web_test）存的是 WEB_TEST_REPORT **附件 ID**，
+    #   真实对象键在 attachments.object_name（此前直接当 MinIO key 下载 →
+    #   "The specified key does not exist"，实测 TR-88 script-jobs report 404）；
+    # - Scenario/API 执行链存的才是 MinIO 对象键（如 scenario-reports/{id}/report.zip）。
+    report_ref = str(job.report_path).strip()
     try:
-        data = MinIOClient.download_file(job.report_path)
+        report_uuid = UUID(report_ref)
+    except ValueError:
+        report_uuid = None
+    if report_uuid is not None:
+        from app.models.attachment import Attachment
+
+        att = (await db.execute(
+            select(Attachment).where(Attachment.id == report_uuid)
+        )).scalar_one_or_none()
+        if att and att.object_name:
+            report_ref = att.object_name
+
+    try:
+        data = MinIOClient.download_file(report_ref)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"报告文件不存在或无法读取: {exc}") from exc
 
@@ -960,6 +1052,11 @@ async def retry_script_job(
     if not job or job.test_run_id != test_run.id:
         raise HTTPException(status_code=404, detail="脚本作业不存在")
 
+    # 废弃用例拦截（重试入口）
+    _reject_deprecated_run(
+        await _deprecated_cases_in_run(db, test_run.id), "重试",
+    )
+
     # 重置作业状态为 pending，增加重试计数
     job.status = JobStatus.PENDING
     job.retry_count = job.retry_count + 1
@@ -1000,6 +1097,191 @@ async def retry_script_job(
     )
 
 
+@router.get(
+    "/{test_run_identifier}/assertion-ledger",
+    response_model=SuccessResponse[dict],
+    summary="测试运行的断言账目（逐条断言 + 用例级汇总 + 告警）",
+    description=(
+        "把该运行各作业的断言账目解析成结构化数据：逐条断言（名称/结果/观察值/规则号/用例号）、"
+        "按用例汇总，以及告警（未归属检查、unverified/blocked、环境阻断）。只读。"
+    ),
+)
+async def get_assertion_ledger(
+    project_identifier: str,
+    test_run_identifier: str,
+    service: TestRunServiceDep,
+    db: DbSessionDep,
+) -> SuccessResponse[dict]:
+    """执行账目查询（复核 P3）：不必再 grep stdout。"""
+    from app.services.assertion_ledger import build_assertion_ledger
+
+    project = (await db.execute(
+        select(Project).where(Project.identifier == project_identifier)
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    test_run = await service.repo.get_by_identifier(test_run_identifier)
+    if not test_run or test_run.project_id != project.id:
+        raise HTTPException(status_code=404, detail="测试运行不存在")
+
+    jobs = list((await db.execute(
+        select(TestRunScriptJob)
+        .where(TestRunScriptJob.test_run_id == test_run.id)
+        .order_by(TestRunScriptJob.execution_order)
+    )).scalars().all())
+
+    ledger = build_assertion_ledger(jobs)
+    ledger["test_run"] = {
+        "identifier": test_run.identifier,
+        "run_state": str(getattr(test_run.run_state, "value", test_run.run_state)),
+    }
+    return SuccessResponse(success=True, data=ledger)
+
+
+@router.post(
+    "/retention",
+    response_model=SuccessResponse[dict],
+    summary="测试运行保留策略（归档/清理）",
+    description=(
+        "把历史运行的大体积 stdout/stderr 降级为结论摘要，并可选清理未被引用的磁盘报告目录。"
+        "只处理终态运行（done/rejected/closed）；默认 dry_run=true 只评估不落库。"
+    ),
+)
+async def apply_test_run_retention(
+    project_identifier: str,
+    data: TestRunRetentionRequest,
+    db: DbSessionDep,
+    current_user: User = Depends(get_current_superuser),
+) -> SuccessResponse[dict]:
+    """归档/清理历史测试运行（复核清单第 5 项）。
+
+    边界（2026-09-29 复核意见 + 当轮修复）：
+    - **鉴权（复核第 1 项，本轮已修）**：端点要求**超级管理员**（``get_current_superuser``，
+      与 ``web_script_reviews`` / ``governance_metrics`` 同一模式）——未认证 401、非超管 403，
+      依赖层自带 allow/deny 审计。``confirm=true`` 只作为二次确认，**不替代权限控制**；
+      v2 其余端点仍整体未启用鉴权，不在本端点做半套判断；
+    - **项目内限定**：候选运行只从本项目的 TestRun 里取，``run_identifiers`` 因此
+      不可能跨项目命中（同名标识在别的项目里不会被处理）；
+    - **操作者审计**：actor 来自鉴权后的真实用户（不再有 anonymous），
+      并在响应里回写 ``audit`` 供上层留痕；
+    - **证据最小化**：摘要只留结构化计数与断言名称（见 run_retention_service）。
+    """
+    from app.config.settings import settings
+    from app.services.run_retention_service import (
+        apply_disk_retention_plan,
+        apply_retention_plan,
+        build_disk_retention_plan,
+        build_retention_plan,
+    )
+
+    if not data.dry_run and not data.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "[confirm_required] dry_run=false 属破坏性清理（会清空历史 stdout/stderr "
+                "并删除磁盘报告目录），必须显式传 confirm=true 才执行"
+            ),
+        )
+
+    project = (await db.execute(
+        select(Project).where(Project.identifier == project_identifier)
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="项目不存在")
+
+    actor = f"{current_user.username}({current_user.id})"
+
+    runs = list((await db.execute(
+        select(TestRun).where(TestRun.project_id == project.id)
+    )).scalars().all())
+    if not runs:
+        return SuccessResponse(success=True, data={
+            "dry_run": data.dry_run, "runs": 0, "jobs": 0, "disk": None,
+            "message": "该项目没有测试运行",
+        })
+
+    jobs = list((await db.execute(
+        select(TestRunScriptJob).where(
+            TestRunScriptJob.test_run_id.in_([run.id for run in runs])
+        )
+    )).scalars().all())
+
+    now = datetime.now(timezone.utc)
+    # 时间过滤语义：显式给了选择条件（指定运行 / 保留最近 N 个）就按显式条件执行，
+    # 不再叠加默认保留期；都没给时才用 14 天兜底（避免"显式指定 TR-84 却因太新被跳过"）。
+    older_than_days = data.older_than_days
+    if older_than_days is None and not data.run_identifiers and not data.keep_latest_per_project:
+        older_than_days = 14.0
+    plan = build_retention_plan(
+        runs, jobs,
+        now=now,
+        older_than_days=older_than_days,
+        run_identifiers=data.run_identifiers,
+        keep_latest_per_project=data.keep_latest_per_project,
+    )
+    payload: dict = plan.to_dict()
+
+    applied: dict | None = None
+    if not data.dry_run:
+        applied = apply_retention_plan(plan)
+        await db.commit()
+    payload["applied"] = applied
+
+    if data.include_disk:
+        workspace = Path(settings.web_cli_workspace_root).resolve()
+        if not workspace.exists():
+            workspace = Path(settings.web_mcp_workspace_root).resolve()
+        disk_days = (
+            data.disk_older_than_days
+            if data.disk_older_than_days is not None
+            else (data.older_than_days if data.older_than_days is not None else 7.0)
+        )
+        disk_plan = build_disk_retention_plan(
+            workspace,
+            # 引用保护用**全库**作业的 report_path：只按本项目判断会误删其它项目仍在引用的目录
+            list((await db.execute(
+                select(TestRunScriptJob.report_path).where(
+                    TestRunScriptJob.report_path.is_not(None)
+                )
+            )).scalars().all()),
+            now=now,
+            older_than_days=disk_days,
+            limit=data.disk_limit,
+        )
+        disk_payload = {
+            "dry_run": data.dry_run,
+            "older_than_days": disk_days,
+            **{k: v for k, v in disk_plan.items() if k != "dirs"},
+            "sample": disk_plan["dirs"][:10],
+        }
+        if not data.dry_run:
+            disk_payload["applied"] = apply_disk_retention_plan(disk_plan)
+        payload["disk"] = disk_payload
+
+    audit = {
+        "actor": actor,
+        "project": project_identifier,
+        "dry_run": data.dry_run,
+        "run_identifiers": data.run_identifiers,
+        "keep_latest_per_project": data.keep_latest_per_project,
+        "older_than_days": older_than_days,
+        "at": now.isoformat(timespec="seconds"),
+    }
+    payload["audit"] = audit
+    # 级别说明：本平台应用日志器默认不输出 INFO（实测 uvicorn 日志里看不到 app 的 info），
+    # 而审计事件必须真的留痕——因此与 `deps.py` 的 `[audit] action=access.decision`
+    # 保持同一级别（WARNING）。
+    logger.warning(
+        "[audit] action=testrun.retention project=%s actor=%s dry_run=%s runs=%d jobs=%d "
+        "stdout_chars=%d disk_dirs=%s",
+        project_identifier, actor, data.dry_run, payload.get("runs", 0), payload.get("jobs", 0),
+        payload.get("stdout_chars", 0),
+        (payload.get("disk") or {}).get("dir_count"),
+    )
+    return SuccessResponse(success=True, data=payload)
+
+
 @router.post(
     "/{test_run_identifier}/script-jobs/batch-retry",
     response_model=SuccessResponse[dict],
@@ -1024,6 +1306,11 @@ async def batch_retry_script_jobs(
     test_run = await service.repo.get_by_identifier(test_run_identifier)
     if not test_run or test_run.project_id != project_obj.id:
         raise HTTPException(status_code=404, detail="测试运行不存在")
+
+    # 废弃用例拦截（批量重试入口）
+    _reject_deprecated_run(
+        await _deprecated_cases_in_run(db, test_run.id), "批量重试",
+    )
 
     from app.repositories.test_run_repo import TestRunScriptJobRepository
     job_repo = TestRunScriptJobRepository(db)
@@ -1410,6 +1697,10 @@ async def map_jobs_to_test_cases(
         job_status = job.status.value if hasattr(job.status, "value") else str(job.status)
         summary = job.result_summary or {}
 
+        def script_type_web(j: TestRunScriptJob) -> bool:
+            st = j.script_type.value if hasattr(j.script_type, "value") else str(j.script_type)
+            return st == ScriptType.WEB_TEST.value
+
         def _to_int(value: Any) -> int:
             try:
                 return int(value or 0)
@@ -1426,6 +1717,11 @@ async def map_jobs_to_test_cases(
                 return TestResultStatus.FAILED
             if total > 0 and passed == 0 and skipped >= total:
                 return TestResultStatus.SKIPPED
+            # P1-① 零断言守卫：WEB_TEST 作业 COMPLETED 但脚本从未产出任何
+            # 断言证据（COMPILED_ASSERTION / UPLOAD_EVIDENCE）时，playwright 的
+            # "1 passed"只代表入口冒烟通过，不得据此把用例判 PASSED（"空跑绿"）。
+            if script_type_web(job) and not stdout_has_executable_assertions(job.stdout or ""):
+                return TestResultStatus.NOT_EXECUTED
             return TestResultStatus.PASSED
         if job_status == JobStatus.FAILED.value:
             return TestResultStatus.FAILED
@@ -1456,24 +1752,35 @@ async def map_jobs_to_test_cases(
         if not test_case_id:
             continue
 
-        result = await db.execute(
-            select(TestRunTestCase)
-            .where(TestRunTestCase.test_run_id == test_run.id)
-            .where(TestRunTestCase.test_case_id == test_case_id)
-        )
-        run_case = result.scalar_one_or_none()
-        if not run_case:
-            run_case = TestRunTestCase(
-                test_run_id=test_run.id,
-                test_case_id=test_case_id,
-            )
-            db.add(run_case)
-            await db.flush()
+        # N2：手工映射也是"粗粒度"写入——受轮次/写入者优先级约束，不得覆盖
+        # mapper 已写入的编译断言结论，也不得用旧作业覆盖新轮次。
+        from app.repositories.test_run_repo import TestRunTestCaseRepository
 
-        run_case.latest_status = _job_result_status(job)
+        _row, decision = await TestRunTestCaseRepository(db).apply_case_result(
+            test_run_id=test_run.id,
+            test_case_id=test_case_id,
+            status=_job_result_status(job),
+            writer="manual",
+            job_id=job.id,
+            execution_order=job.execution_order,
+            retry_count=job.retry_count,
+            create_if_missing=True,
+        )
+        if not decision.allowed:
+            logger.info(
+                "[test_runs] 手工映射被守卫拒绝：作业 %s → 用例 %s（%s）",
+                job.script_identifier, test_case_id, decision.reason,
+            )
 
     await db.flush()
     await service.repo.update_counts(test_run.id)
+    # R5：手工映射同样刷新指标（否则 run 级数字与 ledger 明细会长期分叉）
+    try:
+        from app.services.run_assertion_metrics import refresh_run_assertion_metrics
+
+        await refresh_run_assertion_metrics(db, test_run.id)
+    except Exception as exc:  # noqa: BLE001 —— 指标失败不影响映射本身
+        logger.warning("[test_runs] 手工映射后断言指标刷新失败（忽略）: %s", exc)
     await db.refresh(test_run)
     await db.commit()
     return SuccessResponse(success=True, data=await service._to_info(test_run, project_identifier))

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import re
 from collections import Counter
 from typing import Any
@@ -14,10 +16,12 @@ from app.api.deps import CurrentUserIdDep, DbSessionDep
 from app.schemas.enums import Priority
 from app.schemas.test_case import TestCaseCreate, TestStepCreate
 from app.services.api_doc_parser_service import APIDocParserService
+from app.services.product_confirmations import find_confirmation
 from app.services.requirement_structure import (
     FieldRule,
     StructuredRequirement,
     is_heading_line,
+    locate_evidence,
     parse_requirement_document,
 )
 from app.services.test_case_service import TestCaseService
@@ -41,11 +45,37 @@ router = APIRouter(
 )
 
 #: 叙述性需求条目上限（原为 6：文档后半段与表格规则会整段丢失）
-MAX_NARRATIVE_POINTS = 12
+MAX_NARRATIVE_POINTS = 60
 #: 每个字段规则最多产出的用例数（必填/枚举、边界值、条件显示）
 MAX_CASES_PER_FIELD = 3
 #: 单次生成的用例总量上限（安全阀，避免超大表格把用例库刷爆）
 MAX_GENERATED_CASES = 80
+
+#: 通用建议（伴生场景）专用模块名：这些用例**不是** PRD 条款，不强行归入业务大模块，
+#: 用可自解释的模块名 + 「通用建议非PRD条款」标签双重标识，便于过滤与人工取舍。
+GENERIC_SUGGESTION_MODULE = "通用建议（非PRD条款）"
+
+#: 无业务模块归属的 PRD 用例（如"需求背景"章节里的叙事点）——同样用可自解释的模块名，
+#: 不再让"文档名"充当模块（否则模块分布看起来像多了一个业务模块）。
+UNMAPPED_MODULE = "未归属（非业务模块）"
+
+#: 待确认项的两种来源（不得混为一谈）：
+#: - document_ambiguity：文档自身矛盾/表述不清，需产品裁决；
+#: - manual_supplement：文档未约定，需人工补充预期。
+AMBIGUITY_DOCUMENT = "document_ambiguity"
+AMBIGUITY_MANUAL_SUPPLEMENT = "manual_supplement"
+
+#: 子章节标题 → 场景标签（同名用例靠它区分「哪个页面/哪张表」的同一字段）
+_SCENARIO_LABELS: tuple[tuple[str, str], ...] = (
+    ("篩選查詢", "列表頁篩選查詢"),
+    ("筛选查询", "列表頁篩選查詢"),
+    ("字段說明", "新增/編輯表單字段"),
+    ("字段说明", "新增/編輯表單字段"),
+    ("列表顯示", "列表顯示"),
+    ("列表显示", "列表顯示"),
+    ("導入", "導入"),
+    ("导入", "導入"),
+)
 
 
 @router.post("/generate-from-document", summary="从文档生成最小可用测试用例")
@@ -311,7 +341,7 @@ def _build_minimal_cases(
 ) -> list[TestCaseCreate]:
     # 仅保留与上传需求直接相关的通用生成逻辑；不再根据历史项目关键词
     # 只根据当前上传需求生成，不引入历史项目业务上下文。
-    narrative_source = (structure.narrative_text if structure is not None else text) or text
+    narrative_source = structure.narrative_text if structure is not None else text
     source_points = _extract_requirement_points(narrative_source, filename=filename)
     narrative_cases, assertion_gaps = (
         _build_requirement_cases(
@@ -320,17 +350,31 @@ def _build_minimal_cases(
         )
         if source_points
         else _build_requirement_cases(
-            [filename.rsplit(".", 1)[0] or "上传需求"], filename,
+            [], filename,
             test_mode=test_mode, module_hint=module_hint,
             field_rules=structure.field_rules if structure is not None else None,
         )
     )
 
-    field_rules = structure.field_rules if structure is not None else []
-    if not field_rules:
-        return narrative_cases, assertion_gaps
-
     module = narrative_cases[0].module if narrative_cases else ""
+    # rev108：列表顯示字段表 → 欄位完整性校驗用例。放在 field_rules 早退**之前**——
+    # 文檔可以只有列表表沒有字段表，此類用例不應隨 field_rules 歸零而消失。
+    list_cases = _build_list_display_cases(
+        structure.display_columns if structure is not None else [],
+        filename, module_hint=module_hint or module)
+    field_rules = structure.field_rules if structure is not None else []
+    import_source = structure.full_text if structure is not None else text
+    import_cases = _build_import_clause_cases(import_source, filename)
+    supplement_cases = _build_import_supplement_cases(import_source, filename)
+    export_cases = _build_export_detail_cases(
+        structure, filename, module_hint=module_hint or module)
+    if not field_rules:
+        cases = _assign_case_metadata(
+            narrative_cases + list_cases + import_cases + supplement_cases + export_cases,
+            import_source, filename, structure)
+        return _stamp_document_fingerprint(
+            _resolve_duplicate_titles(cases), text), assertion_gaps
+
     field_cases = _build_field_rule_cases(
         field_rules, filename, test_mode=test_mode, module_hint=module_hint or module
     )
@@ -342,11 +386,410 @@ def _build_minimal_cases(
     # rev107：篩選字段用例 + 導入條款用例（人工用例對比發現的兩類結構性缺口）
     filter_cases = _build_filter_field_cases(
         field_rules, filename, module_hint=module_hint or module)
-    import_cases = _build_import_clause_cases(
-        structure.full_text if structure is not None else text, filename)
+    # rev109（P1）：地圖組件交互 + 只讀字段用例——證據都在字段說明列的敘述文字裡，
+    # 表格行不進敘事通道，此前無任何用例承接；證據隨 field_rules，故在早退之後。
+    map_cases = _build_map_interaction_cases(
+        field_rules, filename, module_hint=module_hint or module)
+    read_only_cases = _build_read_only_field_cases(
+        field_rules, filename, module_hint=module_hint or module)
     # 字段规则用例本身携带断言，不产生缺口；缺口只来自叙述条目回链失败的部分
-    return (narrative_cases + field_cases + companion_cases
-            + filter_cases + import_cases), assertion_gaps
+    cases = _assign_case_metadata(narrative_cases + field_cases + companion_cases
+            + filter_cases + import_cases + list_cases
+            + map_cases + read_only_cases + supplement_cases + export_cases,
+            import_source, filename, structure)
+    return _stamp_document_fingerprint(_resolve_duplicate_titles(cases), text), assertion_gaps
+
+
+def _stamp_document_fingerprint(
+    cases: list[TestCaseCreate], text: str
+) -> list[TestCaseCreate]:
+    """给每条用例盖上**文档内容指纹**（P1-2）：只记文件名无法回答"这批用例是不是按最新
+    PRD 生成的"。指纹取"解析后全文"的 sha1——文档内容一变指纹就变，重新生成后可直接比对。"""
+    digest = hashlib.sha1((text or "").encode("utf-8")).hexdigest()
+    for case in cases:
+        cf = dict(case.custom_fields or {})
+        cf["source_text_sha1"] = digest
+        cf["source_text_chars"] = len(text or "")
+        case.custom_fields = cf
+    return cases
+
+
+def _assign_case_metadata(
+    cases: list[TestCaseCreate], text: str, filename: str,
+    structure: StructuredRequirement | None,
+) -> list[TestCaseCreate]:
+    """按 PRD 一级章节归属补齐元数据；无唯一证据时保持原模块推导。"""
+    def compact(value: str) -> str:
+        return re.sub(r"[\s\u200b\u200c\u200d\ufeff，。；、：:,.（）()]", "", value or "")
+
+    sections = [(name, compact(body)) for name, body in _prd_sections(text)]
+    # 表内同名字段共享章节归属：用同表的独有说明定位，避免「创建人」误归类。
+    table_owners: dict[Any, set[str]] = {}
+    if structure:
+        for r in structure.field_rules:
+            token = compact(r.description)
+            owners = {n for n, b in sections if len(token) >= 8 and token in b}
+            if len(owners) == 1:
+                table_owners.setdefault(r.source.get("table"), set()).update(owners)
+
+    rules = structure.field_rules if structure else []
+    kinds = (("filter_field_case", "筛选校验"), ("import_clause_case", "导入校验"),
+             ("list_display_case", "列表校验"), ("map_interaction_case", "地图交互"),
+             ("read_only_case", "只读校验"), ("companion_template", "通用伴生"),
+             ("manual_supplement", "人工补充"))
+    for case in cases:
+        cf = dict(case.custom_fields or {})
+        rule = cf.get("requirement_rule") or {}
+        field = str(rule.get("field") or "")
+        source_owners = table_owners.get((rule.get("source") or {}).get("table"), set())
+        evidence = [str(cf.get("source_evidence") or "")]
+        if cf.get("import_clause_case"):
+            evidence.append(str(rule.get("rule") or "").split("；子项：")[0])
+        elif cf.get("filter_field_case"):
+            evidence.append(str(rule.get("rule") or "").split("匹配規則：", 1)[-1])
+            evidence.append(field)
+            filter_owners = set()
+            for source_rule in rules:
+                if source_rule.name == field and _is_filter_field_rule(source_rule):
+                    filter_owners.update(table_owners.get(source_rule.source.get("table"), set()))
+            if len(filter_owners) == 1:
+                source_owners = filter_owners
+        elif cf.get("list_display_case") and structure:
+            for table in structure.display_columns:
+                names = [c["name"] for c in table.get("columns", []) if c.get("name")]
+                if names and all(name in str(rule.get("rule") or "") for name in names):
+                    evidence.extend(names)
+        else:
+            evidence.append(field)
+            narrative = cf.get("source_point") or ""
+            if narrative:
+                evidence.append(narrative)
+            for source_rule in rules:
+                if source_rule.name == field or (cf.get("map_interaction_case") and
+                        any(m in source_rule.description for m in _MAP_MARKERS)):
+                    evidence.append(source_rule.description)
+        owners: set[str] = set(source_owners) if len(source_owners) == 1 else set()
+        for value in evidence:
+            token = compact(value)
+            if len(token) < 3:
+                continue
+            matches = {name for name, body in sections if token in body}
+            if len(matches) == 1 and not source_owners:
+                owners.update(matches)
+        previous = case.module or _derive_requirement_module([], filename)
+        # 证据定位算一次，两处用：① 归属回退（无唯一归属时）；② source_location 统一（P1-1）
+        location = _locate_case_evidence(cf, structure, text)
+        if len(owners) == 1 and not cf.get("companion_template"):
+            case.module = next(iter(owners))
+            cf["original_module"] = previous
+            cf["module_source"] = "prd_section"
+        elif cf.get("companion_template"):
+            # 通用建议（伴生场景）**不强行归类**：名称/步骤均为通用惯例，没有 PRD 归属证据。
+            # 用可自解释的模块名 + 标签双重标识，绝不塞进业务大模块。
+            case.module = GENERIC_SUGGESTION_MODULE
+            cf["original_module"] = previous
+            cf["module_source"] = "generic_suggestion"
+        else:
+            # 回退证据：把该用例的证据钉回文档行号 → 最近标题 → 一级章节。
+            # 命不中就保持原模块（宁可留在未归属分组，也不猜归属），并如实记录原因。
+            if location and location.get("section") in {n for n, _ in sections}:
+                case.module = location["section"]
+                cf["original_module"] = previous
+                cf["module_source"] = "prd_section_evidence"
+                cf["module_evidence"] = {
+                    "line": location["line"],
+                    "heading": location["heading"],
+                    "heading_title": location.get("heading_title", ""),
+                    "scope": location.get("scope", ""),
+                    "unique": location.get("unique", False),
+                }
+            else:
+                stem_module = _derive_requirement_module([], filename)
+                if previous == stem_module:
+                    # 无业务模块归属 → 用可自解释的名字，别让"文档名"看起来像业务模块
+                    case.module = UNMAPPED_MODULE
+                    cf["module_source"] = "unmapped"
+                else:
+                    case.module = previous
+                cf["original_module"] = previous
+                if location:
+                    cf["module_note"] = (
+                        "证据位于《{heading}》，该章节不是文档一级业务模块，"
+                        "故不强行归类".format(
+                            heading=location.get("heading") or location.get("section") or "")
+                    )
+                else:
+                    cf["module_note"] = "未在文档中定位到该用例证据，不强行归类"
+        category = next((label for key, label in kinds if cf.get(key)), "")
+        tags = list(case.tags or []) + ["AI生成", "需求来源", filename]
+        if cf.get("companion_template"):
+            tags = [t for t in tags if t != "需求来源"]
+            tags.append("通用建议非PRD条款")
+            cf["coverage_source"] = "generic_suggestion"
+        if category:
+            tags.append(category)
+        if cf.get("manual_supplement"):
+            tags.append("待确认")
+        # 歧义判定只看**该用例自身的规则证据**：早期版本用"同名字段所有规则的描述拼接"
+        # 做判定，会把 A 规则的歧义扣到 B 规则生成的用例上（实测 YL：筛选区「店鋪編號」
+        # 规则本身无歧义，却被连带标成待确认）。
+        point = str(rule.get("evidence") or "") or str(cf.get("source_point") or "")
+        ambiguity = ""
+        if re.search(r"未填.{0,10}店[鋪铺][編编][號号].{0,20}生成品牌[編编][號号]", point):
+            ambiguity = "未填写店铺编号却约定生成品牌编号，编号对象需产品确认"
+        if re.search(r"支付完成|支付完", point) and re.search(r"30\s*(?:min|分钟)", point, re.I) and re.search(r"支付完成\s*20\s*(?:min|分钟)", text, re.I):
+            ambiguity = "正文30分钟与批注20分钟不一致，批注不作为正式规则，时点需确认"
+        if ambiguity:
+            # 产品已裁决过的歧义：不再标待确认，直接用结论形成**可判定预期**
+            # （否则每次重生成都会把已裁决项重新标成待确认）。
+            confirmed = find_confirmation(
+                filename, ambiguity,
+                f"{case.name} {cf.get('source_point') or ''} {rule.get('evidence') or ''}")
+            if confirmed:
+                cf["confirmation_status"] = "confirmed"
+                cf["confirmation_key"] = confirmed["key"]
+                cf["confirmed_conclusion"] = confirmed["conclusion"]
+                cf["confirmed_by"] = confirmed.get("confirmed_by")
+                cf["confirmed_at"] = confirmed.get("confirmed_at")
+                cf["confirmation_source"] = confirmed.get("source")
+                cf["ambiguity_kind"] = AMBIGUITY_DOCUMENT
+                cf["ambiguity_reason"] = ambiguity
+                if confirmed.get("config_landing"):
+                    cf["confirmation_config_landing"] = confirmed["config_landing"]
+                if confirmed.get("open_questions"):
+                    cf["confirmation_open_questions"] = confirmed["open_questions"]
+                cf["executable_track"] = "manual"
+                case.description = (case.description or "") + "；产品已确认：" + confirmed["conclusion"]
+                if confirmed.get("step_result"):
+                    steps = case.test_case_steps or []
+                    if steps:
+                        steps[-1].result = confirmed["step_result"]
+                tags.append("已确认")
+            else:
+                cf["confirmation_status"] = "pending"
+                cf["ambiguity_kind"] = AMBIGUITY_DOCUMENT
+                cf["ambiguity_reason"] = ambiguity
+                cf["executable_track"] = "manual"
+                cf.pop("assertions", None)
+                case.name = "待确认-" + case.name[:115]
+                case.description = (case.description or "") + "；待确认：" + ambiguity
+                for step in case.test_case_steps or []:
+                    step.result = "记录实际结果；产品确认文档歧义后再判定通过或失败"
+                tags.append("待确认")
+        # 统一来源位置（P1-1）：字段规则用例已有"字段说明表 第N行"，其余用例此前只有文件名；
+        # 既然证据已定位到行号/子章节，就把它写进 source_location，UI 里追溯一致。
+        if not case.source_location and location and location.get("line") is not None:
+            heading = location.get("heading") or location.get("heading_title") or ""
+            case.source_location = (
+                f"{filename}#第{location['line']}行" + (f"《{heading}》" if heading else ""))
+        case.tags = list(dict.fromkeys(tags))
+        case.custom_fields = cf
+    return cases
+
+
+def _case_evidence_candidates(cf: dict[str, Any]) -> list[str]:
+    """该用例「证据文本」的候选（按可信度排序，去重保序）。
+
+    只放**来自文档的原文**（字段描述 / 导入条款 / 需求条目），不放模板合成句
+    （如「篩選字段「X」匹配規則：…」这种拼出来的文本在文档里当然找不到）。
+    """
+    rule = cf.get("requirement_rule") or {}
+    candidates = [
+        str(rule.get("evidence") or ""),
+        str(rule.get("description") or ""),
+        str(cf.get("source_evidence") or ""),
+    ]
+    if cf.get("import_clause_case") or cf.get("manual_supplement"):
+        candidates.insert(0, str(rule.get("rule") or "").split("；子项：")[0])
+    if cf.get("source_point"):
+        candidates.insert(0, str(cf["source_point"]))
+    out: list[str] = []
+    for value in candidates:
+        value = value.strip()
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+def _locate_case_evidence(
+    cf: dict[str, Any],
+    structure: StructuredRequirement | None,
+    text: str,
+) -> dict[str, Any] | None:
+    """把用例证据定位到文档位置（返回**定位结果**，是否采纳由调用方按章节白名单判断）。
+
+    - 字段规则优先用解析期算好的定位（``source.section``，来自表头所在子章节）；
+      其次用 ``structure.table_locations[表号]``；
+    - 其余（需求条目/导入条款/人工补充）按证据原文定位，有页码就限定页内；
+    - 定位不到返回 ``None``。
+    """
+    rule = cf.get("requirement_rule") or {}
+    source = rule.get("source") or {}
+    table = source.get("table") if isinstance(source, dict) else None
+    page = source.get("page") if isinstance(source, dict) else None
+
+    if isinstance(source, dict) and source.get("section"):
+        return {"section": source["section"], "line": source.get("line"),
+                "heading": source.get("heading", ""),
+                "heading_title": source.get("heading_title", ""),
+                "scope": "field_rule", "unique": True}
+    table_location = (getattr(structure, "table_locations", None) or {}).get(table)
+    if table_location and table_location.get("section"):
+        return {**table_location, "scope": "table_header"}
+
+    page_line_counts = getattr(structure, "page_line_counts", None) or []
+    for candidate in _case_evidence_candidates(cf):
+        location = locate_evidence(
+            text, candidate, page=page, page_line_counts=page_line_counts)
+        if location and location.get("section"):
+            return location
+    return None
+
+
+def _case_scenario_label(case: TestCaseCreate) -> str:
+    """同名用例的区分标签：优先文档子章节标题（原文证据），其次用例类别，最后表/行号。
+
+    **只描述来源位置**，不下业务结论——标题里出现的是「哪张表/哪个页面」，
+    不是猜出来的业务语义。
+    """
+    cf = case.custom_fields or {}
+    rule = cf.get("requirement_rule") or {}
+    source = rule.get("source") if isinstance(rule.get("source"), dict) else {}
+    heading_title = ""
+    evidence = cf.get("module_evidence") or {}
+    if evidence.get("heading_title"):
+        heading_title = str(evidence["heading_title"])
+    elif source.get("heading_title"):
+        heading_title = str(source["heading_title"])
+    elif source.get("heading"):
+        heading_title = str(source["heading"])
+    for keyword, label in _SCENARIO_LABELS:
+        if keyword in heading_title:
+            return label
+    if heading_title:
+        return heading_title
+    category = next((label for key, label in (
+        ("filter_field_case", "列表頁篩選查詢"),
+        ("list_display_case", "列表顯示"),
+        ("map_interaction_case", "地圖交互"),
+        ("read_only_case", "只讀校驗"),
+        ("import_clause_case", "導入校驗"),
+        ("manual_supplement", "人工補充"),
+        ("companion_template", "通用伴生場景"),
+    ) if cf.get(key)), "")
+    if category:
+        return category
+    table, row = source.get("table"), source.get("row")
+    if table is not None and row is not None:
+        return f"來源表{table}第{row}行"
+    if source.get("line") is not None:
+        return f"來源第{source['line']}行"
+    return ""
+
+
+def _duplicate_identity(case: TestCaseCreate) -> tuple:
+    """判断「是否同一条规则」的身份：规则 ID + 表/行 + 步骤 + 断言。"""
+    cf = case.custom_fields or {}
+    rule = cf.get("requirement_rule") or {}
+    source = rule.get("source") if isinstance(rule.get("source"), dict) else {}
+    steps = [(s.step, s.result) for s in (case.test_case_steps or [])]
+    return (
+        str(cf.get("requirement_rule_id") or ""),
+        source.get("table"), source.get("row"),
+        json.dumps(steps, ensure_ascii=False),
+        json.dumps(cf.get("assertions") or [], ensure_ascii=False, sort_keys=True),
+    )
+
+
+def _resolve_duplicate_titles(cases: list[TestCaseCreate]) -> list[TestCaseCreate]:
+    """同名标题收口：同一规则重复 → 去重；不同来源/场景 → 标题补足场景，规则 ID 全部保留。
+
+    背景（本轮质量问题）：YL 文档同一字段在两处出现（新建/编辑表单「字段说明」与
+    列表页「筛选查询区」），生成出两条**同名**用例而规则/来源不同——既不像重复，
+    也无法只看标题判断该测哪个页面。此处按证据分别处理，并记录可审计的去重/改名结果。
+
+    标签冲突时才升级：场景标签仍重名（如商品与支付各自的「筛选查询区」）→ 加模块前缀；
+    仍重名 → 追加规则 ID。任何一步都不改动规则 ID，追踪链完整。
+    """
+    groups: dict[str, list[TestCaseCreate]] = {}
+    for case in cases:
+        title = re.sub(r"^待确认-", "", case.name or "").strip()
+        groups.setdefault(title, []).append(case)
+
+    kept: list[TestCaseCreate] = []
+    removed = 0
+    renamed: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for title, items in groups.items():
+        if len(items) == 1:
+            continue
+        identities = [_duplicate_identity(c) for c in items]
+        if len(set(identities)) == 1:
+            # 同一条规则被重复产出：保留首条，其余丢弃（并留痕）
+            for extra in items[1:]:
+                seen_ids.add(id(extra))
+                removed += 1
+            cf = dict(items[0].custom_fields or {})
+            cf["duplicate_removed"] = len(items) - 1
+            items[0].custom_fields = cf
+            continue
+        # 不同规则/不同来源：标题必须能自解释，规则 ID 原样保留以维持追踪
+        labels = []
+        for case in items:
+            cf = case.custom_fields or {}
+            label = _case_scenario_label(case)
+            if not label:
+                source = ((cf.get("requirement_rule") or {}).get("source") or {})
+                table, row = source.get("table"), source.get("row")
+                label = (f"來源表{table}第{row}行" if table is not None and row is not None
+                         else "來源位置待補")
+            labels.append(label)
+        if len(set(labels)) != len(labels):
+            labels = [f"{c.module}-{label}" for c, label in zip(items, labels)]
+        if len(set(labels)) != len(labels):
+            labels = [f"{label}｜{(c.custom_fields or {}).get('requirement_rule_id')}"
+                      for c, label in zip(items, labels)]
+        for case, label in zip(items, labels):
+            pending_prefix = "待确认-" if (case.name or "").startswith("待确认-") else ""
+            body = (case.name or "")[len(pending_prefix):]
+            case.name = f"{pending_prefix}{body}（{label}）"[:120]
+            cf = dict(case.custom_fields or {})
+            cf["title_disambiguation"] = label
+            case.custom_fields = cf
+            renamed.append({
+                "title": title, "label": label, "module": case.module,
+                "rule_id": cf.get("requirement_rule_id"),
+            })
+    for case in cases:
+        if id(case) not in seen_ids:
+            kept.append(case)
+    if removed or renamed:
+        logging.getLogger(__name__).info(
+            "[ai] 同名标题收口：去重 %s 条；按文档场景明确标题 %s 条：%s",
+            removed, len(renamed), json.dumps(renamed, ensure_ascii=False),
+        )
+    return kept
+
+
+def _prd_sections(text: str) -> list[tuple[str, str]]:
+    """取文档最上层的业务章节；嵌套页面不覆盖已有大模块。"""
+    heading = re.compile(r"^\s*(\d+(?:[.．]\d+)*)\s*[.．、]?\s+([^\d].{1,35})$")
+    candidates = []
+    for index, line in enumerate((text or "").splitlines()):
+        match = heading.match(_ZERO_WIDTH_RE.sub("", line))
+        if (match and is_heading_line(line)
+                and re.search(r"管理|主數據|主数据|任务|任務|模块|模塊|中心|设置|設置|问卷|問卷|评价|評價", match.group(2))
+                and not re.search(r"必填|限制|字符|可编辑|可編輯|不可|支持|允许|允許|不得|用于|用於|显示|顯示|点击|點擊|校验|校驗|初始|完成|未填|未选", match.group(2))):
+            candidates.append((index, match.group(1).count("."), match.group(2).strip()))
+    if not candidates:
+        return []
+    depth = min(d for _, d, _ in candidates)
+    boundaries = [(i, n) for i, d, n in candidates if d == depth]
+    raw_lines = (text or "").splitlines()
+    return [(name, "\n".join(raw_lines[start + 1:end]))
+            for (start, name), (end, _) in zip(boundaries, boundaries[1:] + [(len(raw_lines), "")])]
+
+
 
 
 def _is_review_annotation(item: str) -> bool:
@@ -506,10 +949,21 @@ def _extract_requirement_points(text: str, *, filename: str = "") -> list[str]:
     section = "normal"
     metadata = r"^(文档版本|文檔版本|版本号|版本號|修改日期|修改人|修改內容|修改内容|修订历史|修訂歷史|软件需求规格说明书|軟件需求規格說明書|全称|定義/說明|备注|備註|评论|評論|V\d+(?:\.\d+)*|\d{4}[-/]\d{1,2}[-/]\d{1,2})"
     for raw_line in (text or "").splitlines():
+        if re.match(r"^\s*[a-zA-Z][.．、]\s*", raw_line) and re.search(r"导入|導入", text or ""):
+            continue  # 导入子项只走继承父条款的专用通道
+        clean_line = _clean_point_text(raw_line)
+        stem = _clean_point_text(filename_stem)
+        title_base = re.split(r"[（(]", stem, maxsplit=1)[0].strip()
+        if ((title_base and clean_line.startswith(title_base))
+                or re.search(r"已[锁鎖]定.{0,8}勿改", clean_line)
+                or re.match(r"^字符[类類]型\s*[:：]", clean_line)):
+            continue
         head = re.sub(r"^\s*(?:[-*#]|\d+[.)、])\s*", "", raw_line).strip()
         if not head:
             continue
         # 章节切换：标题行本身不生成用例，但决定后续行是否参与
+        if re.match(r"^\s*\d+(?:\.\d+)+\s+", raw_line) and not re.search(r"支持|必须|必須|不得|校验|校驗", raw_line):
+            continue
         if is_heading_line(head) or _section_kind(head) != "normal":
             section = _section_kind(head)
             if re.match(r"^[\d一二三四五六七八九十]+(\.\d+)*[\s.、]", head) or _REVIEW_SECTION_RE.search(head) \
@@ -519,10 +973,17 @@ def _extract_requirement_points(text: str, *, filename: str = "") -> list[str]:
             continue
         # 段落内再按标点切分成条目（保持既有行为）
         for raw in re.split(r"[。；;]+", raw_line):
-            item = re.sub(r"^\s*(?:[-*#]|\d+[.)、])\s*", "", raw).strip()
+            item = re.sub(r"^\s*(?:[-*#]|\d+(?:\.\d+)*[.)、]?\s+|[a-zA-Z][.．、])\s*", "", raw).strip()
             # 先清理零宽字符与**行尾协作批注**（CS 规格书把「作者+月日+时间」附在条目末尾），
             # 否则批注会粘进用例名，且长度虚高绕过 <8 字的最小长度门槛。
             item = _clean_point_text(item)
+            # rev133：状态矩阵表（状态｜说明｜可操作按钮）的行会被 PDF 文本抽取**并进同一条叙述行**，
+            # 产出「操作：支持新建…导出明细可操作按钮待启用初始创建完成的问卷状态即为待启用…」
+            # 这类 120 字的用例名（复验7 TC-644460 实测）。表头词「可操作按钮」之后是表格残渣，
+            # 不是本条需求的延续 → 在表头词处截断；矩阵本身仍走独立的「状态×按钮」通道（已知缺口）。
+            item = re.split(r"可操作按钮|可操作按鈕", item)[0].strip(" ，、,;；")
+            if _is_incomplete_clause(item) or re.search(r"[\w\u4e00-\u9fa5]{1,4}\d{1,2}月\d{1,2}日", item):
+                continue
             if not item:
                 continue
             if filename_stem and item.replace("\u200b", "").strip() == filename_stem:
@@ -535,7 +996,7 @@ def _extract_requirement_points(text: str, *, filename: str = "") -> list[str]:
                     # 协作痕迹/导出样例名/页码残片 → 不生成用例（漂移根因）
                     and not _is_doc_noise(item)
                     # 评审/确认批注（"秋刀：原功能没有…跟产品确认，去掉"）→ 不是需求
-                    and not _is_review_annotation(item)
+                    and (not _is_review_annotation(item) or bool(re.search(r"若|如果|取消|状态|狀態", item)))
                     # 变更清单（"新增：…" / "删除：变动金额、"）→ 不是可测规则
                     and not _is_change_delta(item)
                     and item not in seen):
@@ -578,19 +1039,60 @@ def _distinctive_field_aliases(
             (c for c in cands if counts[c] == 1 and len(c) >= 2),
             key=len, reverse=True,
         )
+        if not keep:
+            peers = [r for r, n in names if n == rule.name]
+            if len(peers) > 1 and not _is_filter_field_rule(rule) and sum(not _is_filter_field_rule(r) for r in peers) == 1:
+                keep = [rule.name]
         if keep:
             out.append((rule, keep))
     return out
 
 
+#: 主语区边界：标签前缀（"查询条件："、"列表信息："、
+#: "文件名格式："）之后的字段名只是**被提到**，不是该句要验证的对象。
+_SUBJECT_DELIM_RE = re.compile(r"[：:，,。；;]")
+#: 占位符 / 括号注释里的字段名同理——"调查问卷-{问卷标题+问卷编码}" 描述的是文件名构成，
+#: 不是「问卷标题必填」。
+_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}|\[[^\[\]]*\]|（[^（）]*）|\([^()]*\)")
+#: 示例值（"调查问卷-这里是问卷标题名称1234567890-20260101100000.xlsx"）是产物样例，
+#: 不是需求条款，挂断言等于凭空造判据。
+_EXAMPLE_VALUE_RE = re.compile(
+    r"\.(?:xlsx|xls|csv|pdf|docx|doc|png|jpe?g|gif|zip|rar|txt)\s*$", re.IGNORECASE)
+#: 段首编号（"1."、"1.2.1 "、"（3）"、"①"、"-"）不参与主语判定
+_LEADING_ENUM_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)*\s*[.、)）]?\s*|[（(]\s*\d+\s*[）)]\s*|[①-⑩]\s*|[-*•·]\s*)")
+
+
+def _subject_zone(point: str) -> str:
+    """取出"这句话在讲谁"——占位符剔除、段首编号剥离、遇到标签冒号/逗号即止。"""
+    text = _PLACEHOLDER_RE.sub("", point or "").strip()
+    text = _LEADING_ENUM_RE.sub("", text).strip()
+    return _SUBJECT_DELIM_RE.split(text, 1)[0]
+
+
 def _match_field_for_point(
     point: str, aliases: list[tuple[FieldRule, list[str]]]
 ) -> tuple[FieldRule, str] | None:
-    """叙述条目 → 字段规则回链：取最长命中别名的字段（一条至多链一个字段）。"""
+    """叙述条目 → 字段规则回链：取最长命中别名的字段（一条至多链一个字段）。
+
+    rev133（小杨生煎问卷实测）：原先只要句子里**出现**字段名就回链，导致
+    "文件名格式：调查问卷-{问卷标题+问卷编码}-{导出时间}" 被挂上「问卷标题-必填」
+    断言，而"查询条件：问卷标题---支持模糊查询"被挂上同一个必填断言——标题讲的是
+    导出/查询行为，断言却在验必填，**跑绿了也不代表需求对了**（假通过）。
+    5 条错配全是这一类。因此回链必须满足「该字段是本句主语」：
+    ① 整句是示例值（带文件扩展名）→ 不是需求条款，不回链；
+    ② 占位符 `{}`/`[]`/括号里的字段名只是引用，剔除后再判；
+    ③ 只在主语区（首个冒号/逗号/分号之前）命中才回链。
+    """
+    if _EXAMPLE_VALUE_RE.search(point or ""):
+        return None
+    zone = _subject_zone(point)
+    if not zone:
+        return None
     best: tuple[int, FieldRule, str] | None = None
     for rule, cands in aliases:
         for alias in cands:
-            if alias and alias in point:
+            if alias and alias in zone:
                 if best is None or len(alias) > best[0]:
                     best = (len(alias), rule, alias)
     if best is None:
@@ -614,9 +1116,11 @@ def _build_requirement_cases(
     # 过滤和数量控制由需求内容与后续质量门禁决定。
     module = _derive_requirement_module(points, filename, module_hint=module_hint)
     scenarios: list[tuple[str, str, Priority]] = []
+    aliases = _distinctive_field_aliases(field_rules or [])
     for point in points:
         scenarios.append((point, "正向", Priority.HIGH if test_mode == "smoke" else Priority.MEDIUM))
-        if test_mode != "smoke":
+        if (test_mode != "smoke" and _match_field_for_point(point, aliases)
+                and not re.search(r"列表|查询|查詢|点击|點擊|入口|状态|狀態|問卷|问卷|新增题目|拖拽", point)):
             scenarios.append((f"{point}的必填或非法输入校验", "反向", Priority.MEDIUM))
             scenarios.append((f"{point}的边界条件处理", "边界", Priority.MEDIUM))
 
@@ -641,6 +1145,7 @@ def _build_requirement_cases(
             linked = _match_field_for_point(base_point, aliases)
         rule_id = _rule_id("RQ", filename, title)
         custom_fields: dict[str, Any] = {"requirement_rule_id": rule_id,
+                                          "source_point": base_point,
                                           # rev106 雙軌標記：默認人工軌，回鏈到字段規則後轉自動
                                           "executable_track": "manual"}
         description = f"基于上传需求文档《{filename}》生成；场景来源：{title}。"
@@ -692,8 +1197,8 @@ def _build_requirement_cases(
             preconditions="已按上传需求准备角色、权限和前置数据。",
             priority=priority,
             test_case_steps=[
-                TestStepCreate(step=f"进入需求描述的功能入口，执行：{title}", result="页面展示对应功能并接受本场景输入"),
-                TestStepCreate(step="提交操作并检查页面、数据或状态变化", result="实际结果与该需求场景的验收标准一致，异常场景不产生错误数据"),
+                TestStepCreate(step=f"准备并执行需求场景：{title}", result=f"核对文档约定：{base_point}"),
+                TestStepCreate(step="检查页面、数据和状态变化，记录实际结果", result=f"实际结果符合原文：{base_point}"),
             ],
             module=module,
             keyword=keyword,
@@ -767,7 +1272,7 @@ def _is_filter_field_rule(rule: Any) -> bool:
     for c in (getattr(rule, "constraints", None) or []):
         parts.append(str(getattr(c, "raw", c) or ""))
     blob = " ".join(parts)
-    return any(marker in blob for marker in _FILTER_RULE_MARKERS)
+    return bool(re.search(r"模糊|精[确確]|匹配|查[询詢]|[筛篩]选|[筛篩]選", blob))
 
 
 def _build_filter_field_cases(
@@ -793,7 +1298,10 @@ def _build_filter_field_cases(
             continue
         name = str(getattr(rule, "name", "") or "").strip()
         desc = str(getattr(rule, "description", "") or "").strip()
-        key = f"{name}|{desc[:30]}"
+        source = dict(getattr(rule, "source", None) or {})
+        # rev110：表号进 key——同一字段名在**不同表**（商品/支付各自的筛选查询区）
+        # 是两条独立规则，早前按 name|desc 去重会把后者整条吃掉（少用例 + 归属错）。
+        key = f"{name}|{desc[:30]}|{source.get('table')}"
         if not name or key in seen:
             continue
         seen.add(key)
@@ -806,7 +1314,9 @@ def _build_filter_field_cases(
             custom_fields={
                 "requirement_rule_id": _rule_id("FLT", filename, key),
                 "requirement_rule": {"field": name, "rule": rule_point,
-                                     "type": str(getattr(rule, "field_type", "") or "")},
+                                     "type": str(getattr(rule, "field_type", "") or ""),
+                                     "source": source,
+                                     "evidence": desc},
                 "filter_field_case": True,
                 "executable_track": "manual",
                 "source_file": filename,
@@ -821,28 +1331,55 @@ def _build_filter_field_cases(
 
 
 #: rev107-2：導入規則條款的識別（編號條款 + 導入語義詞）
-_IMPORT_CLAUSE_RE = re.compile(r"^\s*\d+\s*[、.．]\s*(.+)$")
+_IMPORT_CLAUSE_RE = re.compile(r"^\s*(?:\d+|[a-zA-Z])\s*[、.．]\s*(.+)$")
 _IMPORT_CLAUSE_MARKERS = ("必填", "失敗", "重複", "保持", "最多", "導入", "导入",
                           "創建", "创建", "更新", "刪除", "删除", "錯誤", "错误")
 
 
 def _extract_import_clauses(text: str, limit: int = 25) -> list[str]:
-    """從全文抽導入類編號條款（去重、截長），供每條款產一條用例。"""
+    """抽取编号条款及继承父条款语义的字母子项，保留 PDF 换行后的正文。"""
+    if limit <= 0:
+        return []
+    if not re.search(r"导入|導入", text or ""):
+        return []
+    entries: list[tuple[bool, str]] = []
+    for raw in (text or "").splitlines():
+        line = _ZERO_WIDTH_RE.sub("", raw).strip()
+        if not line or re.match(r"^=+\s*(?:PAGE|页|頁)\s*\d+\s*=+$", line, re.I):
+            continue
+        if is_heading_line(line) or _section_kind(line) != "normal":
+            entries.append((False, ""))  # 章节边界清除父条款，防止跨节继承
+            continue
+        match = _IMPORT_CLAUSE_RE.match(line)
+        if match:
+            entries.append((bool(re.match(r"^[a-zA-Z]", line)), match.group(1).strip()))
+        elif entries and entries[-1][1] and not _is_doc_noise(line):
+            child, body = entries[-1]
+            entries[-1] = (child, body + line)
+        else:
+            entries.append((False, ""))
     out: list[str] = []
     seen: set[str] = set()
-    for line in (text or "").splitlines():
-        m2 = _IMPORT_CLAUSE_RE.match(line or "")
-        if not m2:
+    parent = ""
+    for child, body in entries:
+        if not body:
+            parent = ""
             continue
-        clause = m2.group(1).strip()
+        clause = f"{parent}；子项：{body}" if child and parent else body
+        if child and not parent:
+            continue
+        if not child:
+            parent = ""
         # 純章節標題（如「2.3 導入門店」「2.3.2 導入規則：」）不產用例——無謂語不成條款
         if re.match(r"^[\d.]+\s*[^，；、]{2,14}$", clause):
             continue
-        if len(clause) < 8 or len(clause) > 120:
+        if len(clause) < 8:
             continue
         if not any(k in clause for k in _IMPORT_CLAUSE_MARKERS):
             continue
-        key = clause[:40]
+        if not child:
+            parent = clause
+        key = clause
         if key in seen:
             continue
         seen.add(key)
@@ -865,14 +1402,21 @@ def _build_import_clause_cases(
     """
     cases: list[TestCaseCreate] = []
     for clause in _extract_import_clauses(text, limit=limit):
-        short = clause[:44]
+        if _is_incomplete_clause(clause):
+            continue
+        child = clause.split("；子项：", 1)[-1]
+        short = child[:90].rstrip("；;。")
+        if "；子项：" in clause:
+            if re.search(r"電話|电话|關鍵詞|关键词|營業時間|营业时间", child):
+                subject = next(label for pattern, label in ((r"電話|电话", "店铺电话"), (r"關鍵詞|关键词", "搜索关键词"), (r"營業時間|营业时间", "营业时间")) if re.search(pattern, child))
+                short = subject + "字段组完整性"
         cases.append(TestCaseCreate(
             name=f"導入-{short}校驗"[:120],
             preconditions="已登錄且具備導入權限；已準備符合/不符合條款的導入文件",
             description=f"來源文件：{filename}；導入條款：{clause}",
             priority=Priority.MEDIUM,
             custom_fields={
-                "requirement_rule_id": _rule_id("IMP", filename, clause[:60]),
+                "requirement_rule_id": _rule_id("IMP", filename, clause),
                 "requirement_rule": {"field": "導入", "rule": clause},
                 "import_clause_case": True,
                 "executable_track": "manual",
@@ -881,6 +1425,307 @@ def _build_import_clause_cases(
             test_case_steps=[
                 {"step": f"構造觸發該條款的導入數據（{short}…）", "result": "文件可正常上傳"},
                 {"step": "執行導入並等待處理完成", "result": "導入結果與條款約定一致（成功/失敗及原因提示準確）"},
+            ] or None,
+        ))
+    return cases
+
+
+def _is_incomplete_clause(text: str) -> bool:
+    return bool(re.search(r"\b[xX]{2,}\s*字段|[xX]{2,}字段", text or "")
+                or (text or "").rstrip().endswith(("：", ":")))
+
+
+def _build_import_supplement_cases(text: str, filename: str) -> list[TestCaseCreate]:
+    """营业时间导入未约定重叠处理时，显式留下人工确认项，不计需求覆盖。"""
+    clauses = _extract_import_clauses(text, limit=1000)
+    evidence = next((c for c in clauses if re.search(r"營業時間|营业时间", c)), "")
+    if not evidence or re.search(r"重疊|重叠|overlap", text or "", re.I):
+        return []
+    return [TestCaseCreate(
+        name="人工補充-營業時間段重疊處理待確認",
+        description=(f"人工补充项；来源文件：{filename}。文档仅约定：{evidence}。"
+                     "未明确时间段重叠时应允许、拒绝或合并，需产品确认后补充预期。"),
+        preconditions="已找到营业时间导入条款；重叠处理规则待产品确认",
+        priority=Priority.MEDIUM,
+        custom_fields={
+            "manual_supplement": True,
+            "confirmation_status": "pending",
+            # 与「文档歧义」区分：这是**文档未约定**、需人工补充预期的项，
+            # 不是文档自相矛盾；两类在确认口径上不同，不得混为一谈。
+            "ambiguity_kind": AMBIGUITY_MANUAL_SUPPLEMENT,
+            "ambiguity_reason": "文檔未約定同一營業日多個時間段重疊/端點相接的處理規則，需人工補充預期",
+            "executable_track": "manual",
+            "source_file": filename,
+            "source_evidence": evidence,
+            # 刻意**不挂** requirement_rule / requirement_rule_id：人工补充项不是 PRD 规则，
+            # 挂上会被当成"文档里真有这条规则"（定位仍可用 source_evidence 原文）。
+        },
+        test_case_steps=[{
+            "step": "向产品确认同一营业日多个时间段发生重叠及端点相接时的处理规则",
+            "result": "记录确认结论并补充可判定预期；确认前不判定通过或失败",
+        }],
+    )]
+
+
+#: 列表显示表 → 模块名判定（按列名关键词），用于用例命名与步骤措辞
+_LIST_MODULE_HINTS = (("店鋪", "店鋪"), ("店铺", "店鋪"), ("商品", "商品"),
+                      ("支付方式", "支付方式"), ("會員", "會員"), ("会员", "會員"))
+
+#: rev109（P1）：地图交互/只读字段的判定标记（字段说明描述里的编辑态与组件证据）
+_MAP_MARKERS = ("地圖", "地图", "谷歌地圖", "Google Maps", "google maps")
+#: 坐標欄位名（含 YL 文檔實際用詞「精度/維度」——經緯度在該文檔裡就這麼命名）
+_COORD_NAME_HINTS = ("經度", "纬度", "经度", "緯度", "坐標", "坐标",
+                     "精度", "維度", "longitude", "latitude")
+#: 「是否可編輯」列中 = 只讀語義的取值（YL 店鋪字段表：否/系統自動生成）
+_READ_ONLY_EDITABLE_VALUES = ("否", "系統自動生成", "系统自动生成", "只讀", "只读", "N", "不可編輯", "不可编辑")
+
+
+def _is_coord_rule(rule: Any) -> bool:
+    name = str(getattr(rule, "name", "") or "").lower()
+    return any(h.lower() in name for h in _COORD_NAME_HINTS)
+
+
+def _build_map_interaction_cases(
+    field_rules: list,
+    filename: str,
+    *,
+    module_hint: str = "",
+) -> list[TestCaseCreate]:
+    """地圖組件交互 → 每文檔一條「地址搜索定位與坐標回填」用例（rev109 / P1）。
+
+    人工對比缺口（YL 主數據）：「輸入詳細地址，從地圖組件搜索詳細的位置；
+    搜索的範圍在店鋪行政區範圍」與「通過詳細地址在谷歌地圖中搜索返回具體的
+    經度/緯度，不可編輯」都在字段說明列的**敘述文字**裡——表格行不進敘事通道，
+    extract_constraints 也不抽地圖語義 → 此前無任何用例承接地圖交互。
+    這裡按 desc 命中「地圖」路由：地址欄位（觸發搜索）+ 坐標欄位（回填+只讀）
+    動態組裝步驟，executable_track=manual（地圖組件多為外部嵌入，需真實頁面判定）。
+    """
+    coord_rules = [r for r in field_rules or [] if _is_coord_rule(r)]
+    addr_rules = [
+        r for r in field_rules or []
+        if any(m in str(getattr(r, "description", "") or "") for m in _MAP_MARKERS)
+        and not _is_coord_rule(r)
+    ]
+    evidence = addr_rules + coord_rules
+    if not evidence or not any(
+            any(m in str(getattr(r, "description", "") or "") for m in _MAP_MARKERS)
+            for r in evidence):
+        return []
+    addr = str(addr_rules[0].name) if addr_rules else "詳細地址"
+    lng = next((str(r.name) for r in coord_rules
+                if "經" in str(r.name) or "lon" in str(r.name).lower()),
+               str(coord_rules[0].name) if coord_rules else "經度")
+    lat = next((str(r.name) for r in coord_rules if r.name != lng), "緯度")
+    blobs = [f"「{r.name}」{str(getattr(r, 'description', '') or '')[:60]}" for r in evidence[:3]]
+    rule_point = "地圖組件交互：" + "；".join(blobs)
+    sig = "|".join(sorted(str(r.name) for r in evidence))
+    prefix = f"{module_hint}-" if module_hint else ""
+    return [TestCaseCreate(
+        name=f"{prefix}地圖組件-地址搜索定位與坐標回填校驗"[:120],
+        preconditions="已登錄並打開含地圖組件的新建/編輯頁面",
+        description=f"來源文件：{filename}；{rule_point}",
+        priority=Priority.MEDIUM,
+        custom_fields={
+                "requirement_rule_id": _rule_id("MAP", filename, sig),
+            "requirement_rule": {"field": "地圖組件", "rule": rule_point},
+            "map_interaction_case": True,
+            "executable_track": "manual",
+            "source_file": filename,
+        },
+        test_case_steps=[
+            {"step": f"在「{addr}」輸入地址關鍵字並等待組件響應",
+             "result": "地圖組件發起搜索並返回候選位置（範圍按文檔限定，如店鋪行政區）"},
+            {"step": "從候選位置中選擇目標點",
+             "result": f"「{lng}」「{lat}」自動回填為所選位置的坐標"},
+            {"step": f"嘗試直接修改「{lng}」「{lat}」",
+             "result": "字段為禁用/只讀態，無法輸入或修改"},
+            {"step": "保存記錄並重新打開查看",
+             "result": "地址與坐標一致；坐標值與地圖選點相符，未被手工篡改"},
+        ] or None,
+    )]
+
+
+def _build_read_only_field_cases(
+    field_rules: list,
+    filename: str,
+    *,
+    module_hint: str = "",
+    limit: int = 20,
+) -> list[TestCaseCreate]:
+    """只讀（不可編輯）字段 → 每字段一條「只讀校驗」用例（rev109 / P1）。
+
+    编辑态證據有兩個來源，命中任一即產用例：
+    ①「是否可編輯」列（YL 店鋪字段表：值=否/系統自動生成）——解析层 rev109 起
+      進 FieldRule.editable；
+    ② 說明列敘述（「不可編輯」「禁用狀態」）——read_only 約束。
+    不夸大——文檔兩處都沒寫的字段不生產此類用例。
+    """
+    cases: list[TestCaseCreate] = []
+    seen: set[str] = set()
+    for rule in field_rules or []:
+        if len(cases) >= limit:
+            break
+        ro = rule.constraint("read_only") if hasattr(rule, "constraint") else None
+        editable = str(getattr(rule, "editable", "") or "").strip()
+        col_evidence = editable if editable in _READ_ONLY_EDITABLE_VALUES else ""
+        if ro is None and not col_evidence:
+            continue
+        name = str(getattr(rule, "name", "") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        desc_raw = str(getattr(ro, "raw", "") or "") if ro is not None else ""
+        basis = "、".join(x for x in (f"是否可編輯={col_evidence}" if col_evidence else "",
+                                      f"說明列：{desc_raw}" if desc_raw else "") if x)
+        module = module_hint or "業務"
+        cases.append(TestCaseCreate(
+            name=f"{module}-{name}-只讀（不可編輯）校驗"[:120],
+            preconditions="已登錄並打開含該字段的編輯/詳情頁面",
+            description=f"來源文件：{filename}；字段「{name}」{basis}（見需求文檔字段說明）",
+            priority=Priority.MEDIUM,
+            custom_fields={
+                "requirement_rule_id": _rule_id("RO", filename, name),
+                "requirement_rule": {"field": name,
+                                     "rule": f"「{name}」只讀/不可手工修改（{basis}）",
+                                     "editable": editable},
+                "read_only_case": True,
+                "executable_track": "manual",
+                "source_file": filename,
+            },
+            test_case_steps=[
+                {"step": f"定位字段「{name}」並檢查其輸入控件狀態",
+                 "result": f"字段呈禁用/只讀態（文檔依據：{basis}）"},
+                {"step": f"嘗試對「{name}」輸入或修改值", "result": "無法輸入或修改；值保持不變"},
+                {"step": "保存並重新打開記錄", "result": "該字段值與修改前一致，未被篡改"},
+            ] or None,
+        ))
+    return cases
+
+
+def _build_export_detail_cases(
+    structure: StructuredRequirement | None,
+    filename: str,
+    *,
+    module_hint: str = "",
+    limit: int = 6,
+) -> list[TestCaseCreate]:
+    """「導出明細」表 → 每表一條「欄位完整性校驗」用例（rev111）。
+
+    实测缺口（PR-2）：`2.3.6 導出明細` 的四张表共 13 行字段规则（"固定显示，获取用户昵称，
+    为空时显示'-'"…）此前**一条用例都没有**——既没有必填/枚举/长度约束，说明里也没有筛选
+    关键词，于是既不进字段校验用例也不进筛选匹配用例。此处按表产一条完整性用例
+    （形态同「列表顯示字段」的 LST 用例），把"导出文件应有哪些列、空值怎么显示"落成可执行步骤。
+    """
+    if structure is None:
+        return []
+    locations = getattr(structure, "table_locations", None) or {}
+    grouped: dict[Any, list[Any]] = {}
+    for rule in structure.field_rules:
+        grouped.setdefault(rule.source.get("table"), []).append(rule)
+    cases: list[TestCaseCreate] = []
+    for table, rules in grouped.items():
+        if len(cases) >= limit:
+            break
+        location = locations.get(table) or {}
+        heading = str(location.get("heading") or "")
+        if not re.search(r"導出明細|导出明细|導出欄位|导出字段|導出清單|导出清单", heading):
+            continue
+        names = [str(getattr(rule, "name", "") or "").strip() for rule in rules]
+        names = [n for n in names if n]
+        if not names:
+            continue
+        col_list = "、".join(names[:20])
+        rule_point = f"「導出明細」欄位（{len(names)}項）：{col_list}"
+        empty_rules = [
+            str(getattr(rule, "description", "") or "")
+            for rule in rules
+            if re.search(r"為空時顯示|为空时显示|若無則|若无则",
+                         str(getattr(rule, "description", "") or ""))
+        ]
+        source = {k: location.get(k) for k in
+                  ("page", "line", "heading", "heading_title", "section")
+                  if location.get(k) is not None}
+        source["table"] = table
+        steps = [
+            {"step": "在問卷列表頁點擊「導出明細」，選擇時間段後導出",
+             "result": "導出成功，得到 Excel/CSV 文件"},
+            {"step": "逐個核對導出文件的表頭與文檔「導出明細」欄位清單",
+             "result": f"欄位齊全且順序一致：{col_list}"},
+        ]
+        if empty_rules:
+            steps.append({
+                "step": "構造空值數據（如未關聯訂單號、無會員卡號）後再次導出",
+                "result": "空值欄位按文檔約定顯示為「-」（" + "；".join(empty_rules[:3])[:120] + "）",
+            })
+        steps.append({"step": "檢查有無文檔未聲明的多餘欄位或缺失欄位",
+                      "result": "無多餘/缺失，與文檔清單完全一致"})
+        cases.append(TestCaseCreate(
+            name=f"導出明細-欄位完整性校驗（{len(names)}欄）"[:120],
+            preconditions="已登錄並打開問卷列表頁，存在可導出的問卷填寫數據",
+            description=f"來源文件：{filename}；{rule_point}",
+            priority=Priority.MEDIUM,
+            module=module_hint or None,
+            custom_fields={
+                "requirement_rule_id": _rule_id(
+                    "LST", filename, f"export|{table}|{'|'.join(names)}"),
+                "requirement_rule": {"field": "導出明細欄位", "rule": rule_point,
+                                     "source": source},
+                "list_display_case": True,
+                "export_detail_case": True,
+                "executable_track": "manual",
+                "source_file": filename,
+            },
+            test_case_steps=[TestStepCreate(step=s["step"], result=s["result"]) for s in steps],
+        ))
+    return cases
+
+
+def _build_list_display_cases(
+    display_tables: list,
+    filename: str,
+    *,
+    module_hint: str = "",
+    limit: int = 8,
+) -> list[TestCaseCreate]:
+    """「列表顯示字段」表 → 每表一條「欄位完整性校驗」用例（rev108）。
+
+    人工對比缺口（YL 主數據）：文檔列出店鋪 15 列/商品 7 列/支付 5 列的
+    列表顯示欄位，此前因「說明」不在字段表判定詞表整表落入 template_tables
+    （只存行数），列清單全丢、無任何用例承接。rev108 起解析层产出
+    display_columns，這裡一表一條手工形態用例（核對欄位齊全/順序/無多餘缺失），
+    executable_track=manual（需真實頁面判定）。
+    """
+    cases: list[TestCaseCreate] = []
+    for table in display_tables or []:
+        if len(cases) >= limit:
+            break
+        columns = [c for c in (table.get("columns") or []) if c.get("name")]
+        if not columns:
+            continue
+        names = [c["name"] for c in columns]
+        blob = " ".join(names)
+        module = next((label for kw, label in _LIST_MODULE_HINTS if kw in blob), module_hint or "業務")
+        col_list = "、".join(names[:20])
+        rule_point = f"「{module}」列表顯示欄位（{len(names)}列）：{col_list}"
+        sig = "|".join(names)
+        cases.append(TestCaseCreate(
+            name=f"列表顯示-{module}-欄位完整性校驗"[:120],
+            preconditions="已登錄並打開對應列表頁",
+            description=f"來源文件：{filename}；{rule_point}",
+            priority=Priority.MEDIUM,
+            custom_fields={
+                "requirement_rule_id": _rule_id("LST", filename, f"{table.get('table')}|{sig}"),
+                "requirement_rule": {"field": "列表顯示欄位", "rule": rule_point},
+                "list_display_case": True,
+                "executable_track": "manual",
+                "source_file": filename,
+            },
+            test_case_steps=[
+                {"step": f"打開「{module}」列表頁", "result": "列表正常加載，表頭欄位完整渲染"},
+                {"step": "逐個核對表頭欄位與需求文檔「列表顯示字段」清單",
+                 "result": f"欄位齊全且順序一致：{col_list}"},
+                {"step": "檢查有無文檔未聲明的多餘欄位或缺失欄位",
+                 "result": "無多餘/缺失，與文檔清單完全一致"},
             ] or None,
         ))
     return cases
@@ -952,9 +1797,41 @@ def _build_compilability_warning(
     实测 PR-9：上传 `CS Module方案説明2.0….pdf` 后 `field_rule_count=0`，
     36 条用例全部只有规则编号、没有断言，而响应里没有任何提示。
     """
-    if int((structure_summary or {}).get("field_rule_count") or 0) > 0:
-        return None
     summary = structure_summary or {}
+    if int(summary.get("field_rule_count") or 0) > 0:
+        # rev132：规则数 > 0 也要点名「有多少条其实产不出用例」。
+        # 实测小杨生煎问卷 PDF：27 条字段规则只有 10 条具备必填/枚举约束，
+        # 另外 17 条（填写渠道、用户名、门店名称…只读展示列）被生成门槛静默丢弃，
+        # 响应里一个字都没有 ⇒ 看起来"覆盖了 27 个字段"，实际只校验了 10 个。
+        total = int(summary.get("field_rule_count") or 0)
+        eligible = summary.get("field_rule_case_eligible")
+        if eligible is None and summary.get("field_rules"):
+            eligible = sum(
+                1 for rule in summary["field_rules"]
+                if rule.get("required")
+                or any(c.get("kind") == "options" for c in rule.get("constraints") or [])
+            )
+        if isinstance(eligible, int) and 0 < eligible < total:
+            dropped_names: list[str] = []
+            for rule in (summary.get("field_rules") or []):
+                name = str(rule.get("name") or "")
+                if not name or name in dropped_names:
+                    continue          # 同名字段在两张表里重复出现（选项/添加选项…）只列一次
+                if rule.get("required"):
+                    continue
+                if any(c.get("kind") == "options" for c in rule.get("constraints") or []):
+                    continue
+                dropped_names.append(name)
+                if len(dropped_names) >= 8:
+                    break
+            listed = "、".join(dropped_names)
+            return (
+                f"文档解析出 {total} 条字段规则，其中 {eligible} 条具备必填/枚举约束、已生成校验用例；"
+                f"另外 {total - eligible} 条无机器可判定的约束，未生成用例"
+                + (f"（{listed} 等）" if listed else "")
+                + "。这类字段多为只读展示列，若要覆盖请在文档中补充必填、取值范围或长度限制。"
+            )
+        return None
     if summary.get("degraded"):
         return (
             "结构化解析失败，已降级为纯文本（field_rule_count=0）："
@@ -1154,7 +2031,7 @@ def _field_rule_cases(
     test_mode: str,
 ) -> list[TestCaseCreate]:
     source_location = f"{filename}#字段说明表 第{rule.source.get('row', '?')}行"
-    rule_id = _rule_id("FR", filename, rule.name)
+    rule_id = _rule_id("FR", filename, f"{rule.name}|{rule.source.get('table')}|{rule.source.get('row')}")
     assertions = _rule_assertions(rule)
     base_precondition = "已登录并进入需求描述的页面"
     if rule.condition:
@@ -1194,10 +2071,13 @@ def _field_rule_cases(
                     "required": rule.required,
                     "condition": rule.condition,
                     "source": rule.source,
+                    # 规则原文（歧义判定与文档定位都只认本条规则自身的证据）
+                    "description": rule.description,
+                    "evidence": rule.description,
                 },
                 "assertions": assertions.get(assertion_kind, []),
                 # rev106 雙軌標記：帶機器可判定斷言 → 自動軌
-                "executable_track": "auto",
+                "executable_track": "auto" if assertions.get(assertion_kind) else "manual",
                 # 来源标记：文档抽取而来（人工回写的断言标 manual，见 test_assertion_service）
                 "assertions_source": "doc_extracted",
             },
@@ -1207,7 +2087,10 @@ def _field_rule_cases(
     options = rule.constraint("options")
 
     # 1) 必填 / 枚举校验
-    if rule.required or options:
+    # rev132：门槛收口到 FieldRule.case_eligible（必填 或 有枚举取值），
+    # 与 requirement_structure.to_dict() 里的 field_rule_case_eligible 同源，
+    # 避免"解析侧说 27 条、生成侧只出 10 条"这类对不上的账。
+    if rule.case_eligible:
         values = options.detail.get("options", []) if options else []
         if values:
             steps = [
@@ -1270,8 +2153,16 @@ def _field_rule_cases(
         if max_cnt and max_cnt.numbers:
             limit = int(max_cnt.numbers[0])
             unit = max_cnt.detail.get("unit") or "条"
-            steps.append((f"在「{rule.name}」填入 {limit} {unit}（逗号分隔）", "通过校验"))
-            steps.append((f"在「{rule.name}」填入 {limit + 1} {unit}", "被拒绝并提示超出数量限制"))
+            if unit in ("天", "日"):
+                steps.append((f"在「{rule.name}」選擇跨度 {limit} 天", "通过校验"))
+                steps.append((f"在「{rule.name}」選擇跨度 {limit + 1} 天", "被拒绝或提示超出可选范围"))
+            elif unit in ("組", "组", "道", "時間段", "时间段", "項", "项"):
+                steps.append((f"在「{rule.name}」設置 {limit} {unit}", "通过校验"))
+                steps.append((f"在「{rule.name}」嘗試設置 {limit + 1} {unit}",
+                              "被拒绝并提示超出数量上限"))
+            else:
+                steps.append((f"在「{rule.name}」填入 {limit} {unit}（逗号分隔）", "通过校验"))
+                steps.append((f"在「{rule.name}」填入 {limit + 1} {unit}", "被拒绝并提示超出数量限制"))
         if formats_c or size_c:
             allowed = formats_c.detail.get("formats", []) if formats_c else []
             if allowed:

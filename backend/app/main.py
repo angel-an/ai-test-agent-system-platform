@@ -7,9 +7,14 @@ FastAPI 应用程序入口点
 from contextlib import asynccontextmanager
 from uuid import UUID
 
+import asyncio
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from app.api import api_router
 from app.config.settings import settings
@@ -200,11 +205,80 @@ async def recover_stuck_executions():
         print(f"[Recover] 恢复完成")
 
 
+async def run_migration_preflight() -> None:
+    """启动时执行迁移预检（P0-4 的部署路径接入）。
+
+    背景：统一导入的幂等键 ``项目 + method + normalized_path`` 依赖
+    ``uq_endpoint_project_method_normpath`` 唯一约束。迁移未到 head 时该约束缺失，
+    重复 confirm 会**静默重复创建端点**。运行时虽有 ``ensure_schema_ready`` 硬校验
+    （返回 503），但部署阶段就应可见，而不是等用户点导入才发现。
+
+    默认**只告警不阻断**（``MIGRATION_PREFLIGHT_STRICT=false``），避免既有部署
+    因新增检查无法启动；生产建议设为 ``true``。
+    """
+    if not settings.migration_preflight_enabled:
+        logger.info("[startup] 迁移预检已禁用（MIGRATION_PREFLIGHT_ENABLED=false）")
+        print("[startup] 迁移预检已禁用（MIGRATION_PREFLIGHT_ENABLED=false）")
+        return
+
+    try:
+        from app.scripts.migration_preflight import run_preflight
+
+        # 预检本身是同步实现（独立 engine + inspector），放到线程避免阻塞事件循环
+        report = await asyncio.to_thread(run_preflight, settings.postgres_sync_url)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[startup] 迁移预检执行失败（不阻断启动）: %s: %s", type(exc).__name__, exc)
+        return
+
+    exit_code = int(report.get("exit_code", 0) or 0)
+    drift = report.get("drift") or []
+    pending = report.get("pending") or []
+
+    if drift:
+        detail = "; ".join(
+            f"{item.get('revision')}({'部分漂移' if item.get('partial') else '结构已存在'})"
+            for item in drift
+        )
+        message = (
+            f"[startup] 检测到迁移版本漂移: {detail}。"
+            "库中结构已存在但 alembic_version 未记录，请人工确认后 stamp，"
+            "不要直接 upgrade head。"
+        )
+        if settings.migration_preflight_strict:
+            logger.error(message)
+            print(message)
+            raise RuntimeError(message)
+        logger.warning("%s（如需阻断启动请设 MIGRATION_PREFLIGHT_STRICT=true）", message)
+        print(f"{message}（如需阻断启动请设 MIGRATION_PREFLIGHT_STRICT=true）")
+        return
+
+    if pending:
+        warning = (
+            f"[startup] 存在未应用的迁移: {pending}。统一导入的幂等键依赖 "
+            "api_endpoints 唯一约束，请执行 alembic upgrade head，"
+            "否则 confirm 会返回 503（schema_not_ready）。"
+        )
+        logger.warning(warning)
+        print(warning)
+        return
+
+    logger.info("[startup] 迁移预检通过：数据库结构已是最新（head=%s）", report.get("head"))
+    print(f"[startup] 迁移预检通过：数据库结构已是最新（head={report.get('head')}）")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    # Skill 装配自检（P0-4）：装配失败是静默的（Agent 照常启动但 0 个 skill），
+    # 故在启动日志里强制可见。只读、不阻断启动。
+    from app.config.skill_assembly_check import log_skill_assembly_report
+    log_skill_assembly_report()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # 迁移预检：让"结构未就绪"在部署阶段可见（默认告警，可配置为阻断）
+    await run_migration_preflight()
 
     # 修复枚举值（不迁移历史数据，新值自动生效）
     await ensure_enum_values()

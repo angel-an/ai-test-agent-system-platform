@@ -179,15 +179,75 @@ class TestCaseService:
         )
         total = await self.repo.count_by_project_with_filters(project.id, **filters)
 
+        # 最近一次执行状态：一次性补齐本页用例（避免 N+1），
+        # 否则列表只能显示生命周期 state（永远"新建"），看不出执行结论。
+        latest = await self._latest_execution_status([tc.id for tc in test_cases])
+
         result = []
         for tc in test_cases:
             if minify:
                 info = await self._test_case_to_minified(tc)
             else:
                 info = await self._test_case_to_info(tc, project_identifier)
+            exec_info = latest.get(tc.id)
+            if exec_info is not None and hasattr(info, "latest_run_status"):
+                info.latest_run_status = exec_info[0]
+                info.latest_run_identifier = exec_info[1]
+                if hasattr(info, "latest_run_reason"):
+                    info.latest_run_reason = exec_info[2]
+                    info.latest_run_unverified = exec_info[3]
             result.append(info)
 
         return result, total
+
+    async def _latest_execution_status(
+        self, test_case_ids: list
+    ) -> dict:
+        """{test_case_id: (状态, 运行标识, 原因, 未验证条数)}：取**最近一次**执行状态。
+
+        来源是 test_run_test_cases（运行×用例）+ test_results（明细），而不是
+        test_cases.state（后者是用例生命周期，执行不会改它——这正是页面"全是新建"的原因）。
+
+        「原因」取自明细 description：状态列因此不必新增数据库枚举值
+        （`TestResultStatus` 只有 5 个值，新增需迁移），也能回答"为什么是跳过/未执行"。
+        """
+        if not test_case_ids:
+            return {}
+        from sqlalchemy import select as _select
+
+        from app.models.test_result import TestResult
+        from app.models.test_run import TestRun, TestRunTestCase
+
+        rows = (await self.session.execute(
+            _select(
+                TestRunTestCase.test_case_id,
+                TestRunTestCase.latest_status,
+                TestRun.identifier,
+                TestResult.description,
+                TestResult.custom_fields,
+                TestRun.created_at,
+            )
+            .join(TestRun, TestRun.id == TestRunTestCase.test_run_id)
+            .outerjoin(TestResult, TestResult.id == TestRunTestCase.latest_result_id)
+            .where(TestRunTestCase.test_case_id.in_(test_case_ids))
+            # 必须按**运行**时间排序：状态未变化时行的 updated_at 不会被刷新，
+            # 按 updated_at 排会取到更早的运行（实测显示成 TR-57 而不是最新的 TR-58）。
+            .order_by(TestRun.created_at.desc())
+        )).all()
+
+        out: dict = {}
+        for case_id, status, run_identifier, description, custom, _created in rows:
+            if case_id in out:
+                continue  # 已按运行时间倒序，首条即最近
+            value = getattr(status, "value", status)
+            unverified = custom.get("unverified") if isinstance(custom, dict) else None
+            out[case_id] = (
+                str(value).upper() if value else None,
+                run_identifier,
+                str(description)[:300] if description else None,
+                unverified,
+            )
+        return out
     
     async def get_test_case(
         self,
@@ -319,7 +379,13 @@ class TestCaseService:
         # 更新基本信息
         update_data = data.model_dump(exclude_unset=True, exclude={"steps", "tags"})
         tc = await self.repo.update(tc, **update_data)
-# pylint: disable  Mi80OmFIVnBZMlhscm9ua3VMazZkSGRJVVE9PTo0M2NhYjk1MQ==
+
+        # 更新标签（PATCH 单条更新此前显式排除 tags 且无任何处理逻辑，
+        # 客户端传入 tags 会被静默丢弃——此处复用批量更新的关联表写入逻辑）
+        if data.tags is not None:
+            await self._apply_list_operation(
+                tc, "tags", BulkEditOperation.REPLACE, data.tags, project.id
+            )
 
         # 更新版本号
         tc.version = (tc.version or 1) + 1

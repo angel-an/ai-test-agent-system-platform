@@ -1,0 +1,56 @@
+{
+ "id": "842ed3da-82a0-4e51-8ca5-e7a0b5c9a516",
+ "identifier": "TR-102",
+ "name": "Web 最小闭环验证 20260927-151543",
+ "description": "由 Web 最小闭环接口自动创建",
+ "run_state": "done",
+ "active_state": "active",
+ "assignee": null,
+ "test_cases_count": 32,
+ "tags": [],
+ "issues": [],
+ "configurations": [],
+ "overall_progress": {
+  "passed": 15,
+  "failed": 0,
+  "skipped": 7,
+  "blocked": 0,
+  "not_executed": 10
+ },
+ "execution_mode": "sequential",
+ "max_concurrency": 1,
+ "script_jobs": [
+  {
+   "id": "8f1e2c37-0d25-4c7b-bbf3-0671b8093f1d",
+   "test_run_id": "842ed3da-82a0-4e51-8ca5-e7a0b5c9a516",
+   "script_type": "web_test",
+   "script_id": "a1ddb666-81aa-417f-8a81-046a5dabee67",
+   "script_identifier": "WT-1D0EAC07",
+   "script_name": "TC-152251 - B端企业储值充值冒烟",
+   "execution_order": 1,
+   "execution_mode": "sequential",
+   "status": "completed",
+   "started_at": "2026-09-27T07:15:44.044986Z",
+   "completed_at": "2026-09-27T07:21:02.862182Z",
+   "duration_ms": 318792,
+   "result_summary": {
+    "total": 1,
+    "failed": 0,
+    "passed": 1,
+    "skipped": 0
+   },
+   "error_message": null,
+   "report_path": "a5f2adba-08b8-4f52-aad4-155811151db2",
+   "retry_count": 0,
+   "max_retries": 0,
+   "created_at": "2026-09-27T07:15:42.973513Z",
+   "updated_at": "2026-09-27T07:21:02.864770Z"
+  }
+ ],
+ "created_at": "2026-09-27T07:15:42.973513Z",
+ "updated_at": "2026-09-27T07:21:02.885486Z",
+ "links": {
+  "self": "/api/v2/projects/PR-2/test-runs/TR-102",
+  "test_cases": "/api/v2/projects/PR-2/test-runs/TR-102/test-cases"
+ }
+}

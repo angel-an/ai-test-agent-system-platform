@@ -6,7 +6,7 @@ API 路由模块
 
 from fastapi import APIRouter
 
-from .v2 import ai, auth, projects, folders, test_cases, test_runs, test_results, attachments, configurations, test_plans, documents, api_tests, api_tests_extended, api_endpoints, api_docs, unified_import, api_case_links, web_case_links, web_path_templates, scenarios, web_tests, web_functions, scheduled_runs, llm_settings, mcp_proxy, security_tests, ios_apps, android_apps, idp_defects, web_script_reviews, governance_metrics, knowledge_base, platform_layers, web_layers, evidence, orchestration, runtime, spec_discovery, requirement_quality, api_bundles
+from .v2 import ai, auth, projects, folders, test_cases, test_runs, test_results, attachments, configurations, test_plans, documents, api_tests, api_tests_extended, api_endpoints, api_docs, unified_import, api_case_links, web_case_links, web_path_templates, web_form_templates, scenarios, web_tests, web_functions, scheduled_runs, llm_settings, mcp_proxy, security_tests, ios_apps, android_apps, idp_defects, web_script_reviews, governance_metrics, knowledge_base, platform_layers, web_layers, evidence, orchestration, runtime, spec_discovery, requirement_quality, api_bundles
 # noqa  MC8yOmFIVnBZMlhscm9ua3VMazZNemd4Y0E9PTo4MDdiOTdhYQ==
 
 # 创建 API v2 路由
@@ -36,6 +36,7 @@ api_router.include_router(unified_import.router, tags=["API 文档统一导入"]
 api_router.include_router(api_case_links.router, tags=["API 用例闭环"])
 api_router.include_router(web_case_links.router, tags=["Web 用例闭环"])
 api_router.include_router(web_path_templates.router, tags=["Web 路径模板"])
+api_router.include_router(web_form_templates.router, tags=["业务模板注册"])
 api_router.include_router(scenarios.router, prefix="/scenarios", tags=["场景测试管理"])
 api_router.include_router(web_tests.router, tags=["Web 测试管理"])
 api_router.include_router(web_functions.router, tags=["Web 功能管理"])

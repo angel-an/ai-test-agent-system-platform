@@ -8,9 +8,13 @@
 from typing import Optional, Any
 from uuid import UUID
 from datetime import datetime
+import asyncio
+import logging
+import os
+import time
 # noqa  MC80OmFIVnBZMlhscm9ua3VMazZNblZYZHc9PToxMzcyZDdkNw==
 
-from sqlalchemy import select, func, and_, or_, update, delete
+from sqlalchemy import select, func, and_, or_, update, delete, text
 from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +22,20 @@ from app.models.test_run import TestRun, TestRunTestCase, TestRunScriptJob
 from app.models.test_case import TestCase
 from app.models.project import Project
 from app.schemas.enums import TestRunState, TestRunActiveState, TestResultStatus, JobStatus
+from app.utils.exceptions import ConflictException
+
+logger = logging.getLogger(__name__)
+
+#: TR 编号生成的事务级互斥键（"TRID"）。所有写入方共用同一把锁。
+_IDENTIFIER_LOCK_KEY = 0x5452_4944
+#: 等锁上限（秒）。超过则快速失败，不让创建接口静默挂死。
+#: 锁从 generate 一直持有到调用方 commit —— 期间还包含脚本作业/用例的插入，
+#: 因此创建大批用例时会占锁更久。默认 5s 覆盖常见规模（200 条用例插入 < 1s），
+#: 极端批量场景可用 TR_IDENT_LOCK_TIMEOUT 调大。
+_IDENTIFIER_LOCK_TIMEOUT = float(os.getenv("TR_IDENT_LOCK_TIMEOUT", "5") or 5)
+#: 轮询间隔（秒）
+_IDENTIFIER_LOCK_POLL = 0.02
+
 
 class TestRunRepository:
     """测试运行数据仓储"""
@@ -92,12 +110,61 @@ class TestRunRepository:
         await self.session.delete(test_run)
         await self.session.flush()
     
+    async def _acquire_identifier_lock(self) -> None:
+        """把"读最大编号 → 插入"这段临界区串行化。
+
+        rev97（2026-10-17）：``generate_identifier`` 原本是纯 max+1 —— 两个并发
+        创建请求会读到同一个最大值，随后插入同一个 identifier，撞
+        ``ix_test_runs_identifier`` 抛 IntegrityError 变成 HTTP 500。
+        实测（并发 6、3 轮）18 次创建有 15 次失败，只有 3 次成功。
+
+        为什么用**事务级**咨询锁 ``pg_advisory_xact_lock``：
+        - 调用方（``test_run_service.create`` / 调度器 / 两条 link 服务）都在
+          同一 session 内完成 generate → create → flush → commit，锁覆盖整个临界区，
+          提交/回滚时由数据库自动释放，不需要手工 unlock，也就没有"漏放锁"的死锁风险；
+        - 用 ``try`` 版本轮询而不是阻塞版：阻塞版会无限等待，一旦持锁事务卡住，
+          创建接口就会静默挂死；这里超时后抛明确异常，调用方可以快速失败。
+
+        非 PostgreSQL（SQLite 单测等）直接返回：这类库本身写串行，也没有事务级
+        咨询锁，保持原行为即可。
+        """
+        try:
+            dialect = self.session.get_bind().dialect.name
+        except Exception:  # noqa: BLE001 - 拿不到方言就不加锁，不阻断主流程
+            logger.warning("[TestRunRepo] 无法识别数据库方言，跳过编号互斥锁")
+            return
+        if dialect != "postgresql":
+            return
+        deadline = time.monotonic() + _IDENTIFIER_LOCK_TIMEOUT
+        while True:
+            got = (
+                await self.session.execute(
+                    text("SELECT pg_try_advisory_xact_lock(:key)"),
+                    {"key": _IDENTIFIER_LOCK_KEY},
+                )
+            ).scalar()
+            if got:
+                return
+            if time.monotonic() >= deadline:
+                # 用 409 而不是裸 RuntimeError：这是"并发写冲突，稍后重试"，
+                # 客户端可重试；裸异常会变成 500，看起来像服务端 bug。
+                raise ConflictException(
+                    f"获取测试运行编号互斥锁超时（{_IDENTIFIER_LOCK_TIMEOUT}s）："
+                    "可能有其他创建请求持锁未提交，请稍后重试"
+                )
+            await asyncio.sleep(_IDENTIFIER_LOCK_POLL)
+
     async def generate_identifier(self, project_id: UUID) -> str:
         """生成测试运行标识符
 
         使用项目内最大序号 + 1 的方式生成唯一标识符，避免并发冲突和删除后重复问题。
         由于数据库中 identifier 是全局唯一的（不是按项目隔离），需要确保生成的标识符在所有项目中唯一。
+
+        rev97：进入前先取事务级互斥锁（见 ``_acquire_identifier_lock``），
+        否则并发创建会同时拿到同一个 max，插入时撞唯一键。
         """
+        await self._acquire_identifier_lock()
+
         # 获取所有已存在的 TR- 标识符（全局查询，因为数据库索引是全局唯一的）
         stmt = select(TestRun.identifier).where(
             TestRun.identifier.like("TR-%")
@@ -359,6 +426,96 @@ class TestRunTestCaseRepository:
         result = await self.session.execute(stmt)
         await self.session.flush()
         return result.scalar_one()
+
+    async def get_by_test_run_and_case(
+        self,
+        test_run_id: UUID,
+        test_case_id: UUID,
+    ) -> Optional[TestRunTestCase]:
+        """按 (运行, 用例) 取关联行。"""
+        stmt = select(TestRunTestCase).where(
+            TestRunTestCase.test_run_id == test_run_id,
+            TestRunTestCase.test_case_id == test_case_id,
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def apply_case_result(
+        self,
+        *,
+        test_run_id: UUID,
+        test_case_id: UUID,
+        status: TestResultStatus,
+        writer: str,
+        result_id: Optional[UUID] = None,
+        job_id: Any = None,
+        execution_order: Any = None,
+        retry_count: Any = None,
+        create_if_missing: bool = False,
+    ) -> tuple[Optional[TestRunTestCase], Any]:
+        """**受守卫保护的**用例结论写入（N2）。
+
+        与 ``update_status`` 的区别：先判断"本次写入是否该生效"——旧作业不得覆盖
+        新轮次，同轮次下低优先级的写入者（场景级兜底）不得覆盖细粒度结论。
+
+        Returns:
+            ``(row, decision)``。``decision.allowed=False`` 时**未做任何写入**，
+            调用方据此跳过明细写入（避免"状态没变、明细却换了"的二次不一致）。
+        """
+        from app.services.case_result_write_guard import (
+            CaseWriteState,
+            build_attempt,
+            decide_write,
+        )
+
+        attempt = build_attempt(
+            writer,
+            job_id=job_id,
+            execution_order=execution_order,
+            retry_count=retry_count,
+        )
+
+        def _job_uuid() -> Optional[UUID]:
+            if not job_id:
+                return None
+            try:
+                return UUID(str(job_id))
+            except (TypeError, ValueError):
+                return None
+
+        row = await self.get_by_test_run_and_case(test_run_id, test_case_id)
+        if row is None:
+            if not create_if_missing:
+                return None, decide_write(CaseWriteState(), attempt)
+            row = TestRunTestCase(
+                test_run_id=test_run_id,
+                test_case_id=test_case_id,
+                latest_status=status,
+                latest_job_id=_job_uuid(),
+                latest_execution_order=attempt.execution_order,
+                latest_retry_count=attempt.retry_count,
+                latest_writer=attempt.writer,
+                latest_result_id=result_id,
+            )
+            self.session.add(row)
+            await self.session.flush()
+            return row, decide_write(CaseWriteState(), attempt)
+
+        decision = decide_write(CaseWriteState.from_row(row), attempt)
+        if not decision.allowed:
+            logger.info(
+                "[TestRunRepo] 拒绝写入用例结论 %s/%s（%s）：%s",
+                test_run_id, test_case_id, decision.reason, decision.detail,
+            )
+            return row, decision
+
+        row.latest_status = status
+        row.latest_result_id = result_id
+        row.latest_job_id = _job_uuid()
+        row.latest_execution_order = attempt.execution_order
+        row.latest_retry_count = attempt.retry_count
+        row.latest_writer = attempt.writer
+        await self.session.flush()
+        return row, decision
 
 
 class TestRunScriptJobRepository:

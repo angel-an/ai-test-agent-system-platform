@@ -1,0 +1,54 @@
+{
+ "test_run": "TR-121",
+ "loops": [
+  {
+   "sub": "WSF-48576960",
+   "wts": [
+    "WT-A9C1C11F"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-RC-CREATE",
+   "wts": [
+    "WT-1582B9FF"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-GW-CREATE",
+   "wts": [
+    "WT-EF16E7E8"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-TL-NOTE",
+   "wts": [
+    "WT-CBBA9812"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-TL-TASK",
+   "wts": [
+    "WT-F6C7B966"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-TL-POST",
+   "wts": [
+    "WT-51E85A60"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-TL-PHONE",
+   "wts": [
+    "WT-E6635AD7"
+   ],
+   "http": null
+  }
+ ]
+}

@@ -367,6 +367,7 @@ playwright-cli -s=test1 close
 | `sub_function_id` | No | Single sub-function ID (for associating test report) |
 | `sub_function_ids` | No | Multiple sub-function IDs, comma-separated |
 | `reporter` | No | Report format (html, json, list), default html |
+| `run_id` | No | Run identifier (optional, auto-generated as run_YYYYMMDD_HHMMSS if not provided) |
 
 ## Important Reminders
 

@@ -357,6 +357,97 @@ export function getJobLogs(
   );
 }
 
+// =========================================================
+// 执行账目（断言账目 + 定位现场 + 计划期跳过）
+// =========================================================
+
+//: 定位落空现场里的单个可见控件（脱敏、截断；不含任何业务词）
+export interface LedgerControl {
+  tag?: string;
+  type?: string;
+  placeholder?: string;
+  aria?: string;
+  maxLength?: number;
+}
+
+//: 定位落空现场（[observation] 行）
+export interface LedgerObservation {
+  where?: string;
+  field?: string;
+  rule_id?: string;
+  case_id?: string;
+  tried?: string[];
+  pages?: Array<{ index: number; url: string; title?: string }>;
+  frames?: Array<{ index: number; url: string }>;
+  active?: { tag?: string; type?: string; placeholder?: string; aria?: string } | null;
+  controls?: LedgerControl[];
+  script_identifier?: string;
+}
+
+//: 计划期被跳过的断言（[plan-skip] 行：字段在定位器表里找不到时给出近似候选）
+export interface LedgerPlanSkip {
+  field?: string;
+  reason?: string;
+  case_id?: string;
+  rule_id?: string;
+  kinds?: string[];
+  declared_fields?: string[];
+  suggestions?: string[];
+  script_identifier?: string;
+}
+
+export interface AssertionLedger {
+  test_run?: { identifier: string; run_state: string };
+  jobs: Array<{
+    script_identifier: string;
+    status: string;
+    assertion_count: number;
+    observation_count: number;
+    plan_skip_count: number;
+    by_outcome: Record<string, number>;
+    summary?: Record<string, unknown> | null;
+    coverage?: Record<string, unknown> | null;
+    environment_blocked: boolean;
+  }>;
+  assertions: Array<{
+    name: string;
+    outcome: string;
+    observed: string;
+    rule_id: string;
+    case_id: string;
+    script_identifier?: string;
+  }>;
+  observations: LedgerObservation[];
+  plan_skips: LedgerPlanSkip[];
+  per_case: Array<{
+    case_id: string;
+    rule_id: string;
+    total: number;
+    pass: number;
+    unverified: number;
+    blocked: number;
+  }>;
+  totals: {
+    jobs: number;
+    assertions: number;
+    observations: number;
+    plan_skips: number;
+    unattributed: number;
+    by_outcome: Record<string, number>;
+  };
+  warnings: string[];
+}
+
+// 获取测试运行的执行账目（含定位现场与计划期跳过）
+export function getAssertionLedger(
+  projectIdentifier: string,
+  testRunIdentifier: string
+) {
+  return apiClient.get<SuccessResponse<AssertionLedger>>(
+    `${basePath(projectIdentifier)}/${testRunIdentifier}/assertion-ledger`
+  );
+}
+
 // 批量重试脚本作业
 export function batchRetryJobs(
   projectIdentifier: string,

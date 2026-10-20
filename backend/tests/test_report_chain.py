@@ -256,9 +256,12 @@ class TestWebTestServiceReportChain:
                 id="00000000-0000-0000-0000-0000000000b1",
                 project_id="00000000-0000-0000-0000-0000000000a1",
                 sub_function_id="00000000-0000-0000-0000-0000000000c1",
-                identifier="WT-1", name="t", base_url="",
+                identifier="WT-1", name="t",
+                # 预检要求：真实入口 URL + 运行期凭据（空 base_url 属占位，会被拦下）
+                base_url="https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/login",
                 script_path="obj/t.py", script_format="playwright",
                 script_language="python",
+                test_config={},
             )
             test_run = SimpleNamespace(id="00000000-0000-0000-0000-0000000000d1",
                                        identifier="WTR-1")
@@ -270,6 +273,10 @@ class TestWebTestServiceReportChain:
                 create=mock.AsyncMock(return_value=test_run),
                 update=mock.AsyncMock())
             svc.web_test_result_repo = SimpleNamespace()
+
+            # 预检要求运行期凭据（与脚本自身 test.skip 判据一致）
+            monkeypatch.setenv("WEB_TEST_USERNAME", "tester")
+            monkeypatch.setenv("WEB_TEST_PASSWORD", "secret")
 
             monkeypatch.setattr(
                 "app.services.web_test_service.MinIOClient.download_file",

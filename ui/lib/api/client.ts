@@ -4,6 +4,8 @@ const REQUEST_TIMEOUT_MS = 30000; // 30 秒超时
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined>;
+  /** 自定义超时（毫秒），覆盖默认 30 秒。用于已知耗时的长操作（如真实执行）。 */
+  timeoutMs?: number;
 }
 // TODO  MS80OmFIVnBZMlhscm9ua3VMazZTbXBuV0E9PTpiN2NjZGQ1MQ==
 
@@ -144,7 +146,7 @@ export const apiClient = {
         ...mergeHeaders(options),
       },
       body: body ? JSON.stringify(body) : undefined,
-    }, REQUEST_TIMEOUT_MS);
+    }, options?.timeoutMs ?? REQUEST_TIMEOUT_MS);
     return handleResponse<T>(response);
   },
 

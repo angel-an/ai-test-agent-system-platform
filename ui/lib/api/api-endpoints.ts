@@ -266,4 +266,163 @@ export async function deleteAPIEndpoint(
     `/api-endpoints/${endpointId}`
   );
 }
+
+// ==================== Excel API 文档解析（美心模板） ====================
+
+export interface ExcelParseInterfaceSummary {
+  index: number;
+  name: string | null;
+  method_name: string | null;
+  http_method: string | null;
+  path: string | null;
+  pending_count: number;
+}
+
+export interface ExcelParseTaskSummary {
+  task_id: string;
+  status: string;
+  doc_type: string;
+  error: string | null;
+  attachment_id: string | null;
+  interface_count: number;
+  interfaces: ExcelParseInterfaceSummary[];
+  created_at: string | null;
+}
+
+export interface PendingConfirmation {
+  type: string;
+  field: string | null;
+  message: string;
+  source: any;
+}
+
+export interface UnifiedField {
+  name: string;
+  required: boolean;
+  type: string | null;
+  length: number | null;
+  example: string | null;
+  description: string | null;
+  level: string | null;
+  match: string | null;
+  diff: string | null;
+  source: { sheet: string; row: number; col?: number; cell?: string };
+}
+
+export interface UnifiedInterface {
+  name: string;
+  method_name: string | null;
+  http_method: string | null;
+  path: string | null;
+  call_url: string | null;
+  title: string | null;
+  summary: string | null;
+  scenario: string | null;
+  request: { fields: UnifiedField[] };
+  response: { fields: UnifiedField[]; error_codes: { code: string; meaning: string }[] };
+  auth: { type: string; sign_formula?: string; sign_fields?: string[]; ts_format?: string } | null;
+  business_rules: { field: string; text: string }[];
+  source: { type: string; sheet: string; attachment_id?: string; rows: number[] };
+  pending_confirmations: PendingConfirmation[];
+}
+
+export interface ExcelInterfaceDetail {
+  index: number;
+  interface: UnifiedInterface;
+}
+
+/**
+ * 上传并解析 Excel API 文档（美心模板）
+ */
+export async function parseExcelApiDoc(
+  projectIdentifier: string,
+  formData: FormData
+): Promise<ExcelParseTaskSummary> {
+  const response = await apiClient.form<SuccessResponse<ExcelParseTaskSummary>>(
+    `/projects/${projectIdentifier}/api-docs/parse-excel`,
+    formData
+  );
+  return response.data;
+}
+
+/**
+ * 查询 Excel 解析状态与接口列表
+ */
+export async function getExcelParseStatus(
+  projectIdentifier: string,
+  taskId: string
+): Promise<ExcelParseTaskSummary> {
+  const response = await apiClient.get<SuccessResponse<ExcelParseTaskSummary>>(
+    `/projects/${projectIdentifier}/api-docs/parse-excel/${taskId}`
+  );
+  return response.data;
+}
+
+/**
+ * 获取单个接口的统一模型详情
+ */
+export async function getExcelInterfaceDetail(
+  projectIdentifier: string,
+  taskId: string,
+  index: number
+): Promise<ExcelInterfaceDetail> {
+  const response = await apiClient.get<SuccessResponse<ExcelInterfaceDetail>>(
+    `/projects/${projectIdentifier}/api-docs/parse-excel/${taskId}/interfaces/${index}`
+  );
+  return response.data;
+}
+
+/**
+ * 确认导入单个接口为 APIEndpoint
+ */
+export async function confirmExcelInterface(
+  projectIdentifier: string,
+  taskId: string,
+  index: number,
+  body: { edited_spec?: any; parent_folder_id?: string | null }
+): Promise<{ endpoint_id: string; display_name: string; method: string; path: string; folder_id: string }> {
+  const response = await apiClient.post<
+    SuccessResponse<{ endpoint_id: string; display_name: string; method: string; path: string; folder_id: string }>
+  >(
+    `/projects/${projectIdentifier}/api-docs/parse-excel/${taskId}/interfaces/${index}/confirm`,
+    body
+  );
+  return response.data;
+}
+
+/**
+ * 契约驱动：对端点生成需求分析/测试计划/脚本（不执行）
+ */
+export async function generateContractArtifacts(
+  endpointId: string,
+  envConfig: Record<string, any>
+): Promise<{ analysis: any; plan: any; script: string; script_attachment_id: string; endpoint_id: string }> {
+  const response = await apiClient.post<
+    SuccessResponse<{ analysis: any; plan: any; script: string; script_attachment_id: string; endpoint_id: string }>
+  >(
+    `/api-endpoints/${endpointId}/contract-artifacts`,
+    { env_config: envConfig }
+  );
+  return response.data;
+}
+
+/**
+ * 契约驱动闭环：生成脚本并执行（缺配置返回 blocked）
+ */
+export async function generateAndRunEndpoint(
+  projectIdentifier: string,
+  endpointId: string,
+  envConfig: Record<string, any>
+): Promise<{ run_id: string; status: string; message?: string; artifacts?: any }> {
+  const response = await apiClient.post<
+    SuccessResponse<{ run_id: string; status: string; message?: string; artifacts?: any }>
+  >(
+    `/projects/${projectIdentifier}/api-endpoints/${endpointId}/generate-run`,
+    { env_config: envConfig },
+    // 该接口同步执行（生成脚本 + 真实 Playwright 调用），实测约 1 分钟，
+    // 默认 30 秒超时会过早 abort。放宽到 180 秒，避免"前端已超时、后端仍在跑"的不一致。
+    { timeoutMs: 180000 }
+  );
+  return response.data;
+}
 // NOTE  My80OmFIVnBZMlhscm9ua3VMazZOV3BYYkE9PTplNWViYTIyMA==

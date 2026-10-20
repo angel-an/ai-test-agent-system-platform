@@ -110,6 +110,7 @@ def run_requirement_pipeline(
     source: str = "",
     analysis_payload: Any = None,
     override: Optional["GateOverride"] = None,
+    field_rule_count: int = 0,
 ) -> PipelineResult:
     """推进「需求上传 → 分析 → 质量判定」并给出后续阶段。
 
@@ -120,6 +121,7 @@ def run_requirement_pipeline(
         analysis_payload: 可选的结构化分析结果（LLM 输出，dict 或 JSON 字符串）。
             提供时以它为准（解析失败自动降级 Incomplete）；否则用确定性文本分析。
         override: 服务端受控的人工放行凭证（默认 None → 严格按 V1.2 门控）
+        field_rule_count: 解析器抽出的结构化字段规则数（B1：字段规格类文档适配的判据）
 
     Returns:
         :class:`PipelineResult`；``paused=True`` 表示停在分析报告出口，不生成用例。
@@ -134,17 +136,23 @@ def run_requirement_pipeline(
         # 结构化结果缺少受影响功能点时，用文本线索补齐（可追溯性）
         if not analysis.affected_features:
             text_only = analyze_requirement_text(
-                requirement_text, source=source, requirement_id=requirement_id
+                requirement_text, source=source, requirement_id=requirement_id,
+                field_rule_count=field_rule_count,
             )
             analysis.affected_features = text_only.affected_features
     else:
         analysis = analyze_requirement_text(
-            requirement_text, source=source, requirement_id=requirement_id
+            requirement_text, source=source, requirement_id=requirement_id,
+            field_rule_count=field_rule_count,
         )
 
     allowed, reasons = check_generation_gate(analysis, override=override)
 
     if allowed:
+        # 人工放行已通过服务端凭证校验并完成审计；本次会话允许进入生成链路。
+        # 保留原始 analysis.status（Blocked/Incomplete）用于审计和展示，
+        # 但将本次生成资格显式同步，避免调用方按旧值再次拦截。
+        analysis.can_generate_testcases = True
         feature_points = extract_feature_points(
             requirement_text, requirement_id=requirement_id, source_location=source
         )
@@ -282,15 +290,29 @@ def generate_testcases_with_gate(
         build_requirements_section,
     )
 
+    # created_count 语义修正：此前为 len(cases)（传入即计数，含契约校验失败者），
+    # 与"通过校验可入库"的直觉不符。现拆为两字段：
+    #   submitted_count = 调用方传入的用例总数
+    #   created_count   = 通过契约校验 + 追溯校验的用例数（真正可入库）
+    # 注意：按失败用例 ID 去重，同一条用例同时触发两类问题时只扣减一次，
+    # 避免极端情况下出现负数。
+    invalid_case_ids = {
+        p["case_id"]
+        for p in (contract_problems + trace_problems)
+        if p.get("case_id")
+    }
+    validated_count = max(0, len(cases) - len(invalid_case_ids))
+
     return {
         "prd_quality": build_generated_response(
-            pipeline.analysis, created_count=len(cases)
+            pipeline.analysis, created_count=validated_count
         )["prd_quality"],
         "analysis_report": pipeline.analysis_report,
         "testcase_generation": {
             "status": status.value,
             "reasons": [],
-            "created_count": len(cases),
+            "submitted_count": len(cases),
+            "created_count": validated_count,
         },
         "stage": PipelineStage.CONTRACT_VALIDATION.value,
         "feature_points": [fp.to_dict() for fp in pipeline.feature_points],

@@ -446,12 +446,22 @@ class TestAuthorizeScriptExecution:
 
 @pytest.fixture
 async def webtest_engine():
-    """真实 SQLite：web_tests + attachments 表。"""
+    """真实 SQLite：web_tests + attachments 表。
+
+    注意：这里的 DDL 是**手写**的，必须与 ``app/models/web_test.py`` 保持同步。
+    ``generated_by_agent`` 是 rev 新增列（resolve_current_script_attachment 用它
+    优先挑选非 minimal-loop 的脚本），漏掉会导致
+    ``no such column: web_tests.generated_by_agent``。
+    """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.execute(text(
             "CREATE TABLE web_tests (id VARCHAR(36) PRIMARY KEY, script_path VARCHAR(500), "
-            "sub_function_id VARCHAR(36), created_at DATETIME)"
+            "sub_function_id VARCHAR(36), generated_by_agent VARCHAR(50), "
+            # N7 编译清单列（迁移 0024）：与模型同步
+            "compile_status VARCHAR(24), compiled_check_count INTEGER, "
+            "compiled_skipped_count INTEGER, compiled_at DATETIME, is_legacy_asset BOOLEAN DEFAULT 0, "
+            "created_at DATETIME)"
         ))
         await conn.execute(text(
             "CREATE TABLE attachments (id VARCHAR(36) PRIMARY KEY, object_name VARCHAR(500), "

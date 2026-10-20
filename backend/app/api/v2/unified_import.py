@@ -433,7 +433,7 @@ async def unified_import(
             )
 
         try:
-            openapi_spec = await fetch_openapi_from_url(request.url)
+            openapi_spec = await fetch_openapi_from_url(request.url, request.headers)
         except HTTPException:
             raise
         except Exception as exc:

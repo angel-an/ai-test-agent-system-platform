@@ -62,3 +62,12 @@ image_model = create_image_model()
 text_model = create_text_model()
 image_llm_model = image_model
 deepseek_model = text_model
+
+
+def get_image_model():
+    """获取图片处理模型（首次调用或失效时重建）"""
+    global image_model, image_llm_model
+    if image_model is None:
+        image_model = create_image_model()
+        image_llm_model = image_model
+    return image_model

@@ -30,10 +30,10 @@ def _load_manifest():
         CLONE_SUBSET,
         P0_ROOT_FILES,
         P0_ROOTS,
-        P1_EXCLUDED,
+        P1_OWNED_TESTS,
     )
 
-    return P0_ROOTS, P0_ROOT_FILES, P1_EXCLUDED, CLONE_SUBSET
+    return P0_ROOTS, P0_ROOT_FILES, P1_OWNED_TESTS, CLONE_SUBSET
 
 
 def _git(*args: str) -> str:
@@ -73,17 +73,30 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    p0_roots, p0_root_files, p1_excluded, clone_subset = _load_manifest()
+    p0_roots, p0_root_files, p1_owned, clone_subset = _load_manifest()
 
     targets = [*p0_roots, *p0_root_files]
-    exclude_args = [f"--ignore={path}" for path in p1_excluded]
+    # P1 的测试文件**不在 P0 覆盖列表内**；若被误加入，下面的校验会立即失败。
+    for rel in p1_owned:
+        if rel in targets:
+            raise SystemExit(
+                f"清单错误：P1 归属的测试 {rel} 不应出现在 P0 覆盖范围内"
+            )
+
+    # 但 `tests/platform`、`tests/api` 是**目录级目标**，pytest 会收集目录下所有现存文件。
+    # 工作区里 P1 文件未被跟踪却真实存在于磁盘 → 必须显式 --ignore，
+    # 否则 P1 用例会混进 P0 数字（实测：738 = 719 + 19 个 P1 用例）。
+    # 仅在文件存在时加 --ignore，干净检出（P1 不在）时不产生噪声。
+    exclude_args = [
+        f"--ignore={rel}" for rel in p1_owned if (BACKEND / rel).exists()
+    ]
 
     command = " ".join(
         ["..\\.venv\\Scripts\\python.exe", "-X", "utf8", "-m", "pytest", *targets,
          "-q", "-p", "no:cacheprovider", *exclude_args]
     )
 
-    print(f"执行 P0 基线（{len(targets)} 个目标，排除 {len(p1_excluded)} 个 P1 文件）…")
+    print(f"执行 P0 基线（{len(targets)} 个目标；P1 归属测试 {len(p1_owned)} 个已登记且不在范围内）…")
     code, output = _run_pytest([*targets, *exclude_args])
     counts = _parse_counts(output)
     tail = [l for l in output.strip().splitlines() if "passed" in l or "failed" in l]
@@ -134,9 +147,9 @@ def main() -> int:
         "",
         *[f"- `{t}`" for t in targets],
         "",
-        "**显式排除（P1 归属）**：",
+        "**不在 P0 范围（P1 归属，已登记）**：",
         "",
-        *[f"- `{p}` —— {p1_excluded[p]}" for p in p1_excluded],
+        *[f"- `{p}` —— {p1_owned[p]}" for p in p1_owned],
         "",
         "## 口径区分（不得相加或互相替代）",
         "",

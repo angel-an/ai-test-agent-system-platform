@@ -1,0 +1,37 @@
+{
+ "success": true,
+ "data": {
+  "project_identifier": "PR-9",
+  "test_cases": [
+   {
+    "id": "b94cf24c-26e0-4ab4-8663-c325529e0b8e",
+    "identifier": "TC-824119",
+    "name": "導出標題格式：cs_cases_YYYYMMDD_hhmmss（后為導出日期時間）​一郎9月7日 17:15的必填或非法输入校验"
+   }
+  ],
+  "web_tests": [
+   {
+    "id": "b83b0149-b8d8-430b-9e2c-81e753df45ac",
+    "identifier": "WT-4FB0C849",
+    "name": "TC-824119 - CS工单管理冒烟",
+    "script_path": "web-tests/PR-9/minimal-loop/b94cf24c-26e0-4ab4-8663-c325529e0b8e/5c1309f978c3466f945648a78fe4f0f9/test-script.spec.ts",
+    "test_case_id": "b94cf24c-26e0-4ab4-8663-c325529e0b8e",
+    "web_path_match_status": "matched",
+    "web_path_template_id": "074f27bf-3775-4633-a69c-1ae480213ebc"
+   }
+  ],
+  "test_run": {
+   "id": "9a2e225a-f4e4-4252-95f5-733f5ba7f1c1",
+   "identifier": "TR-109",
+   "script_jobs": [
+    {
+     "id": "b1d661c9-96ff-44de-9b50-bc21d56544f6",
+     "script_type": "web_test",
+     "script_id": "b83b0149-b8d8-430b-9e2c-81e753df45ac",
+     "script_identifier": "WT-4FB0C849"
+    }
+   ]
+  },
+  "message": "已创建 1 条 Web 冒烟可执行资产"
+ }
+}

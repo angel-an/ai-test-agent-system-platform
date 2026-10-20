@@ -72,6 +72,15 @@ class GenerationOutcome:
         return not self.analysis.can_generate_testcases
 
     def to_dict(self) -> dict[str, Any]:
+        # created_count 语义：通过契约校验 + 追溯校验的用例数（真正可入库），
+        # 而非传入总数。submitted_count 保留传入数供审计。
+        # 按失败用例 ID 去重，同一条用例同时触发两类问题时只扣减一次。
+        invalid_case_ids = {
+            p.get("case_id")
+            for p in (self.contract_problems + self.traceability_problems)
+            if p.get("case_id")
+        }
+        validated_count = max(0, len(self.cases) - len(invalid_case_ids))
         payload: dict[str, Any] = {
             "prd_quality": {
                 "status": self.analysis.status.value,
@@ -93,7 +102,8 @@ class GenerationOutcome:
                     )
                 ),
                 "reasons": list(self.analysis.blocked_reasons),
-                "created_count": len(self.cases),
+                "submitted_count": len(self.cases),
+                "created_count": validated_count,
             },
             "requirements": self.requirements,
             "feature_points": [fp.to_dict() for fp in self.feature_points],
@@ -138,11 +148,15 @@ class RequirementQualityService:
         source: str = "",
         analysis_payload: Any = None,
         override: Optional[GateOverride] = None,
+        field_rule_count: int = 0,
     ) -> PipelineResult:
         """推进「需求上传 → 分析 → 质量判定」。
 
         ``override`` 为服务端受控的人工放行凭证，未通过校验时直接抛
         :class:`GateOverrideNotAuthorizedError`（fail-closed）。
+
+        ``field_rule_count`` 为解析器抽出的结构化字段规则数：字段规格类文档
+        按适用档案判定（B1），不再因缺 PRD 章节被硬阻断。
         """
         return run_requirement_pipeline(
             requirement_text,
@@ -150,6 +164,7 @@ class RequirementQualityService:
             source=source,
             analysis_payload=analysis_payload,
             override=override,
+            field_rule_count=field_rule_count,
         )
 
     def gate_report(

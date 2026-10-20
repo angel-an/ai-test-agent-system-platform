@@ -5,11 +5,10 @@
 """
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage
-from langgraph.types import Command
 
 logger = logging.getLogger(__name__)
 
@@ -111,25 +110,32 @@ def validate_message_sequence(messages: list) -> list:
 class MessageSequenceValidationMiddleware(AgentMiddleware):
     """消息序列验证中间件 - 确保 tool_calls 消息序列符合 OpenAI API 要求。
 
-    使用 abefore_model 钩子，在 summarization 截断消息之后、模型调用之前执行，
+    使用 awrap_model_call 钩子，在 summarization 截断消息之后、模型调用之前执行，
     修复因 summarization 截断导致的消息序列断裂。
 
     问题背景：
     - summarization 中间件在 awrap_model_call 中截断消息（request.override）
-    - 用户自定义中间件在 summarization 之后注册，其 awrap_model_call 在 summarization 之前执行
-    - 因此必须使用 abefore_model（作为 graph node 在 model 之前执行），
-      确保在 summarization 之后、模型调用之前验证消息序列
+    - abefore_model 作为 graph node 在 model node 之前执行，但在 summarization 的 awrap_model_call 之前
+    - 因此必须使用 awrap_model_call，确保在 summarization 之后、模型调用之前验证消息序列
+
+    中间件执行顺序（由 create_deep_agent 注册顺序决定）：
+    1. SummarizationMiddleware.awrap_model_call (截断消息)
+    2. MessageSequenceValidationMiddleware.awrap_model_call (修复消息序列)
+    3. 模型调用
     """
 
-    async def abefore_model(self, state, runtime) -> dict[str, Any] | Command[Any] | None:
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
         """在模型调用前验证并修复消息序列。
 
-        使用 RemoveMessage 清除所有旧消息，然后添加修复后的消息，
-        确保 add_messages reducer 正确替换消息列表而非追加。
+        直接在 request.messages 上修复，确保发送给模型的消息序列符合 OpenAI API 要求。
         """
-        messages = state.get("messages", [])
+        messages = request.messages
         if not messages:
-            return None
+            return await handler(request)
 
         # 验证并修复消息序列
         fixed_messages = validate_message_sequence(messages)
@@ -165,15 +171,7 @@ class MessageSequenceValidationMiddleware(AgentMiddleware):
                     "AIMessage(s) with missing tool responses. "
                     "This indicates summarization/truncation broke tool call pairs."
                 )
-            # 使用 RemoveMessage 清除所有旧消息，然后添加修复后的消息
-            # 这样可以确保 add_messages reducer 正确替换消息列表
-            from langgraph.graph.message import RemoveMessage
+            # 使用 request.override 替换消息列表
+            request = request.override(messages=fixed_messages)
 
-            return {
-                "messages": [
-                    RemoveMessage(id="all"),  # 清除所有旧消息
-                    *fixed_messages,  # 添加修复后的消息
-                ]
-            }
-
-        return None
+        return await handler(request)

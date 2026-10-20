@@ -5,9 +5,11 @@ Web 测试服务
 """
 
 import json
+import logging
+import os
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +27,69 @@ from app.utils.exceptions import NotFoundException
 from app.config.minio_client import MinIOClient
 from app.config.settings import settings
 from app.services.defect_registration_service import DefectRegistrationService
+from app.services.execution.runner import resolve_timeout_tiers
+from app.services.web_test_compile_manifest import compile_manifest_view
+
+logger = logging.getLogger(__name__)
+
+#: 执行日志落库上限。此前 Web 路径截断到 5000 字符，实测 TR-63 的 stdout 恰好 5000 字符、
+#: 末行 COMPILED_ASSERTION_SUMMARY 被切掉，导致"落库 31 条断言 vs 日志只解析出 29 条"，
+#: 复核时无法自证。改为与标准执行器（executors.py）一致的上限。
+_MAX_LOG_CHARS = 50000
+
+
+async def _resolve_web_test(repo, web_test_id, *, with_relations: bool = False):
+    """按 UUID（内部 id）或对外标识符（如 `WT-1C23A7A2`）解析 Web 测试。
+
+    历史问题：旧代码直接 `UUID(web_test_id)`，非 UUID 标识符会抛 ValueError 未被拦截，
+    实测 `GET /web-tests/WT-1C23A7A2` 返回 500 internal_server_error。
+    现在：UUID → 按 id 查；其它 → 按 identifier 查；都查不到返回 None（由调用方 404）。
+    """
+    raw = str(web_test_id)
+    try:
+        uuid_value: Optional[UUID] = UUID(raw)
+    except (ValueError, AttributeError, TypeError):
+        uuid_value = None
+
+    if uuid_value is not None:
+        if with_relations:
+            return await repo.get_by_id_with_relations(uuid_value)
+        return await repo.get_by_id(uuid_value)
+
+    # 非 UUID：按对外标识符解析（不存在时返回 None → 404，而不是 500）
+    return await repo.get_by_identifier(raw)
+
+
+def resolve_runner_timeout(execution_config: Optional[Dict[str, Any]]) -> int:
+    """解析本次 Playwright **进程**超时（秒）。
+
+    rev116（2026-10-19，实测三例假失败）：三层超时必须严格递减——
+    引擎作业超时(job_timeout_seconds，默认 1800s) > 本函数返回的进程超时
+    > 脚本侧 ``test.setTimeout``（由 runner 经 ``WEB_TEST_BUDGET_MS`` 下发）。
+
+    历史实现这里写死 600s，而脚本模板里写着 ``test.setTimeout(1800000)``：
+    600s 一到进程就被硬杀，Playwright 来不及把结论写进报告 ——
+    日志里断言都跑完了、job 状态却是 failed（按状态统计即假失败）。
+
+    rev116-fix（2026-10-19 复核）：本函数不再自己算，改为委托
+    :func:`app.services.execution.runner.resolve_timeout_tiers` ——
+    三层必须**一次性解算**，否则会出现「显式 7200s 反超 1800s 作业预算」
+    「进程 30s 而脚本预算 60s」一类倒挂（实测过）。
+
+    - 显式配置了 ``execution_config.timeout`` → 用它，但受作业预算上限约束；
+    - 未配置 → 跟随引擎作业预算，留 60s 给引擎侧取消与终态回写；
+    - 配置小到三层装不下 → 抛 ``TimeoutBudgetError``（宁可报配置错，不静默降级）。
+    """
+    tiers = resolve_timeout_tiers(
+        job_budget_s=getattr(settings, "job_timeout_seconds", 1800),
+        explicit_runner_s=(execution_config or {}).get("timeout"),
+    )
+    if tiers.clamped:
+        logger.warning(
+            "[WebTestService] execution_config.timeout 超过作业预算上限，已裁剪：%s",
+            tiers.as_log(),
+        )
+    return tiers.runner_s
 
 
 def _detect_script_language(content: str) -> str:
@@ -297,7 +362,7 @@ class WebTestService:
     ) -> dict:
         """获取 Web 测试详情"""
         project = await self._get_project_by_identifier(project_identifier)
-        web_test = await self.web_test_repo.get_by_id_with_relations(UUID(web_test_id))
+        web_test = await _resolve_web_test(self.web_test_repo, web_test_id, with_relations=True)
 
         if not web_test or web_test.project_id != project.id:
             raise NotFoundException(resource_type="Web 测试", resource_id=web_test_id)
@@ -316,6 +381,13 @@ class WebTestService:
             "test_flows": web_test.test_flows,
             "total_pages": web_test.total_pages,
             "total_flows": web_test.total_flows,
+            # 三要素绑定：执行治理要求"真实项目 + 子功能当前脚本附件 + 内容哈希"，
+            # 详情接口此前不返回这两项，导致绑定结果无处可查（也没法在 UI 上修复绑定）。
+            "test_case_id": str(web_test.test_case_id) if web_test.test_case_id else None,
+            "function_id": str(web_test.function_id) if web_test.function_id else None,
+            "sub_function_id": str(web_test.sub_function_id) if web_test.sub_function_id else None,
+            # N7：编译清单（选执行范围前必须先看清"能生成多少条可执行检查"）
+            **compile_manifest_view(web_test),
             "created_at": web_test.created_at.isoformat(),
             "updated_at": web_test.updated_at.isoformat() if web_test.updated_at else None,
         }
@@ -353,6 +425,9 @@ class WebTestService:
                     "script_language": item.script_language,
                     "total_pages": item.total_pages,
                     "total_flows": item.total_flows,
+                    # N7：列表页直接展示"可生成检查数 / 编译状态"，无需再打开资产翻 JSONB。
+                    # 注意 compiled_check_count 为 null ≠ 0：前者是"不知道"，后者是"确实零检查"。
+                    **compile_manifest_view(item),
                     "created_at": item.created_at.isoformat(),
                     "updated_at": item.updated_at.isoformat() if item.updated_at else None,
                 }
@@ -373,7 +448,7 @@ class WebTestService:
     ) -> dict:
         """更新 Web 测试"""
         project = await self._get_project_by_identifier(project_identifier)
-        web_test = await self.web_test_repo.get_by_id(UUID(web_test_id))
+        web_test = await _resolve_web_test(self.web_test_repo, web_test_id)
 
         if not web_test or web_test.project_id != project.id:
             raise NotFoundException(resource_type="Web 测试", resource_id=web_test_id)
@@ -404,7 +479,7 @@ class WebTestService:
     ) -> None:
         """删除 Web 测试"""
         project = await self._get_project_by_identifier(project_identifier)
-        web_test = await self.web_test_repo.get_by_id(UUID(web_test_id))
+        web_test = await _resolve_web_test(self.web_test_repo, web_test_id)
 
         if not web_test or web_test.project_id != project.id:
             raise NotFoundException(resource_type="Web 测试", resource_id=web_test_id)
@@ -418,7 +493,7 @@ class WebTestService:
     ) -> str:
         """获取测试脚本内容"""
         project = await self._get_project_by_identifier(project_identifier)
-        web_test = await self.web_test_repo.get_by_id(UUID(web_test_id))
+        web_test = await _resolve_web_test(self.web_test_repo, web_test_id)
 
         if not web_test or web_test.project_id != project.id:
             raise NotFoundException(resource_type="Web 测试", resource_id=web_test_id)
@@ -436,7 +511,7 @@ class WebTestService:
     ) -> None:
         """更新测试脚本内容"""
         project = await self._get_project_by_identifier(project_identifier)
-        web_test = await self.web_test_repo.get_by_id(UUID(web_test_id))
+        web_test = await _resolve_web_test(self.web_test_repo, web_test_id)
 
         if not web_test or web_test.project_id != project.id:
             raise NotFoundException(resource_type="Web 测试", resource_id=web_test_id)
@@ -449,11 +524,322 @@ class WebTestService:
             content_type="text/plain"
         )
 
+    async def persist_case_level_results(
+        self,
+        *,
+        web_test,
+        stdout: str,
+        parent_test_run_id: Optional[str] = None,
+        job_context: Optional[dict] = None,
+    ) -> dict[str, int]:
+        """把脚本里的逐条断言归属到**具体用例**并写入 test_run_test_cases。
+
+        现状问题（实测）：一个批次 43/53 条用例只编译成一个脚本执行，运行记录里只有
+        "锚点用例"一行，其余用例在页面上永远显示"新建"——执行结论只存在于脚本 stdout。
+        本方法把 `COMPILED_ASSERTION` 按 `rule_id` 归属到用例；
+        没有可执行断言的用例显式写 `not_executed`（不冒充通过、也不留空）。
+
+        N2（2026-10-17）：本方法是**编译断言脚本的唯一写入者**（writer=mapper）。
+        写入前经 ``case_result_write_guard`` 判定——旧作业（更小的
+        ``execution_order``/``retry_count``）不得覆盖新轮次结论；被拒绝时连明细一起
+        跳过，避免"状态没变、latest_result_id 却换了"的二次不一致。
+
+        失败绝不影响运行结论（整体 try/except）。
+        """
+        if not parent_test_run_id or not (stdout or "").strip():
+            return {}
+        try:
+            from uuid import UUID as _UUID
+
+            from sqlalchemy import select
+
+            from app.models.test_case import TestCase
+            from app.models.test_run import TestRunTestCase
+            from app.repositories.test_run_repo import TestRunTestCaseRepository
+            from app.services.web_case_result_mapper import (
+                build_identifier_to_case,
+                build_rule_to_case,
+                map_case_results,
+            )
+
+            anchor_id = getattr(web_test, "test_case_id", None)
+            if not anchor_id:
+                return {}
+            anchor = (await self.session.execute(
+                select(TestCase).where(TestCase.id == anchor_id)
+            )).scalar_one_or_none()
+            if anchor is None:
+                return {}
+
+            # 批次范围（rev71 修复）：锚点用例的 requirement_id 可能指向**历史批次**
+            # （实测 CS：锚点 TC-824119 挂旧需求 req-mueukebw-25k1e4，而 9/24 重建的
+            # 96 条用例挂 req-cs-spec-2.0-20260924——按 requirement_id 圈批次会让
+            # 断言归属全部落空，TR-109 实测 36 条全 NOT_EXECUTED）。
+            # 改为：锚点所在 folder 的用例 ∪ stdout 断言显式引用的 case_id（同项目内）。
+            from app.services.web_case_result_mapper import parse_compiled_assertions
+
+            referenced_ids = {
+                a["case_id"] for a in parse_compiled_assertions(stdout) if a["case_id"]
+            }
+            stmt = select(TestCase).where(TestCase.project_id == anchor.project_id)
+            if anchor.folder_id:
+                stmt = stmt.where(TestCase.folder_id == anchor.folder_id)
+            elif anchor.requirement_id:
+                stmt = stmt.where(TestCase.requirement_id == anchor.requirement_id)
+            else:
+                stmt = stmt.where(TestCase.id == anchor.id)
+            cases = list((await self.session.execute(stmt)).scalars().all())
+            have_ids = {c.identifier for c in cases if c.identifier}
+            missing_refs = referenced_ids - have_ids
+            if missing_refs:
+                extra = list((await self.session.execute(
+                    select(TestCase).where(
+                        TestCase.project_id == anchor.project_id,
+                        TestCase.identifier.in_(missing_refs),
+                    )
+                )).scalars().all())
+                known = {c.id for c in cases}
+                cases.extend(c for c in extra if c.id not in known)
+            if not cases:
+                return {}
+
+            # deprecated=true 的废弃用例不得接收**新的**执行结论（2026-09-29 复核：
+            # "废弃禁止后续执行，但保留历史结果"）。历史 TestResult/TestRunTestCase
+            # 行不动（不改写历史覆盖率）；这里只把它们从本次归属中剔除——即使旧资产
+            # 的脚本/清单里仍编译着它们，也不会再被写入新结果。
+            from app.services.deprecation import filter_active, is_deprecated
+            dropped = [c.identifier for c in cases if is_deprecated(c)]
+            if dropped:
+                logger.warning(
+                    "[web_test] 执行结论归属跳过已废弃用例 %s（deprecated=true）",
+                    dropped,
+                )
+            cases = filter_active(cases)
+            if not cases:
+                return {}
+
+            rule_to_case = build_rule_to_case(cases)
+            results = map_case_results(
+                stdout, rule_to_case, case_ids=[str(c.id) for c in cases],
+                identifier_to_case=build_identifier_to_case(cases),
+            )
+
+            repo = TestRunTestCaseRepository(self.session)
+            parent_uuid = _UUID(str(parent_test_run_id))
+            # N2：本轮写入的轮次上下文（作业层传入；手工触发时为空 → 轮次未知）
+            from app.services.case_result_write_guard import (
+                CaseWriteState,
+                build_attempt,
+                decide_write,
+            )
+
+            import logging
+
+            _ctx = job_context or {}
+            attempt = build_attempt(
+                "mapper",
+                job_id=_ctx.get("job_id"),
+                execution_order=_ctx.get("execution_order"),
+                retry_count=_ctx.get("retry_count"),
+            )
+            _logger = logging.getLogger(__name__)
+            # rev87：NOT_EXECUTED 默认行只允许写入"本次运行 payload 里的用例"
+            # （TestRunTestCase 行在组 run 时只为 payload 用例创建）。多 job 同 run
+            # （多表单分发）时，每个 job 以文件夹全量做归属——不限制会把兄弟 job 已
+            # 写入的结论重置（实测 TR-117/119：后执行 job 把先执行 job 的 PASSED
+            # 覆盖成 NOT_EXECUTED），还会给根本没进本次运行的用例造幻影未执行行。
+            from sqlalchemy import select as _sa_select2
+            _rc = await self.session.execute(
+                _sa_select2(TestRunTestCase.test_case_id).where(
+                    TestRunTestCase.test_run_id == parent_uuid)
+            )
+            payload_ids = {str(x) for x in _rc.scalars().all()}
+            written: dict[str, int] = {}
+            rejected: dict[str, int] = {}
+            for case_id, res in results.items():
+                status = TestResultStatus(str(res["status"]).lower())
+                # 无断言证据且不在本次运行 payload → 不属于本 job 的结论，跳过
+                if not res.get("assertions") and case_id not in payload_ids:
+                    continue
+                # 无断言证据但 payload 里已有兄弟 job 写的明细 → 不重置
+                if not res.get("assertions"):
+                    from sqlalchemy import select as _sa_select
+                    from app.models.test_result import TestResult as _TR
+                    _existing = await self.session.execute(
+                        _sa_select(_TR.id).where(
+                            _TR.test_run_id == parent_uuid,
+                            _TR.test_case_id == _UUID(case_id),
+                        )
+                    )
+                    if _existing.scalar_one_or_none() is not None:
+                        continue
+                row = await repo.get_by_test_run_and_case(parent_uuid, _UUID(case_id))
+                # N2：先判定这次写入是否该生效（轮次 + 写入者优先级）。
+                # 被拒绝时**连明细一起跳过**——只拦住状态、却把 latest_result_id 换掉，
+                # 会让"可解释明细"与"结论"互相矛盾。
+                decision = decide_write(
+                    CaseWriteState.from_row(row) if row is not None else CaseWriteState(),
+                    attempt,
+                )
+                if not decision.allowed:
+                    rejected[decision.reason] = rejected.get(decision.reason, 0) + 1
+                    _logger.info(
+                        "[web_test] 用例 %s 结论写入被拒绝（%s）：%s",
+                        case_id, decision.reason, decision.detail,
+                    )
+                    continue
+
+                row, _decision = await repo.apply_case_result(
+                    test_run_id=parent_uuid,
+                    test_case_id=_UUID(case_id),
+                    status=status,
+                    writer="mapper",
+                    job_id=attempt.job_id,
+                    execution_order=attempt.execution_order,
+                    retry_count=attempt.retry_count,
+                    create_if_missing=True,
+                )
+                if row is None:
+                    continue
+
+                # 明细落库：说明"为什么是这个状态"。
+                # **每条用例都写**（含无断言者）——既让原因可查，也让"是否已有细粒度结果"可判定，
+                # 从而让引擎的粗粒度同步可以安全让位（见 engine._should_skip_coarse_case_sync）。
+                summary = str(res.get("summary") or "") or "（无明细）"
+                try:
+                    from app.models.test_result import TestResult
+
+                    # 重执行场景先清掉同 run+case 的旧明细，避免每次重跑累积重复行
+                    #（latest_status 有 get_or_create 去重，明细此前是无条件 insert）。
+                    from sqlalchemy import delete as _sa_delete
+
+                    await self.session.execute(_sa_delete(TestResult).where(
+                        TestResult.test_run_id == parent_uuid,
+                        TestResult.test_case_id == _UUID(case_id),
+                    ))
+
+                    result_row = TestResult(
+                        test_run_id=parent_uuid,
+                        test_case_id=_UUID(case_id),
+                        test_run_test_case_id=row.id,
+                        status=status,
+                        description=summary,
+                        custom_fields={
+                            "assertions": res.get("assertions", 0),
+                            "unverified": res.get("unverified_count", 0),
+                            "passed": res.get("pass_count", 0),
+                            "source": "compiled_assertions",
+                        },
+                    )
+                    self.session.add(result_row)
+                    await self.session.flush()
+                    await repo.apply_case_result(
+                        test_run_id=parent_uuid,
+                        test_case_id=_UUID(case_id),
+                        status=status,
+                        writer="mapper",
+                        result_id=result_row.id,
+                        job_id=attempt.job_id,
+                        execution_order=attempt.execution_order,
+                        retry_count=attempt.retry_count,
+                        create_if_missing=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 —— 明细失败不影响状态落库
+                    print("[WebTestService] 用例明细写入失败（忽略）: %s" % exc)
+                written[status.value] = written.get(status.value, 0) + 1
+
+            # rev70c：回写用例自动化状态——凡拿到可执行结论（非 not_executed）的用例
+            # 标记 AUTOMATED，避免"已自动执行多轮但仍显示 NOT_AUTOMATED"的标记滞后
+            #（not_executed = 无可执行断言，保持 NOT_AUTOMATED 便于筛选补断言）。
+            try:
+                from sqlalchemy import update as _sa_update
+
+                from app.schemas.enums import AutomationStatus as _AutoStatus
+
+                automated_ids = [
+                    _UUID(cid) for cid, res in results.items()
+                    if str(res.get("status", "")).lower() != "not_executed"
+                ]
+                if automated_ids:
+                    await self.session.execute(
+                        _sa_update(TestCase)
+                        .where(TestCase.id.in_(automated_ids),
+                               TestCase.automation_status != _AutoStatus.AUTOMATED)
+                        .values(automation_status=_AutoStatus.AUTOMATED)
+                    )
+            except Exception as exc:  # noqa: BLE001 —— 标记回写失败不影响结果落库
+                print("[WebTestService] automation_status 回写失败（忽略）: %s" % exc)
+
+            await self.session.commit()
+            print("[WebTestService] 用例级执行结果已落库: %s（共 %d 条用例，写入被拒 %s）" % (
+                written, len(results), rejected or "无"))
+            if rejected:
+                print("[WebTestService] 写入被拒明细（N2 守卫）: %s" % rejected)
+            return written
+        except Exception as exc:  # noqa: BLE001 —— 落库失败不得影响运行结论
+            import logging
+            logging.getLogger(__name__).warning(
+                "[WebTestService] 用例级结果落库失败（不影响运行结论）: %s", exc
+            )
+            return {}
+
+    async def register_failure_defect(
+        self,
+        *,
+        project_identifier: str,
+        web_test,
+        test_run_id,
+        error_msg: str,
+        report_attachment_id: Optional[str] = None,
+        parent_test_run_id: Optional[str] = None,
+    ) -> None:
+        """为一次**已失败**的运行登记 IDP 缺陷。
+
+        重试场景由执行器在"确定不再重试"之后调用，保证：
+        - 非最终尝试不建单（不产生重复单）；
+        - 最终失败**一定**建单（不因"本打算重试"而把失败吞掉）。
+        登记失败不影响测试结论。
+        """
+        import logging
+
+        try:
+            project = await self._get_project_by_identifier(project_identifier)
+            registration_service = DefectRegistrationService(self.session)
+            # WebTest 模型使用 base_url 而非 target_url
+            page_url = web_test.base_url or ""
+            await registration_service.register_from_web_failure(
+                test_run_id=test_run_id,
+                test_case_id=None,
+                source_project_key=project.identifier if project else "UNKNOWN",
+                scenario_name=web_test.name or "Web测试",
+                page_url=page_url,
+                action="EXECUTE",
+                request_summary={"url": page_url},
+                # 不伪造 HTTP 状态码：UI 测试失败（浏览器关闭、定位器超时等）
+                # 并没有观测到任何 HTTP 响应，硬编码 500 会被缺陷判定误判为
+                # "状态码不匹配"，产出与真实错误无关的缺陷标题。
+                response_summary={},
+                error_message=error_msg,
+                report_url=report_attachment_id,
+                parent_test_run_id=(
+                    UUID(str(parent_test_run_id)) if parent_test_run_id else None
+                ),
+            )
+            # 必须提交：本方法在 run 的 update/commit **之后**被调用，
+            # 若只 flush 不 commit，会话关闭时这条缺陷记录会被回滚掉（实测踩过）。
+            await self.session.commit()
+        except Exception as idp_err:  # noqa: BLE001
+            logging.getLogger(__name__).warning(
+                "[WebTest] IDP 缺陷登记失败（不影响测试结果）: %s", idp_err
+            )
+
     async def run_web_test(
         self,
         project_identifier: str,
         web_test_id: str,
         execution_config: Optional[dict] = None,
+        register_defect: bool = True,
+        parent_test_run_id: Optional[str] = None,
     ) -> dict:
         """
         执行 Web 测试
@@ -464,6 +850,12 @@ class WebTestService:
         3. 使用 PlaywrightRunner 执行测试
         4. 更新运行记录状态为 completed/failed
         5. 将测试报告上传到 MinIO
+
+        Args:
+            register_defect: 失败时是否登记 IDP 缺陷。重试场景下非最终尝试传 False，
+                避免为同一次 flake 重复建单。
+            parent_test_run_id: 本次执行所属的 TestRun（作业层传入）。
+                用于把逐条断言的执行结果按**用例**落库（否则页面只有锚点用例有状态）。
         """
         import asyncio
         import zipfile
@@ -473,13 +865,19 @@ class WebTestService:
         from app.config.settings import settings
 
         project = await self._get_project_by_identifier(project_identifier)
-        web_test = await self.web_test_repo.get_by_id(UUID(web_test_id))
+        web_test = await _resolve_web_test(self.web_test_repo, web_test_id)
 
         if not web_test or web_test.project_id != project.id:
             raise NotFoundException(resource_type="Web 测试", resource_id=web_test_id)
 
         # 创建测试运行记录
         identifier = f"WTR-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:6]}"
+        # N2：作业层把本轮的执行顺序/重试次数带进 config，用于"旧作业不得覆盖新轮次"
+        job_context = {
+            "job_id": (execution_config or {}).get("job_id"),
+            "execution_order": (execution_config or {}).get("job_execution_order"),
+            "retry_count": (execution_config or {}).get("job_retry_count"),
+        }
         test_run = await self.web_test_run_repo.create(
             project_id=project.id,
             web_test_id=web_test.id,
@@ -505,6 +903,36 @@ class WebTestService:
             # 检查 script_path 是否为空
             if not web_test.script_path:
                 raise ValueError(f"Web 测试 {web_test.identifier} 的 script_path 为空，无法执行")
+
+            # 1.5 预检（在下载脚本/启动浏览器之前）：绑定、占位地址、凭据
+            from app.services.web_preflight import check_web_preflight
+
+            effective_base_url = (
+                (execution_config or {}).get("env", {}).get("WEB_TEST_BASE_URL")
+                or web_test.base_url
+            )
+            preflight = check_web_preflight(
+                sub_function_id=web_test.sub_function_id,
+                base_url=effective_base_url,
+                execution_config=execution_config or {},
+                test_config=getattr(web_test, "test_config", None),
+            )
+            if preflight:
+                err = f"[{preflight['code']}] {preflight['message']}"
+                print(f"[WebTestService] 预检未通过: {err}")
+                await self.web_test_run_repo.update(
+                    test_run, status="failed", error_message=err
+                )
+                await self.session.commit()
+                return {
+                    "run_id": str(test_run.id),
+                    "identifier": test_run.identifier,
+                    "status": "failed",
+                    "guard": "preflight",
+                    "preflight": preflight,
+                    "final": True,
+                    "error_message": err,
+                }
 
             # 2. 从 MinIO 下载脚本到 workspace/tests/
             script_content_bytes = MinIOClient.download_file(web_test.script_path)
@@ -548,31 +976,21 @@ class WebTestService:
             from app.config.database import async_session_factory
 
             sf_id = web_test.sub_function_id
-            if not sf_id:
-                err = ("脚本来源授权拒绝：Web 测试未绑定子功能（sub_function_id 为空），"
-                       "无法建立三要素绑定（项目+附件+哈希），拒绝执行。")
-                print(f"[WebTestService] {err}")
-                await self.web_test_run_repo.update(
-                    test_run, status="failed", error_message=err
-                )
-                await self.session.commit()
-                return {
-                    "run_id": str(test_run.id),
-                    "identifier": test_run.identifier,
-                    "status": "failed",
-                    "guard": "script_provenance",
-                    "final": True,
-                    "error_message": err,
-                }
+            from app.services.web_preflight import preflight_provenance_reason
+
             auth_ok, auth_reason = await authorize_script_execution(
                 project.identifier,
                 script_file_path,
                 workspace_root,
                 async_session_factory,
                 [_UUID(str(sf_id))],
+                # rev62（方案 A）：按**正在执行的 WebTest** 解析脚本附件，
+                # 避免同一子功能下多个 WebTest 互相顶掉"当前脚本"。
+                script_object_name=web_test.script_path,
             )
             if not auth_ok:
-                err = f"脚本来源授权拒绝（三要素绑定不成立）: {auth_reason}"
+                preflight = preflight_provenance_reason(auth_reason)
+                err = f"[{preflight['code']}] {preflight['message']}"
                 print(f"[WebTestService] {err}")
                 await self.web_test_run_repo.update(
                     test_run, status="failed", error_message=err
@@ -583,24 +1001,54 @@ class WebTestService:
                     "identifier": test_run.identifier,
                     "status": "failed",
                     "guard": "script_provenance",
+                    "preflight": preflight,
                     "final": True,
                     "error_message": err,
                 }
             print("[WebTestService] 脚本来源授权通过（HTTP 执行面已纳入 2a）")
 
             # 3. 执行测试（同时生成 list + html 报告）
+            # rev116（2026-10-19，实测三例假失败）：三层超时必须**严格递减**——
+            #   引擎作业超时(job_timeout_seconds, 默认 1800s)
+            #     > runner 进程超时（本处）
+            #       > 脚本 test.setTimeout（由 runner 经 WEB_TEST_BUDGET_MS 下发）
+            # 历史实现这里硬编码 600s，而模板里写着 test.setTimeout(1800000)：
+            # 600s 一到进程就被杀，Playwright 来不及把结论写进报告，
+            # 日志里断言明明跑完了、job 状态却是 failed（按状态统计即假失败）。
+            _runner_timeout_s = resolve_runner_timeout(execution_config)
             config_with_reporter = {**(execution_config or {}), "reporter": "list,html"}
             runner_result = await runner.run(
                 script_path=script_file_path,
                 config=config_with_reporter,
-                timeout=execution_config.get("timeout", 600) if execution_config else 600,
+                timeout=_runner_timeout_s,
             )
 
-            # 4. 将 HTML 报告打包上传到 MinIO
+            # 4. 将报告打包上传到 MinIO
+            # rev63（执行证据闭环）：把 runner 的 stdout/stderr 落盘为
+            # execution_stdout.log / execution_stderr.log，随报告 ZIP 持久化——
+            # 脚本 console.log 的 COMPILED_ASSERTION 逐断言行此前只存在于瞬时
+            # stdout（API 响应截断返回），复核时不可回查（实测 TR-88 的 46 条
+            # 表单检查执行结果无处可查）。Playwright HTML 报告缺失时兜底用
+            # run_dir 打包执行日志，保证本次断言证据不丢。
             report_path = runner_result.report_path
+            report_dir: Optional[Path] = None
             if report_path and Path(report_path).exists():
+                report_dir = Path(report_path)
+            elif (runner_result.stdout or "").strip():
+                report_dir = run_dir
+            if report_dir is not None:
                 try:
-                    report_dir = Path(report_path)
+                    if runner_result.stdout:
+                        (report_dir / "execution_stdout.log").write_text(
+                            runner_result.stdout, encoding="utf-8"
+                        )
+                    if runner_result.stderr:
+                        (report_dir / "execution_stderr.log").write_text(
+                            runner_result.stderr, encoding="utf-8"
+                        )
+                except Exception as le:
+                    print(f"[WebTestService] 执行日志落盘失败（不影响打包）: {le}")
+                try:
                     # rev58（执行证据闭环）：若子功能有 compiled_assertions（rev56 编译），
                     # 用本次 self_reflect_result.json 构建证据评估，结果写入
                     # assertion_result.json（随报告打包），执行只校验不现场发明。
@@ -629,11 +1077,13 @@ class WebTestService:
                         content_type="application/zip",
                     )
                     # rev36：创建 WEB_TEST_REPORT 附件（report-html / report-files 以附件 ID 为入口）
+                    # rev90：entity_id 关联到**父 TestRun**（作业层传入的 parent_test_run_id）——
+                    # 此前挂 WTR（web_test_run）导致 TestRun 详情/附件查询按运行 ID 查不到报告。
                     from app.models.attachment import Attachment, AttachmentEntityType
 
                     report_att = Attachment(
                         entity_type=AttachmentEntityType.WEB_TEST_REPORT,
-                        entity_id=test_run.id,
+                        entity_id=_UUID(str(parent_test_run_id)) if parent_test_run_id else test_run.id,
                         project_id=project.id,
                         file_name="report.zip",
                         file_size=len(zip_bytes),
@@ -687,6 +1137,14 @@ class WebTestService:
                         )
                         await self.session.commit()
 
+                # 用例级执行结果落库（只写状态，不影响运行结论）
+                await self.persist_case_level_results(
+                    web_test=web_test,
+                    stdout=runner_result.stdout or "",
+                    parent_test_run_id=parent_test_run_id,
+                    job_context=job_context,
+                )
+
                 return {
                     "run_id": str(test_run.id),
                     "identifier": test_run.identifier,
@@ -697,36 +1155,28 @@ class WebTestService:
                     "failed_tests": failed_count,
                     "skipped_tests": skipped_count,
                     "report_path": report_attachment_id,
-                    "stdout": runner_result.stdout[:5000] if runner_result.stdout else "",
-                    "stderr": runner_result.stderr[:2000] if runner_result.stderr else "",
+                    "stdout": runner_result.stdout[:_MAX_LOG_CHARS] if runner_result.stdout else "",
+                    "stderr": runner_result.stderr[:_MAX_LOG_CHARS] if runner_result.stderr else "",
                 }
             else:
-                # 执行失败 - 登记 IDP 缺陷
+                # 执行失败 - 登记 IDP 缺陷（重试场景下由调用方决定是否登记）
                 error_msg = runner_result.error_message or "未知错误"
 
-                # IDP 缺陷登记（异步，不阻塞返回）
-                try:
-                    project = await self._get_project_by_identifier(project_identifier)
-                    registration_service = DefectRegistrationService(self.session)
-                    # WebTest 模型使用 base_url 而非 target_url
-                    page_url = web_test.base_url or ""
-                    await registration_service.register_from_web_failure(
+                if register_defect:
+                    # IDP 缺陷登记（异步，不阻塞返回）
+                    await self.register_failure_defect(
+                        project_identifier=project_identifier,
+                        web_test=web_test,
                         test_run_id=test_run.id,
-                        test_case_id=None,
-                        source_project_key=project.identifier if project else "UNKNOWN",
-                        scenario_name=web_test.name or "Web测试",
-                        page_url=page_url,
-                        action="EXECUTE",
-                        request_summary={"url": page_url},
-                        response_summary={"status_code": 500},
-                        error_message=error_msg,
-                        report_url=report_attachment_id,
+                        error_msg=error_msg,
+                        report_attachment_id=report_attachment_id,
                     )
-                except Exception as idp_err:
-                    # IDP 登记失败不影响测试结果返回
+                else:
+                    # 非最终尝试：等重试结果，避免为同一次 flake 重复建单
                     import logging
-                    logging.getLogger(__name__).warning(
-                        "[WebTest] IDP 缺陷登记失败（不影响测试结果）: %s", idp_err
+                    logging.getLogger(__name__).info(
+                        "[WebTest] 非最终尝试失败，跳过缺陷登记（等待重试）: %s",
+                        str(error_msg)[:120],
                     )
 
                 await self.web_test_run_repo.update(
@@ -754,6 +1204,14 @@ class WebTestService:
                         sub_function.last_run_status = "failed"
                         await self.session.commit()
 
+                # 用例级执行结果落库（失败运行同样需要：失败时更该分清哪条用例没过）
+                await self.persist_case_level_results(
+                    web_test=web_test,
+                    stdout=runner_result.stdout or "",
+                    parent_test_run_id=parent_test_run_id,
+                    job_context=job_context,
+                )
+
                 return {
                     "run_id": str(test_run.id),
                     "identifier": test_run.identifier,
@@ -765,8 +1223,8 @@ class WebTestService:
                     "failed_tests": failed_count,
                     "skipped_tests": skipped_count,
                     "report_path": report_attachment_id,
-                    "stdout": runner_result.stdout[:5000] if runner_result.stdout else "",
-                    "stderr": runner_result.stderr[:2000] if runner_result.stderr else "",
+                    "stdout": runner_result.stdout[:_MAX_LOG_CHARS] if runner_result.stdout else "",
+                    "stderr": runner_result.stderr[:_MAX_LOG_CHARS] if runner_result.stderr else "",
                 }
 
         except Exception as e:
@@ -825,7 +1283,7 @@ class WebTestService:
     ) -> dict:
         """获取测试运行历史"""
         project = await self._get_project_by_identifier(project_identifier)
-        web_test = await self.web_test_repo.get_by_id(UUID(web_test_id))
+        web_test = await _resolve_web_test(self.web_test_repo, web_test_id)
 
         if not web_test or web_test.project_id != project.id:
             raise NotFoundException(resource_type="Web 测试", resource_id=web_test_id)
@@ -899,6 +1357,8 @@ class WebTestService:
                     "script_format": item.script_format,
                     "total_pages": item.total_pages,
                     "total_flows": item.total_flows,
+                    # N7：文件夹视图同样是"列表页"，口径必须与主列表一致
+                    **compile_manifest_view(item),
                     "created_at": item.created_at.isoformat(),
                 }
                 for item in items

@@ -8,3 +8,10 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      - id: check-compiler-rev
+        name: Check COMPILER_REV bumped when executor template/logic changed
+        entry: python backend/scripts/check_compiler_rev.py --quiet
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

@@ -9,6 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, UploadFile, File, Form, Depends
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
@@ -272,3 +273,36 @@ async def get_folder_web_tests(
     )
 
     return SuccessResponse(data=result)
+
+
+# ============ 验证码 OCR（供生成的 Web 冒烟脚本回调用） ============
+
+class CaptchaOCRRequest(BaseModel):
+    """验证码图片 OCR 请求（base64 编码的图片内容）"""
+
+    image_base64: str
+
+
+@router.post(
+    "/captcha-ocr",
+    response_model=SuccessResponse,
+    summary="验证码图片 OCR 识别",
+    description="接收 base64 编码的验证码图片，返回识别文本。"
+    "供 minimal-loop 生成的 Web 冒烟脚本在登录阶段回调（eatizen UAT 控制台为验证码登录）。",
+)
+async def captcha_ocr(
+    project_identifier: str,
+    payload: CaptchaOCRRequest,
+):
+    """验证码 OCR：复用 agents/tools/web/captcha_ocr 的多引擎识别（ddddocr 优先）"""
+    import base64 as _base64
+
+    from app.agents.tools.web.captcha_ocr import recognize_captcha_bytes
+
+    try:
+        raw = _base64.b64decode(payload.image_base64)
+    except Exception as exc:  # noqa: BLE001
+        return SuccessResponse(success=False, data={"text": ""}, message=f"image_base64 非法: {exc}")
+
+    text = recognize_captcha_bytes(raw)
+    return SuccessResponse(success=True, data={"text": text or ""})

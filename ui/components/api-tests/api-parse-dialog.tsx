@@ -43,6 +43,10 @@ import {
   type ImportInputMode,
   type UnifiedImportResult,
 } from "@/lib/api/api-endpoints";
+import {
+  discoverSpecAPI,
+  type SpecDiscoveryResult,
+} from "@/lib/api/spec-discovery";
 
 // ============================================================================
 // 引导内容配置
@@ -62,8 +66,8 @@ interface SourceGuide {
 
 const SOURCE_GUIDES: Record<SourceCategory, SourceGuide> = {
   swagger: {
-    urlPlaceholder: "https://api.example.com/openapi.json",
-    urlHint: "支持公开的 OpenAPI/Swagger JSON 或 YAML URL",
+  urlPlaceholder: "https://api.example.com/openapi.json 或 https://api.example.com/doc.html",
+    urlHint: "支持 OpenAPI JSON/YAML URL，也支持 Swagger UI / Knife4j 页面地址（将自动发现文档地址）",
     fileHint: "支持 JSON / YAML，最大 15MB",
   },
   apifox: {
@@ -100,15 +104,21 @@ const SOURCE_GUIDES: Record<SourceCategory, SourceGuide> = {
 // URL 示例对照
 const URL_EXAMPLES = [
   {
-    label: "OpenAPI JSON",
+    label: "OpenAPI JSON / Swagger UI",
     correct: "https://petstore.swagger.io/v2/swagger.json",
-    incorrect: "https://petstore.swagger.io/ (Swagger UI 页面)",
+    incorrect: "https://petstore.swagger.io/ (Swagger UI 页面 — 也支持自动发现)",
+  },
+  {
+    label: "Knife4j 页面",
+    correct: "https://api.example.com/doc.html (将自动发现 /v3/api-docs)",
+    incorrect: "",
   },
   {
     label: "Apifox 分享",
     correct: "https://api.apifox.com/api/v1/share/xxx/openapi.json",
     incorrect: "https://app.apifox.com/main/project/xxx (项目页面)",
-  },];
+  },
+];
 
 interface APIParseDialogProps {
   open: boolean;
@@ -124,7 +134,7 @@ interface APIParseDialogProps {
 // ============================================================================
 
 type SourceCategory = "swagger" | "apifox" | "manual";
-type Step = "input" | "parsing" | "preview" | "success" | "error";
+type Step = "input" | "discovering" | "parsing" | "preview" | "success" | "error";
 
 interface ImportState {
   // 第一层：来源类别
@@ -135,10 +145,14 @@ interface ImportState {
   url: string;
   selectedFile: File | null;
   textContent: string;
+  // 认证 Header
+  authHeader: string;
   // 状态
   step: Step;
   result: UnifiedImportResult | null;
   errorMessage: string;
+  // 自动发现结果
+  discoveryResult: SpecDiscoveryResult | null;
   // 保留输入（失败后重试用）
   preservedInput: {
     url?: string;
@@ -217,9 +231,11 @@ export function APIParseDialog({
     url: "",
     selectedFile: null,
     textContent: "",
+    authHeader: "",
     step: "input",
     result: null,
     errorMessage: "",
+    discoveryResult: null,
     preservedInput: null,
   });
 
@@ -231,9 +247,11 @@ export function APIParseDialog({
       url: "",
       selectedFile: null,
       textContent: "",
+      authHeader: "",
       step: "input",
       result: null,
       errorMessage: "",
+      discoveryResult: null,
       preservedInput: null,
     });
   };
@@ -254,6 +272,7 @@ export function APIParseDialog({
       url: "",
       selectedFile: null,
       textContent: "",
+      authHeader: "",
     }));
   };
 
@@ -292,7 +311,7 @@ export function APIParseDialog({
     return null;
   };
 
-  // 执行导入
+  // 执行导入（支持自动发现）
   const handleImport = async () => {
     const validationError = getValidationError();
     if (validationError) {
@@ -300,14 +319,76 @@ export function APIParseDialog({
       return;
     }
 
-    const sourceType = resolveSourceType(state.sourceCategory, state.inputMode);
-
     // 保留输入（用于重试）
     const preserved = {
       url: state.inputMode === "url" ? state.url : undefined,
       fileName: state.inputMode === "file" ? state.selectedFile?.name : undefined,
       text: state.inputMode === "text" ? state.textContent : undefined,
     };
+
+    // URL 模式下，先尝试自动发现
+    if (state.inputMode === "url" && state.sourceCategory === "swagger") {
+      setState((prev) => ({
+        ...prev,
+        step: "discovering",
+        preservedInput: preserved,
+      }));
+
+      try {
+        const discoveryResult = await discoverSpecAPI({
+          url: state.url.trim(),
+        });
+
+        // 如果是直接 JSON/YAML，直接进入导入流程
+        if (discoveryResult.source_type === "direct_json" || discoveryResult.source_type === "direct_yaml") {
+          // 直接导入
+          await doImport(state.url.trim(), preserved);
+          return;
+        }
+
+        // 如果发现到 Spec 地址
+        if (discoveryResult.spec_url) {
+          setState((prev) => ({
+            ...prev,
+            discoveryResult,
+            step: "preview",
+          }));
+          return;
+        }
+
+        // 没有发现到 Spec 地址
+        if (discoveryResult.message) {
+          setState((prev) => ({
+            ...prev,
+            discoveryResult,
+            step: "error",
+            errorMessage: discoveryResult.message!,
+          }));
+          return;
+        }
+
+        // 其他情况，直接尝试导入原 URL
+        await doImport(state.url.trim(), preserved);
+      } catch (error: any) {
+        console.error("发现失败:", error);
+        // 发现失败，直接尝试导入原 URL
+        await doImport(state.url.trim(), preserved);
+      }
+      return;
+    }
+
+    // 非 URL 模式或 Apifox/manual，直接导入
+    await doImport(state.url.trim(), preserved);
+  };
+
+  // 使用发现的 Spec URL 导入
+  const handleImportWithDiscoveredUrl = async (specUrl: string) => {
+    await doImport(specUrl, state.preservedInput);
+  };
+
+  // 实际导入逻辑
+  const doImport = async (url: string, preserved: any) => {
+    const sourceType = resolveSourceType(state.sourceCategory, state.inputMode);
 
     setState((prev) => ({
       ...prev,
@@ -318,9 +399,7 @@ export function APIParseDialog({
     try {
       let result: UnifiedImportResult;
 
-      // 根据输入方式调用对应 API
       if (state.inputMode === "file") {
-        // 文件上传：使用 apiClient.form 继承统一超时和错误处理
         const formData = new FormData();
         formData.append("project_identifier", projectIdentifier);
         formData.append("source_type", sourceType);
@@ -330,7 +409,6 @@ export function APIParseDialog({
 
         result = await unifiedImportFileAPI(formData);
       } else {
-        // URL / 文本：使用 JSON 接口
         const requestBody: Record<string, unknown> = {
           project_identifier: projectIdentifier,
           parent_folder_id: parentFolderId ?? null,
@@ -339,7 +417,7 @@ export function APIParseDialog({
         };
 
         if (state.inputMode === "url") {
-          requestBody.url = state.url.trim();
+          requestBody.url = url;
         } else if (state.inputMode === "text") {
           requestBody.text_content = state.textContent;
         }
@@ -376,6 +454,7 @@ export function APIParseDialog({
       ...prev,
       step: "input",
       errorMessage: "",
+      discoveryResult: null,
       // 恢复保留的输入
       url: prev.preservedInput?.url || prev.url,
       textContent: prev.preservedInput?.text || prev.textContent,
@@ -402,9 +481,10 @@ export function APIParseDialog({
             {state.step === "error" && "导入失败"}
           </DialogTitle>
           <DialogDescription className="text-base">
-            {state.step === "input" &&
-              "支持 Swagger/OpenAPI、Apifox 和手工输入三种方式导入"}
+            {state.step === "input" && "支持 Swagger/OpenAPI、Apifox 和手工输入三种方式导入"}
+            {state.step === "discovering" && "正在自动发现 OpenAPI 文档地址，请稍候..."}
             {state.step === "parsing" && "正在解析文档并创建文件夹结构，请稍候..."}
+            {state.step === "preview" && "发现到以下文档地址，请确认后导入"}
             {state.step === "success" && "文档解析成功，文件夹结构已创建！"}
             {state.step === "error" && state.errorMessage}
           </DialogDescription>
@@ -660,6 +740,123 @@ POST /api/v1/users
           </div>
         )}
 
+        {/* ========== 发现中 ========== */}
+        {state.step === "discovering" && (
+          <div className="flex flex-col items-center justify-center py-16 space-y-6">
+            <div className="relative">
+              <div className="absolute inset-0 bg-primary/20 rounded-full animate-ping" />
+              <Loader2 className="relative h-16 w-16 animate-spin text-primary" />
+            </div>
+            <div className="text-center space-y-2">
+              <h3 className="text-lg font-semibold">正在发现文档地址...</h3>
+              <p className="text-sm text-muted-foreground">
+                正在分析页面并探测 OpenAPI/Swagger 文档接口
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ========== 发现结果预览 ========== */}
+        {state.step === "preview" && state.discoveryResult && (
+          <div className="space-y-6 py-4">
+            {/* 发现结果图标 */}
+            <div className="flex justify-center">
+              <div className="rounded-full bg-blue-100 p-4">
+                <Globe className="h-12 w-12 text-blue-600" />
+              </div>
+            </div>
+
+            {/* 发现消息 */}
+            <div className="text-center space-y-2">
+              <h3 className="text-lg font-semibold">
+                检测到 {state.discoveryResult.source_type === "swagger_ui" ? "Swagger UI" : state.discoveryResult.source_type === "knife4j" ? "Knife4j" : "UI"} 页面
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                已发现可访问的 OpenAPI 文档地址
+              </p>
+            </div>
+
+            {/* 发现的 Spec 地址 */}
+            {state.discoveryResult.spec_url && (
+              <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-green-600" />
+                  <span className="font-medium text-green-800">发现有效的文档地址</span>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">文档地址：</span>
+                    <code className="text-green-700 bg-green-100 px-2 py-0.5 rounded text-xs">
+                      {state.discoveryResult.spec_url}
+                    </code>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">接口数量：</span>
+                    <span className="font-medium">{state.discoveryResult.endpoint_count} 个</span>
+                  </div>
+                  {state.discoveryResult.version && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">版本：</span>
+                      <span className="font-medium">{state.discoveryResult.version}</span>
+                    </div>
+                  )}
+                </div>
+                <Button
+                  className="w-full"
+                  onClick={() => handleImportWithDiscoveredUrl(state.discoveryResult!.spec_url!)}
+                >
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  使用发现的地址导入
+                </Button>
+              </div>
+            )}
+
+            {/* 候选地址列表 */}
+            {state.discoveryResult.candidates.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">探测的候选地址：</Label>
+                <div className="rounded-lg border p-3 space-y-2 max-h-48 overflow-y-auto">
+                  {state.discoveryResult.candidates.map((candidate, index) => (
+                    <div
+                      key={index}
+                      className={`flex items-center justify-between text-sm p-2 rounded ${
+                        candidate.valid ? "bg-green-50" : "bg-red-50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {candidate.valid ? (
+                          <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+                        ) : (
+                          <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
+                        )}
+                        <code className="text-xs truncate">{candidate.url}</code>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {candidate.valid && (
+                          <span className="text-xs text-green-600">
+                            {candidate.endpoint_count} 个接口
+                          </span>
+                        )}
+                        {!candidate.valid && candidate.error && (
+                          <span className="text-xs text-red-500">{candidate.error}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 手动输入选项 */}
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={handleRetry}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                重新输入
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* ========== 解析中 ========== */}
         {state.step === "parsing" && (
           <div className="flex flex-col items-center justify-center py-16 space-y-6">
@@ -822,6 +1019,13 @@ POST /api/v1/users
                 开始导入
               </Button>
             </>
+          )}
+
+          {state.step === "preview" && (
+            <Button variant="outline" onClick={handleRetry}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              重新输入
+            </Button>
           )}
 
           {state.step === "success" && (

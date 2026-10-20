@@ -1,0 +1,82 @@
+{
+ "id": "97012743-6e1c-4a0e-8fae-741feb448954",
+ "identifier": "TR-123",
+ "name": "Web 最小闭环验证 20260928-153520",
+ "description": "由 Web 最小闭环接口自动创建",
+ "run_state": "done",
+ "active_state": "active",
+ "assignee": null,
+ "test_cases_count": 13,
+ "tags": [],
+ "issues": [],
+ "configurations": [],
+ "overall_progress": {
+  "passed": 4,
+  "failed": 0,
+  "skipped": 9,
+  "blocked": 0,
+  "not_executed": 0
+ },
+ "execution_mode": "sequential",
+ "max_concurrency": 1,
+ "script_jobs": [
+  {
+   "id": "07109853-295c-4ed2-839f-2b0ff090a5c6",
+   "test_run_id": "97012743-6e1c-4a0e-8fae-741feb448954",
+   "script_type": "web_test",
+   "script_id": "9f7929ca-d6dc-4e70-bd0f-6b5ed33a7a7f",
+   "script_identifier": "WT-A9C1C11F",
+   "script_name": "TC-261933 - CS工单管理冒烟",
+   "execution_order": 1,
+   "execution_mode": "sequential",
+   "status": "completed",
+   "started_at": "2026-09-28T07:35:25.506911Z",
+   "completed_at": "2026-09-28T07:36:51.450234Z",
+   "duration_ms": 85884,
+   "result_summary": {
+    "total": 1,
+    "failed": 0,
+    "passed": 1,
+    "skipped": 0
+   },
+   "error_message": null,
+   "report_path": "7acfae90-5a8b-43cd-a3b2-daa1c724e156",
+   "retry_count": 0,
+   "max_retries": 0,
+   "created_at": "2026-09-28T07:35:19.105937Z",
+   "updated_at": "2026-09-28T07:36:51.506346Z"
+  },
+  {
+   "id": "245d6b9e-3493-494b-bcff-633b9e368287",
+   "test_run_id": "97012743-6e1c-4a0e-8fae-741feb448954",
+   "script_type": "web_test",
+   "script_id": "6603b1f8-8a7d-4cd1-8a0f-52eb95dd9bc6",
+   "script_identifier": "WT-1582B9FF",
+   "script_name": "TC-104023 - CS工单管理冒烟",
+   "execution_order": 2,
+   "execution_mode": "sequential",
+   "status": "completed",
+   "started_at": "2026-09-28T07:36:51.551117Z",
+   "completed_at": "2026-09-28T07:38:19.476057Z",
+   "duration_ms": 87889,
+   "result_summary": {
+    "total": 1,
+    "failed": 0,
+    "passed": 1,
+    "skipped": 0
+   },
+   "error_message": null,
+   "report_path": "32608c0f-c5e5-4ea0-9e28-24b0d56df0bd",
+   "retry_count": 0,
+   "max_retries": 0,
+   "created_at": "2026-09-28T07:35:22.572758Z",
+   "updated_at": "2026-09-28T07:38:19.484575Z"
+  }
+ ],
+ "created_at": "2026-09-28T07:35:19.105937Z",
+ "updated_at": "2026-09-28T07:38:19.524356Z",
+ "links": {
+  "self": "/api/v2/projects/PR-9/test-runs/TR-123",
+  "test_cases": "/api/v2/projects/PR-9/test-runs/TR-123/test-cases"
+ }
+}

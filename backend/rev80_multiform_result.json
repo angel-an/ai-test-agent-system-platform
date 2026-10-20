@@ -1,0 +1,122 @@
+[
+ {
+  "sub": "WSF-RC-CREATE",
+  "response": {
+   "success": true,
+   "data": {
+    "project_identifier": "PR-9",
+    "test_cases": [
+     {
+      "id": "cc4103b4-dd0d-402e-83e7-6fece5ac9ce3",
+      "identifier": "TC-194969",
+      "name": "Business Date-必填与取值校验"
+     }
+    ],
+    "web_tests": [
+     {
+      "id": "61cbadb9-cdc2-48b6-86e5-117b27b0f772",
+      "identifier": "WT-E88F62B8",
+      "name": "TC-194969 - CS工单管理冒烟",
+      "script_path": "web-tests/PR-9/minimal-loop/cc4103b4-dd0d-402e-83e7-6fece5ac9ce3/4c28c93513684ab4a52c378553d29f29/test-script.spec.ts",
+      "test_case_id": "cc4103b4-dd0d-402e-83e7-6fece5ac9ce3",
+      "web_path_match_status": "matched",
+      "web_path_template_id": "074f27bf-3775-4633-a69c-1ae480213ebc"
+     }
+    ],
+    "test_run": {
+     "id": "1a214692-470c-4a5a-a991-70958db978bd",
+     "identifier": "TR-115",
+     "script_jobs": [
+      {
+       "id": "23654d43-ff74-480a-9573-a8b2404bf884",
+       "script_type": "web_test",
+       "script_id": "61cbadb9-cdc2-48b6-86e5-117b27b0f772",
+       "script_identifier": "WT-E88F62B8"
+      }
+     ]
+    },
+    "message": "已创建 1 条 Web 冒烟可执行资产"
+   }
+  }
+ },
+ {
+  "sub": "WSF-GW-CREATE",
+  "response": {
+   "success": true,
+   "data": {
+    "project_identifier": "PR-9",
+    "test_cases": [
+     {
+      "id": "ff55bc2c-2f2f-4f10-9b99-2fcc61c793d4",
+      "identifier": "TC-834931",
+      "name": "GoodWill Type-必填与取值校验"
+     }
+    ],
+    "web_tests": [
+     {
+      "id": "becee108-178f-4d6b-aa97-a53f519e5ac4",
+      "identifier": "WT-C0C7B1E6",
+      "name": "TC-834931 - CS工单管理冒烟",
+      "script_path": "web-tests/PR-9/minimal-loop/ff55bc2c-2f2f-4f10-9b99-2fcc61c793d4/901fb6b9b9444ce69cabc598f004dbbf/test-script.spec.ts",
+      "test_case_id": "ff55bc2c-2f2f-4f10-9b99-2fcc61c793d4",
+      "web_path_match_status": "matched",
+      "web_path_template_id": "074f27bf-3775-4633-a69c-1ae480213ebc"
+     }
+    ],
+    "test_run": {
+     "id": "1a214692-470c-4a5a-a991-70958db978bd",
+     "identifier": "TR-115",
+     "script_jobs": [
+      {
+       "id": "9a16f8e7-19cf-47ed-9bda-13e7a105484f",
+       "script_type": "web_test",
+       "script_id": "becee108-178f-4d6b-aa97-a53f519e5ac4",
+       "script_identifier": "WT-C0C7B1E6"
+      }
+     ]
+    },
+    "message": "已创建 1 条 Web 冒烟可执行资产"
+   }
+  }
+ },
+ {
+  "sub": "WSF-TL-PHONE",
+  "response": {
+   "success": true,
+   "data": {
+    "project_identifier": "PR-9",
+    "test_cases": [
+     {
+      "id": "5e12c95c-63e4-4e2b-87eb-10918724b3dd",
+      "identifier": "TC-120991",
+      "name": "Call From-必填与取值校验"
+     }
+    ],
+    "web_tests": [
+     {
+      "id": "67a0aef3-857e-4f7d-8801-af512738a335",
+      "identifier": "WT-2BE3E37D",
+      "name": "TC-120991 - CS工单管理冒烟",
+      "script_path": "web-tests/PR-9/minimal-loop/5e12c95c-63e4-4e2b-87eb-10918724b3dd/c1eb64308f5642c998ac0287b66680b1/test-script.spec.ts",
+      "test_case_id": "5e12c95c-63e4-4e2b-87eb-10918724b3dd",
+      "web_path_match_status": "matched",
+      "web_path_template_id": "074f27bf-3775-4633-a69c-1ae480213ebc"
+     }
+    ],
+    "test_run": {
+     "id": "1a214692-470c-4a5a-a991-70958db978bd",
+     "identifier": "TR-115",
+     "script_jobs": [
+      {
+       "id": "fc721567-11f0-49fc-81f3-8a4a2928923f",
+       "script_type": "web_test",
+       "script_id": "67a0aef3-857e-4f7d-8801-af512738a335",
+       "script_identifier": "WT-2BE3E37D"
+      }
+     ]
+    },
+    "message": "已创建 1 条 Web 冒烟可执行资产"
+   }
+  }
+ }
+]

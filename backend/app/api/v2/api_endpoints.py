@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -29,22 +30,25 @@ from app.schemas.api_endpoint import (
     OpenAPIUploadRequest
 )
 from app.services.openapi_parser import OpenAPIParser
+from app.utils.exceptions import NotFoundException
 
 router = APIRouter()
 
-async def fetch_openapi_from_url(url: str) -> dict[str, Any]:
+async def fetch_openapi_from_url(url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
     """
     从远程 URL 获取 OpenAPI 文档
 
     Args:
         url: OpenAPI/Swagger 文档的 URL
+        headers: 可选的请求头（用于认证等）
 
     Returns:
         解析后的 JSON 字典
     """
+    request_headers = headers or {}
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            response = await client.get(url)
+            response = await client.get(url, headers=request_headers)
             response.raise_for_status()
     except httpx.HTTPStatusError as e:
         raise HTTPException(
@@ -664,6 +668,87 @@ async def get_endpoint_artifacts_api(
             detail=f"获取成果物失败: {str(e)}"
         )
 
+@router.get("/projects/{project_identifier}/api-artifacts/unlinked")
+async def list_unlinked_api_artifacts(
+    project_identifier: str,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep
+):
+    """列出**未关联到当前端点**的 API 成果物。
+
+    背景（真实问题）：成果物用 `attachment.entity_id` 指向端点 UUID。端点被**重新导入**
+    （统一导入创建新行 → 新 UUID）或删除后，历史成果物的 entity_id 就指向不存在的端点；
+    而端点成果物面板只按「当前端点 id」查询，于是这些成果物**在 UI 上完全不可见**，
+    表现为"这一页只有测试脚本，没有测试用例和测试报告"。
+
+    本接口按项目列出这批"孤儿"成果物，并从描述里尽力解析出原端点提示（METHOD + PATH），
+    使它们至少可见、可查看/下载，而不是静默丢失。
+    """
+    import re
+
+    from app.models.attachment import Attachment, AttachmentEntityType
+
+    project_stmt = select(Project).where(Project.identifier == project_identifier)
+    project = (await db.execute(project_stmt)).scalar_one_or_none()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"项目 {project_identifier} 不存在",
+        )
+
+    api_types = [
+        AttachmentEntityType.API_TEST_PLAN,
+        AttachmentEntityType.API_TEST_CASE,
+        AttachmentEntityType.API_TEST_SCRIPT,
+        AttachmentEntityType.API_TEST_RESULT,
+        AttachmentEntityType.API_TEST_REPORT,
+    ]
+
+    ep_rows = await db.execute(
+        select(APIEndpoint.id).where(APIEndpoint.project_id == project.id)
+    )
+    endpoint_ids = {row[0] for row in ep_rows.all()}
+
+    stmt = (
+        select(Attachment)
+        .where(Attachment.entity_type.in_(api_types))
+        .where(Attachment.project_id == project.id)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    desc_re = re.compile(r"API\s+端点\s+(?P<method>[A-Z]+)\s+(?P<path>\S+)")
+
+    unlinked = []
+    for a in rows:
+        # 归属仍有效的：entity_id 是现存端点，或直接挂在项目本身
+        if a.entity_id in endpoint_ids or a.entity_id == project.id:
+            continue
+        method = path = None
+        m = desc_re.search(str(a.description or ""))
+        if m:
+            method, path = m.group("method").upper(), m.group("path")
+        unlinked.append({
+            "id": str(a.id),
+            "type": a.entity_type.value.upper(),
+            "file_name": a.file_name,
+            "description": a.description,
+            "file_size": a.file_size,
+            "content_type": a.content_type,
+            "object_name": a.object_name,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "orphan_entity_id": str(a.entity_id),
+            "hint_method": method,
+            "hint_path": path,
+        })
+
+    return {
+        "success": True,
+        "project_identifier": project_identifier,
+        "unlinked_artifacts": unlinked,
+        "total": len(unlinked),
+    }
+
+
 @router.get("/attachments/{attachment_id}/content")
 async def get_attachment_content_api(
     attachment_id: UUID,
@@ -797,9 +882,41 @@ async def get_report_viewer_url(
             "index_url": f"/api/v2/attachments/{attachment_id}/report-html"
         }
 
+    # 非 HTML：先把内容取回来，再判断能否按 ZIP 报告解压预览。
+    #
+    # 取回阶段单独处理错误：DB 有记录但对象存储无对象属**数据完整性**问题，
+    # 返回可读的 404 而不是把内部异常包装成 500（前端无法据此区分原因）。
+    try:
+        raw_bytes = MinIOClient.download_file(attachment.object_name)
+    except Exception as exc:  # noqa: BLE001
+        message = str(exc)
+        if "does not exist" in message or "NoSuchKey" in message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"报告文件在对象存储中不存在：{attachment.object_name}。"
+                    "该成果物记录可能已失效（数据完整性问题），请重新生成报告。"
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"读取报告文件失败: {message}",
+        ) from exc
+
+    # 非 ZIP 内容（如 Markdown 文本报告）：交给 report-html 以原文方式渲染，
+    # 而不是并入下面的 ZIP 分支后报“无效的 ZIP 文件”。
+    if not raw_bytes.startswith(b"PK\x03\x04"):
+        return {
+            "success": True,
+            "attachment_id": str(attachment_id),
+            "report_type": "raw",
+            "index_url": f"/api/v2/attachments/{attachment_id}/report-html",
+            "message": "该报告不是 HTML/ZIP 格式，已按原文展示",
+        }
+
     # 对于 ZIP 格式的测试报告，解压并返回 index.html 的访问路径
     try:
-        zip_bytes = MinIOClient.download_file(attachment.object_name)
+        zip_bytes = raw_bytes
 
         # 创建临时目录
         temp_dir = Path(tempfile.gettempdir()) / "test-reports" / str(attachment_id)
@@ -830,6 +947,8 @@ async def get_report_viewer_url(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="无效的 ZIP 文件"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -869,6 +988,99 @@ h1 {{ font-size: 24px; margin-bottom: 16px; color: #1a1a2e; }}
 </div>
 </body>
 </html>"""
+
+
+@router.get("/attachments/{attachment_id}/report-summary")
+async def get_report_visual_summary(
+    attachment_id: UUID,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep
+):
+    """把已保存的测试报告解析为**可视化结果摘要**。
+
+    与 `report-viewer`（打开原始报告）互补：本接口返回结构化统计，
+    供前端复用既有可视化仪表盘（`web-tests/visual-report-dashboard`）渲染。
+
+    - HTML 报告（自包含）：直接解析内嵌的 Playwright 数据；
+    - ZIP 报告：取出其中的 index.html 再解析。
+
+    解析是确定性的、离线的，**不重跑测试**，因此对历史成果物同样适用。
+    """
+    from app.models.attachment import Attachment, AttachmentEntityType
+    from app.config.minio_client import MinIOClient
+    from app.services.report_summary import (
+        ReportParseError,
+        summarize_html_report,
+        summarize_report_archive,
+    )
+
+    stmt = select(Attachment).where(Attachment.id == attachment_id)
+    result = await db.execute(stmt)
+    attachment = result.scalar_one_or_none()
+
+    if not attachment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"附件 {attachment_id} 不存在",
+        )
+
+    if attachment.entity_type not in [
+        AttachmentEntityType.API_TEST_REPORT,
+        AttachmentEntityType.WEB_TEST_REPORT,
+    ]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="只支持解析测试报告类成果物",
+        )
+
+    try:
+        raw = MinIOClient.download_file(attachment.object_name)
+    except Exception as exc:  # noqa: BLE001
+        message = str(exc)
+        # 与 report-viewer / report-html 保持同一语义：
+        # 对象存储与本地备份均无内容 → 404（数据完整性）；其它存储故障 → 502。
+        if "does not exist" in message or "NoSuchKey" in message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"报告文件在对象存储中不存在：{attachment.object_name}。"
+                    "该成果物记录可能已失效（数据完整性问题），请重新生成报告。"
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"读取报告文件失败: {message}",
+        ) from exc
+
+    is_html = attachment.content_type == "text/html" or attachment.file_name.lower().endswith(".html")
+
+    try:
+        summary = summarize_html_report(raw) if is_html else summarize_report_archive(raw)
+    except ReportParseError as exc:
+        # 报告存在但不可解析：返回 200 + parseable=False，让前端优雅降级到"原始报告"
+        return {
+            "success": True,
+            "attachment_id": str(attachment_id),
+            "parseable": False,
+            "reason": str(exc),
+            "summary": None,
+        }
+
+    # API 与 Web 报告都跑 Playwright，前端用 script_type 决定套件标题与浏览器文案
+    script_type = (
+        "api_test"
+        if attachment.entity_type == AttachmentEntityType.API_TEST_REPORT
+        else "web_test"
+    )
+
+    return {
+        "success": True,
+        "attachment_id": str(attachment_id),
+        "parseable": True,
+        "script_type": script_type,
+        "file_name": attachment.file_name,
+        "summary": summary,
+    }
 
 
 @router.get("/attachments/{attachment_id}/report-html")
@@ -983,10 +1195,21 @@ async def get_report_html(
 
         return HTMLResponse(content=html_content)
     except Exception as e:
+        # 与 report-viewer 一致：DB 有记录但对象存储无对象属数据完整性问题，
+        # 返回可读的 404；其它存储故障返回 502，不再一律 500。
+        message = str(e)
+        if "does not exist" in message or "NoSuchKey" in message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"报告文件在对象存储中不存在：{attachment.object_name}。"
+                    "该成果物记录可能已失效（数据完整性问题），请重新生成报告。"
+                ),
+            ) from e
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"读取报告失败: {str(e)}"
-        )
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"读取报告失败: {message}",
+        ) from e
 
 @router.get("/attachments/{attachment_id}/report-files/{file_path:path}")
 async def get_report_file(
@@ -1131,3 +1354,80 @@ async def update_attachment_content_api(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"更新附件失败: {str(e)}"
         )
+
+
+# ---------- 契约驱动：从 Excel 契约端点生成产物并执行 ----------
+
+class ContractGenerateRequest(BaseModel):
+    """契约驱动生成的执行配置。"""
+
+    env_config: dict[str, Any] = Field(default_factory=dict, description="环境配置（base_url/鉴权引用/测试数据引用）")
+
+
+@router.post("/api-endpoints/{endpoint_id}/contract-artifacts")
+async def generate_contract_artifacts_api(
+    endpoint_id: UUID,
+    request: ContractGenerateRequest,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep,
+):
+    """对单个端点生成需求分析、测试计划与 Playwright 脚本（不执行）。
+
+    返回 analysis/plan/script/script_attachment_id；缺 base_url 时返回 400 并提示缺失项。
+    """
+    from app.services.api_test_service import APITestService
+
+    service = APITestService(db)
+    try:
+        artifacts = await service.generate_artifacts_from_endpoint(
+            endpoint_id=str(endpoint_id),
+            env_config=request.env_config,
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except NotFoundException as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"生成产物失败: {exc}",
+        ) from exc
+    return {"success": True, "data": artifacts}
+
+
+@router.post("/projects/{project_identifier}/api-endpoints/{endpoint_id}/generate-run")
+async def generate_and_run_endpoint_api(
+    project_identifier: str,
+    endpoint_id: UUID,
+    request: ContractGenerateRequest,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep,
+):
+    """契约驱动闭环：生成脚本并执行。缺环境配置时返回 blocked（不执行）。"""
+    from app.services.api_test_service import APITestService
+
+    service = APITestService(db)
+    try:
+        result = await service.generate_and_run_from_endpoint(
+            project_identifier=project_identifier,
+            endpoint_id=str(endpoint_id),
+            env_config=request.env_config,
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except NotFoundException as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"生成并执行失败: {exc}",
+        ) from exc
+    return {"success": True, "data": result}

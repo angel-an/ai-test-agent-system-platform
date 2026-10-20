@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.agents.tools.api.artifacts_tools import (
+from app.agents.api.tools.test_artifacts_tools import (
     save_test_cases,
     save_test_plan,
     save_test_script,

@@ -1,0 +1,56 @@
+{
+ "id": "ba11e919-230a-4d6a-ac2d-444b543edd1a",
+ "identifier": "TR-116",
+ "name": "Web 最小闭环验证 20260928-125611",
+ "description": "由 Web 最小闭环接口自动创建",
+ "run_state": "done",
+ "active_state": "active",
+ "assignee": null,
+ "test_cases_count": 35,
+ "tags": [],
+ "issues": [],
+ "configurations": [],
+ "overall_progress": {
+  "passed": 0,
+  "failed": 0,
+  "skipped": 2,
+  "blocked": 0,
+  "not_executed": 33
+ },
+ "execution_mode": "sequential",
+ "max_concurrency": 1,
+ "script_jobs": [
+  {
+   "id": "2c7f79fd-6933-4513-baf9-8a216a647746",
+   "test_run_id": "ba11e919-230a-4d6a-ac2d-444b543edd1a",
+   "script_type": "web_test",
+   "script_id": "becee108-178f-4d6b-aa97-a53f519e5ac4",
+   "script_identifier": "WT-C0C7B1E6",
+   "script_name": "TC-834931 - CS工单管理冒烟",
+   "execution_order": 1,
+   "execution_mode": "sequential",
+   "status": "completed",
+   "started_at": "2026-09-28T04:56:13.414840Z",
+   "completed_at": "2026-09-28T04:57:03.826491Z",
+   "duration_ms": 50396,
+   "result_summary": {
+    "total": 1,
+    "failed": 0,
+    "passed": 1,
+    "skipped": 0
+   },
+   "error_message": null,
+   "report_path": "079ba459-aa06-4a7f-b844-ed0357ad7874",
+   "retry_count": 0,
+   "max_retries": 0,
+   "created_at": "2026-09-28T04:56:11.110567Z",
+   "updated_at": "2026-09-28T04:57:03.828540Z"
+  }
+ ],
+ "created_at": "2026-09-28T04:56:11.110567Z",
+ "updated_at": "2026-09-28T04:57:03.838100Z",
+ "links": {
+  "self": "/api/v2/projects/PR-9/test-runs/TR-116",
+  "test_cases": "/api/v2/projects/PR-9/test-runs/TR-116/test-cases"
+ }
+}

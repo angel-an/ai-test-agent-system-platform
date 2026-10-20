@@ -31,9 +31,10 @@ workspace_root = Path(settings.testcase_workspace_root).resolve()
 workspace_backend = FilesystemBackend(root_dir=workspace_root, virtual_mode=True)
 
 # 创建技能中间件
+# 统一约定：skills_root=.claude/skills，source=/skills/<agent目录>/
 skills_middleware = SkillsMiddleware(
     backend=skills_backend,
-    sources=["/skills/"]
+    sources=["/skills/testcase/"]
 )
 
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import re
 from dataclasses import dataclass, field as dc_field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +120,8 @@ class FieldRule:
     required: bool = False
     description: str = ""
     condition: str = ""
+    #: 「是否可編輯」列原文（是/否/系統自動生成/""）；列不存在時為空串，不猜
+    editable: str = ""
     constraints: list[FieldConstraint] = dc_field(default_factory=list)
     source: dict[str, Any] = dc_field(default_factory=dict)
 
@@ -127,6 +130,16 @@ class FieldRule:
             if item.kind == kind:
                 return item
         return None
+
+    @property
+    def case_eligible(self) -> bool:
+        """本条规则能否产出**可判定断言**的用例。
+
+        rev132：生成门槛（`必填 或 有枚举取值`）此前散在 `ai.py::_field_rule_cases` 里，
+        解析侧无法回答"27 条规则只出了 10 条用例，另外 17 条为什么没了"——
+        规则被静默丢弃且零告警。把判据收口到这里，生成与审计共用同一个口径。
+        """
+        return bool(self.required or self.constraint("options"))
 
     def summary(self) -> str:
         """给用例标题用的约束摘要（引用文档原值）。"""
@@ -143,7 +156,9 @@ class FieldRule:
             elif item.kind == "max_length" and item.numbers:
                 parts.append(f"最长{_fmt(item.numbers[0])}字")
             elif item.kind == "max_count" and item.numbers:
-                parts.append(f"最多{_fmt(item.numbers[0])}条")
+                # rev111：单位取原文（"最多7組"/"最多30天"），不再一律写成"条"
+                unit = (item.detail or {}).get("unit") or "条"
+                parts.append(f"最多{_fmt(item.numbers[0])}{unit}")
             elif item.kind == "file_size" and item.numbers:
                 parts.append(f"文件≤{_fmt(item.numbers[0])}M")
             elif item.kind == "formats":
@@ -157,6 +172,7 @@ class FieldRule:
             "required": self.required,
             "description": self.description,
             "condition": self.condition,
+            "editable": self.editable,
             "constraints": [c.to_dict() for c in self.constraints],
             "source": self.source,
         }
@@ -168,6 +184,9 @@ class StructuredRequirement:
     narrative_text: str
     field_rules: list[FieldRule] = dc_field(default_factory=list)
     template_tables: list[dict[str, Any]] = dc_field(default_factory=list)
+    #: 「列表顯示字段」表的欄位清單（每表一项：table + columns[name/desc/source]）——
+    #: 与 template_tables 互补：template_tables 只存表头/行数，这里存**每一列**
+    display_columns: list[dict[str, Any]] = dc_field(default_factory=list)
     source_type: str = "text"
     #: 未能解析成字段标签的表格行（如 PDF 说明列里的整段文字）——显式暴露而非静默丢弃
     rejected_fields: list[dict[str, Any]] = dc_field(default_factory=list)
@@ -178,13 +197,21 @@ class StructuredRequirement:
     #: 结构化解析整体失败、已降级为纯文本（此时 field_rules 必然为空，必须显式暴露）
     degraded: bool = False
     degraded_reason: str = ""
+    #: 每页行数（PDF 才有）——把「表号」翻译成「文档位置」的必要输入，缺省为空
+    page_line_counts: list[int] = dc_field(default_factory=list)
+    #: 表号 → {line, heading, section}：表在文档里的定位（缺省为空，用表头行文本定位）
+    table_locations: dict[int, dict[str, Any]] = dc_field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source_type": self.source_type,
             "field_rule_count": len(self.field_rules),
+            # 能过生成门槛（必填/枚举）的规则数：与 field_rule_count 的差额 = 静默丢弃的规则
+            "field_rule_case_eligible": sum(1 for r in self.field_rules if r.case_eligible),
             "field_rules": [r.to_dict() for r in self.field_rules],
             "template_table_count": len(self.template_tables),
+            "display_column_tables": len(self.display_columns),
+            "display_columns": self.display_columns,
             "rejected_field_count": len(self.rejected_fields),
             "rejected_fields": self.rejected_fields[:10],
             "rebalanced_rows": self.rebalanced_rows,
@@ -210,12 +237,17 @@ _RANGE_RE = re.compile(
 _DECIMAL_RE = re.compile(r"小数点后最多保留\s*([0-9]+)\s*位")
 #: 长度上限：兼容简体原文（"最多输入50个字"）与 CS 规格书的繁體列表式（"限制輸入50個字符"）
 _MAX_LENGTH_RE = re.compile(
-    r"(?:最多输入|最多輸入|限制输入|限制輸入|限制|最多|上限|不超过|不超過)\s*"
+    r"(?:最多输入|最多輸入|限制输入|限制輸入|限制|最多|上限|不超过|不超過|小於等於|小于等于)\s*"
     r"(?:輸入|输入|填寫|填写)?\s*([0-9]+)\s*(?:個|个)?\s*(?:字|字符)"
 )
 _MAX_COUNT_RE = re.compile(
-    r"(?:最多输入|最多輸入|最多|上限|限制)\s*([0-9]+)\s*(?:個|个)?\s*"
-    r"(手机号|手機號|条|條|附件|附件數|附件数)"
+    # rev111：补「最多(支持)(選擇|設置)N 組/道/時間段/天」——实测这些写法此前**完全不被识别**，
+    # 导致 YL 营业时间「最多支持選擇7組」、YL「最多選擇30天」（EDW 筛选）、
+    # PR-2「限制最多设置10道」（问卷题目上限）都产不出边界用例。
+    r"(?:最多|上限|限制(?:最多)?)\s*(?:支持|支援)?\s*"
+    r"(?:選擇|选择|設置|设置|輸入|输入|填寫|填写|新增|添加)?\s*"
+    r"([0-9]+)\s*(?:個|个)?\s*"
+    r"(手机号|手機號|时间段|時間段|附件數|附件数|附件|组|組|道|条|條|项|項|天|日)"
 )
 #: 文件大小：兼容"文件大小 10M"与"上傳文件大小不超過10m"
 _FILE_SIZE_RE = re.compile(
@@ -230,9 +262,16 @@ _FORMATS_RE = re.compile(r"文件格式(?:仅|僅)?支持[：:]\s*([^\n。；;]+
 #: 原词表只有「枚舉内容/枚舉值」两种形态 → 该枚举此前完全没被抽取，Status 字段无法生成断言）。
 #: 裸「枚舉/枚举」仍**必须带冒号**才算声明，避免正文里的普通提及被当成枚举值。
 _OPTIONS_RE = re.compile(
-    r"(?:选项范围|選項範圍|枚舉内容|枚舉內容|枚举内容|枚举內容|"
+    # rev111：容错「選項發範圍」（YL 導入任務筛选字段「狀態」的错别字，实测因此识别不出枚举
+    # → 该字段零用例）；同时容忍字间空格。
+    # rev132：补「可选项/可選項」（小杨生煎问卷 PDF 写「2. 可选项：外卖、自提、堂食」，
+    # 原词表不认 ⇒ 业务类型 3 个合法取值从未进用例）；捕获段不再在「；」处截断，
+    # 交给下面按分隔符切分 + 条款词/编号尾缀清理，否则「是；否」只剩「是」。
+    r"(?:選\s*項\s*[發发]?\s*範圍|选\s*项\s*[发發]?\s*范围|"
+    r"可\s*选\s*项|可\s*選\s*項|"
+    r"枚舉内容|枚舉內容|枚举内容|枚举內容|"
     r"枚舉值|枚举值|枚舉值為|支持選擇|支持选择|"
-    r"枚舉\s*[：:]|枚举\s*[：:])\s*[：:，,]?\s*([^\n。；;]+)"
+    r"枚舉\s*[：:]|枚举\s*[：:])\s*[：:，,]?\s*([^\n。]+)"
 )
 #: 默认值：兼容"默认选中：X"与"默認為In Progress"、"默認YL選項"
 _DEFAULT_RE = re.compile(
@@ -240,10 +279,27 @@ _DEFAULT_RE = re.compile(
     r"(?:為|为|是|值[：:]?)?\s*([^\n。；;，,]{1,40})"
 )
 #: 必填的**正面**表述（说明文本里写的，而不是表格列）
-_REQUIRED_TEXT_RE = re.compile(r"必填|必選|不可[為为]空|不能[為为]空|不能为空")
+#: rev132：补简体「必选」——原词表只有繁体「必選」，实测小杨生煎问卷 PDF 原文写
+#: 「1. 多选，必选」⇒ required_from_text 返回 False，业务类型/是否必答双双被判非必填、
+#: 整条规则卡在生成门槛外（该 PDF 30 条规则只有 4 条过门槛）。
+_REQUIRED_TEXT_RE = re.compile(r"必填|必選|必选|不可[為为]空|不能[為为]空|不能为空")
+
+#: 只读/编辑态：文档把「不可編輯」寫在說明列裡（YL 主數據經度/緯度），無獨立「是否可編輯」列。
+#: 刻意不碰裸「禁用」——「禁用該功能後…」是行為規則不是字段狀態；「禁用狀態」才算字段態。
+_READ_ONLY_RE = re.compile(
+    r"(不可[編编]輯|僅可查看|仅供查看|只讀|只读|僅供查看|禁用狀態|禁用状态)")
 #: 必填的**反面**表述（"非必選内容"里含"必選"，必须先剔除再判正面）
-_OPTIONAL_TEXT_RE = re.compile(r"非必[選选填]|不必填|選填|选填|可選填|可选填|非必填")
-_CONDITION_RE = re.compile(r"(当[^\n。；;]*?显示该字段)")
+#: rev132：补简体「非必选」「不需填」——否则新版正面词「必选」会被否定句误判成必填
+_OPTIONAL_TEXT_RE = re.compile(
+    r"非必[選选填]|不必填|不需填|選填|选填|可選填|可选填|非必填")
+#: 条件显示声明。rev111 起不再只认「当…显示该字段」：
+#: 实测真实文档（YL 主數據）用的是另外三种写法——
+#: 「排隊打開顯示該字段」「排隊打開且排隊集成方選擇GULU、QRS時顯示該字段」
+#: 「當店鋪狀態開啟時，顯示該字段」，此前全部识别不出 → 两文档「条件显示校验」用例数为 **0**。
+_CONDITION_RE = re.compile(
+    r"((?:[當当])?[^\n。；;]{2,80}?)\s*(?:時|时)?\s*[，,]?\s*"
+    r"(?:顯示該字段|显示该字段|顯示該欄位|显示该栏位)"
+)
 #: 连接词（不得进入字段名）
 _CONNECTIVE_RE = re.compile(r"^(?:且|并且|并|和|以及|同时)+")
 #: 条件里的"X选择：值" / "X选中：值"
@@ -307,13 +363,35 @@ def extract_constraints(description: str) -> list[FieldConstraint]:
         raw_options = re.split(
             r"默认选中|默认值|默认：|默認選中|默認值|默認為|默認", match.group(1)
         )[0]
-        # 关键词本身可能落在捕获段开头（例："，支持選擇ETZ"）
-        raw_options = re.sub(r"^(?:支持選擇|支持选择|為|为|是)\s*", "", raw_options).strip()
+        # 关键词本身可能落在捕获段开头（例："，支持選擇ETZ"）。
+        # rev132：不再无条件剥掉前导「是」——「选项范围：是；否」的第一个取值就叫「是」，
+        # 剥掉后枚举只剩「否」，断言会拿错误取值去校验。只有「是」后面跟空白才算系动词。
+        raw_options = re.sub(r"^(?:支持選擇|支持选择|為|为)\s*", "", raw_options)
+        raw_options = re.sub(r"^是(?=\s)", "", raw_options).strip()
+        # 捕获段会跨到下一条编号（"…堂食3. 未选校验：请选择业务类型"）——先在下一条编号处截断，
+        # 否则最后一个合法取值会因为带冒号被当成条款丢掉（实测「堂食」就是这样消失的）。
+        # 标记前必须不是字母/数字：否则 "Active、Closed" 的「e、」会被当成列表项标记 a、
+        raw_options = re.split(
+            r"\s*(?<![A-Za-z0-9])(?:\d{1,2}|[a-z])\s*[.．、]\s*", raw_options
+        )[0].strip()
         options = []
-        for item in re.split(r"[、,，/]", raw_options):
+        # 全角「；」既是选项分隔符（"是；否"），也可能是条款分隔符（"…；校驗：必填"）。
+        # 前者必须切开，后者靠下面的「含冒号即丢弃」挡住。
+        for item in re.split(r"[、,，/；;]", raw_options):
             text_item = item.strip().strip("。；;")
             if not text_item:
                 continue
+            if re.fullmatch(r"\d+\s*(?:组|組|个|個|条|條)", text_item):
+                continue  # 数量上限不是枚举取值
+            # 尾随的下一条编号（"否3." 来自 "选项范围：是；否3. 默认选中"）不是取值
+            text_item = re.sub(r"\s*\d{1,2}\s*[.．、]\s*$", "", text_item).strip()
+            if not text_item:
+                continue
+            # 冒号 = 又一条属性声明（"校驗：必填"），不是枚举值
+            if "：" in text_item or ":" in text_item:
+                continue
+            if len(text_item) > 30:
+                continue  # 长句是条款正文，不是取值
             # 仅当选项本身没有左括号时，才去掉尾部多余的右括号
             if "（" not in text_item and "(" not in text_item:
                 text_item = text_item.rstrip("）)")
@@ -325,12 +403,22 @@ def extract_constraints(description: str) -> list[FieldConstraint]:
     match = _DEFAULT_RE.search(text)
     if match:
         value = match.group(1).strip()
+        # 捕获会跨到下一条编号（"默认选中全部门店4. 切换为指定门店后需选择门店"）——
+        # 在编号处截断，否则默认值带着半句规则进断言（rev132 实测）
+        value = re.split(
+            r"\s*(?<![A-Za-z0-9])(?:\d{1,2}|[a-z])\s*[.．、]\s*", value
+        )[0].strip()
         # "默認YL選項" 的尾缀"選項"不是值本身；但**不能**一并削掉尾字（
         # 实测把 "企业储值充值" 削成了 "企业储值充"）
         value = re.sub(r"(?:選項|选项)$", "", value).strip().strip("（）()")
         if value:
             out.append(FieldConstraint(kind="default", raw=match.group(0),
                                        detail={"value": value}))
+
+    match = _READ_ONLY_RE.search(text)
+    if match:
+        out.append(FieldConstraint(kind="read_only", raw=match.group(0),
+                                   detail={"state": "disabled"}))
 
     return out
 
@@ -349,7 +437,13 @@ def required_from_text(description: str) -> bool:
 
 
 def extract_condition(description: str) -> str:
-    """抽取条件显示约束，例如"变动类型=企业储值充值 且 变更方式=批量导入"。"""
+    """抽取条件显示约束，例如"变动类型=企业储值充值 且 变更方式=批量导入"。
+
+    两种形态：
+    - 「X选择：值」式 → 归一成 ``X=值``（可多条件用「 且 」连接）；
+    - 无条件值可抽（"排隊打開顯示該字段"）→ 直接用原文条件短语（去掉「當/時」等虚词），
+      绝不因为"抽不出 X=值"就丢掉整条条件显示规则。
+    """
     text = _strip_zero_width(description or "")
     match = _CONDITION_RE.search(text)
     if not match:
@@ -357,12 +451,28 @@ def extract_condition(description: str) -> str:
     clauses: list[str] = []
     for term in _CONDITION_TERM_RE.finditer(match.group(1)):
         name = _CONNECTIVE_RE.sub("", term.group(1).strip()).strip()
+        # 条件引导词不属于字段名（"当变动类型选择：X" → 字段名是"变动类型"）
+        name = re.sub(r"^[當当]\s*", "", name).strip()
         value = _CONNECTIVE_RE.sub("", term.group(2).strip()).strip().rstrip("）)")
         value = re.sub(r"[，,]$", "", value).strip()
         if name and value:
             clauses.append(f"{name}={value}")
-    condition = " 且 ".join(clauses)
-    return re.sub(r"(?:\s*且\s*){2,}", " 且 ", condition)
+    if clauses:
+        condition = " 且 ".join(clauses)
+        return re.sub(r"(?:\s*且\s*){2,}", " 且 ", condition)
+    return _condition_phrase(match.group(1))
+
+
+def _condition_phrase(raw: str) -> str:
+    """把「排隊打開且排隊集成方選擇GULU、QRS」「當店鋪狀態開啟」归一成条件短语。"""
+    phrase = _strip_zero_width(raw or "").strip()
+    phrase = re.sub(r"^[當当]\s*", "", phrase).strip()
+    phrase = re.sub(r"且\s*[當当]", "且", phrase)
+    # 只取最靠近「顯示該字段」的那一小句，避免把前文整段带进条件
+    phrase = re.split(r"[，,；;]", phrase)[-1].strip()
+    phrase = re.sub(r"[（(]+$", "", phrase).strip()
+    phrase = re.sub(r"(?:的)?(?:時候|情况|情況)$", "", phrase).strip()
+    return phrase[:60]
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +480,9 @@ def extract_condition(description: str) -> str:
 # ---------------------------------------------------------------------------
 
 _FIELD_HEADER_HINTS = ("字段", "字段说明")
+#: 「是否可編輯」列（YL 主數據店鋪字段表：值=是/否/系統自動生成）。
+#: 此前列位映射只取 name/type/required/desc，該列被靜默丟棄——編輯態用例失去文檔依據。
+_EDITABLE_HINTS = ("是否可編輯", "是否可编辑", "可編輯", "可编辑")
 _REQUIRED_HINTS = ("是否必填", "必填", "是否必填项", "必填项", "是否必填欄位")
 _TYPE_HINTS = ("字段类型", "类型", "字段類型", "類型", "欄位類型")
 #: 说明列的别名（含繁体：CS 规格书用「字段説明」，简繁不兼容会导致整张表识别失败）
@@ -384,7 +497,26 @@ def _normalize_cell(value: Any) -> str:
     return re.sub(r"\s*\n\s*", "", text).strip()
 
 
+def _looks_like_table_header(header: list[str]) -> bool:
+    """表头健全性：真实表头单元格都是**短标签**。
+
+    实测（YL 主數據 p3）：fitz 把列表字段表殘段 + 「列表排序規則」+ 篩選查詢區表
+    + 導入規則條款整段粘進**一個單元格**，該行含「字段/校驗/必填」被 _is_field_table
+    誤判成字段表表頭 → 後續真正的列表表續段（12 個列表列）被當字段表續行吞掉，
+    列表列全丟、還多出 12 條無約束 field_rules。膠水表頭必須拒絕。
+    """
+    for cell in header:
+        text = _normalize_cell(cell)
+        if not text:
+            continue
+        if len(text) > 24 or any(p in text for p in "。；;"):
+            return False
+    return True
+
+
 def _is_field_table(header: list[str]) -> bool:
+    if not _looks_like_table_header(header):
+        return False
     joined = " ".join(_normalize_cell(c) for c in header)
     # 典型字段表：同时出现「字段」与「说明/説明/描述/备注」
     if "字段" in joined or "欄位" in joined:
@@ -393,10 +525,61 @@ def _is_field_table(header: list[str]) -> bool:
     return all(hint in joined for hint in _FIELD_HEADER_HINTS)
 
 
-def _column_index(header: list[str], hints: tuple[str, ...]) -> int | None:
+#: 列表显示字段表的「名称列」表头（含繁简）。这类表列出**列表页展示欄位**，
+#: 不是表单字段——列一旦进 field_rules，编译层按字段名绑表单定位器会 0 条可执行。
+_LIST_NAME_HINTS = ("列表欄位", "列表栏位", "字段名稱", "字段名称",
+                    "顯示欄位", "显示栏位", "顯示字段", "显示字段")
+
+
+def _is_list_display_table(header: list[str]) -> bool:
+    """判断表头是否为「列表顯示字段」类表格（列展示清單，非表单字段）。
+
+    实测（YL 主數據）：店鋪表头「字段名稱|業務規則說明」、商品/支付「列表欄位|欄位說明」
+    ——「說明」既非简体「说明」也非繁体「説明」，_DESC_HINTS 全部不命中，整张表被
+    误判成模板表，且 template_tables 只存行数 → 店鋪 15 列/商品 7 列/支付 5 列全丢。
+    判据刻意排除带 必填/類型/说明类词头的表：那些是表单字段说明表，仍走 field_rules。
+    """
+    joined = " ".join(_normalize_cell(c) for c in header)
+    if not any(hint in joined for hint in _LIST_NAME_HINTS):
+        return False
+    if "必填" in joined:
+        return False
+    if not _looks_like_table_header(header):
+        return False
+    if any(hint in joined for hint in _TYPE_HINTS):
+        return False
+    # 表单说明列词（说明/説明/描述/校驗/匹配規則…）命中时按字段表优先，
+    # 仍交回 _is_field_table 的既有通道，避免双重判定抢表
+    if any(hint in joined for hint in _DESC_HINTS):
+        return False
+    return True
+
+
+def _column_index(
+    header: list[str],
+    hints: tuple[str, ...],
+    *,
+    exclude: set[int] | None = None,
+) -> int | None:
+    """按词表定位列号，**从左到右**取第一个命中，并跳过已被占用的列。
+
+    rev132（实测小杨生煎问卷 PDF 表7/9）：表头 `['题目类型','字段说明','说明']`，
+    取名称列用「字段」→ 1（对），取说明列用「说明」→ **又命中 1「字段说明」**，
+    真正承载约束正文的第 3 列从未被读取 ⇒ 题目区 14 条规则的 description
+    退化成字段名本身 ⇒ 零约束 ⇒ 零用例（26/30 条规则卡在生成门槛之外）。
+    因此这里允许 exclude 掉已被占用的列（名称/类型/必填），一列只解释一次。
+
+    注意**不能**改成"精确命中优先"：YL 筛选表 `['字段','字段类型','字段校验','筛选规则']`
+    里「筛选规则」是精确词、「字段校验」只是包含词，精确优先会跳过后一列、
+    把说明列指到「筛选规则」，筛选规则的校验正文（≤30字符/默认为空）整段丢失。
+    列序即优先级。
+    """
+    skip = exclude or set()
     for idx, cell in enumerate(header):
+        if idx in skip:
+            continue
         text = _normalize_cell(cell)
-        if any(hint in text for hint in hints):
+        if text and any(hint in text for hint in hints):
             return idx
     return None
 
@@ -473,6 +656,44 @@ def _rebalance_row(cells: list[str], header_len: int) -> list[str]:
     return parts[: header_len - 1] + [" ".join(parts[header_len - 1:])]
 
 
+#: 续表对齐时「必填列」单元格的可信取值（含 YL 的「系統自動生成」——它出现在必填列
+#: 是因為 PDF 列错位，语义上仍是"该列是必填/状态标记列"的证据）
+_REQUIRED_CELL_VALUES = ("是", "否", "必填", "必選", "選填", "选填",
+                         "系統自動生成", "系统自动生成", "Y", "N")
+
+
+def _continuation_offset(
+    rows: list[list[str]], header: list[str],
+) -> int | None:
+    """寬續表對齊：找到偏移量 o，使 rows 的 o..o+len(header)-1 列像是 header 的數據行。
+
+    实测（YL 主數據 p2）：店鋪字段表被 PDF 評論列撐成 9 列（前導空列 + 5 字段列 +
+    批注列），與 5 列表頭不等寬 → 整段 20 行續表被丟棄（詳細地址/精度/維度/電話等
+    全部丟失）。按內容打分選偏移：字段名列像短標籤且必填列像必填標記的行數達標才算。
+    """
+    width = len(header)
+    if not rows or len(rows[0]) < width:
+        return None
+    best_offset: int | None = None
+    best_hits = 0
+    for off in range(0, len(rows[0]) - width + 1):
+        hits = 0
+        for row in rows:
+            cells = [_normalize_cell(c) for c in row]
+            if len(cells) < off + width:
+                continue
+            name, _ftype, req = cells[off], cells[off + 1], cells[off + 2]
+            if name and _looks_like_field_label(name) and req in _REQUIRED_CELL_VALUES:
+                hits += 1
+        if hits > best_hits:
+            best_hits = hits
+            best_offset = off
+    # 至少 3 行對上（或全表一半以上）才認定為續表，避免誤劫持後續無關表格
+    if best_offset is not None and best_hits >= max(3, (len(rows) + 1) // 2):
+        return best_offset
+    return None
+
+
 def _raw_rows_from_table(
     rows: list[list[str]],
     header: list[str],
@@ -482,13 +703,26 @@ def _raw_rows_from_table(
 ) -> list[dict[str, Any]]:
     """按表头列位把表格行映射成原始行（保留表号/行号用于追溯）。"""
     idx_name = _column_index(header, ("字段",))
-    idx_type = _column_index(header, _TYPE_HINTS)
-    idx_required = _column_index(header, _REQUIRED_HINTS)
-    idx_desc = _column_index(header, _DESC_HINTS)
+    used: set[int] = set() if idx_name is None else {idx_name}
+    idx_type = _column_index(header, _TYPE_HINTS, exclude=used)
+    if idx_type is not None:
+        used.add(idx_type)
+    idx_required = _column_index(header, _REQUIRED_HINTS, exclude=used)
+    if idx_required is not None:
+        used.add(idx_required)
+    idx_editable = _column_index(header, _EDITABLE_HINTS, exclude=used)
+    if idx_editable is not None:
+        used.add(idx_editable)
+    # 说明列必须避开上面已占用的列：`['题目类型','字段说明','说明']` 场景下
+    # 若与名称列同指第 2 列，规则正文就整段丢失（rev132 实测）
+    idx_desc = _column_index(header, _DESC_HINTS, exclude=used)
     if idx_name is None:
         idx_name = 0
     if idx_desc is None:
         idx_desc = len(header) - 1
+    if idx_desc == idx_name:
+        # 仍撞在名称列 → 退最后一列；只剩一列时宁可留空也不复制字段名
+        idx_desc = len(header) - 1 if len(header) - 1 != idx_name else None
 
     out: list[dict[str, Any]] = []
     header_len = len(header)
@@ -504,17 +738,61 @@ def _raw_rows_from_table(
                 return ""
             return cells[index]
 
+        # 列错位纠正（rev111）：实测 YL p3「營業時間/選擇組件」行——名字列空、
+        # 名字落在"字段類型"列、说明在说明列。若不做纠正，该行既不成规则，
+        # 其说明还会被跨行合并挂到下一行（分组标题）上。
+        if not cell(idx_name) and idx_type is not None and idx_type != idx_name:
+            type_cell = cell(idx_type)
+            if (_looks_like_field_label(type_cell) and len(type_cell) >= 2
+                    and type_cell not in _REQUIRED_CELL_VALUES
+                    and not any(hint in type_cell for hint in _TYPE_HINTS)):
+                cells = list(cells)
+                cells[idx_type] = ""
+                cells[idx_name] = type_cell
+                rebalanced = True
+
         name = cell(idx_name)
 
         out.append({
             "name": name,
             "type": cell(idx_type),
             "required": cell(idx_required),
+            "editable": cell(idx_editable),
             "desc": cell(idx_desc),
             "table": table_index,
             "row": start_row + offset,
             "rebalanced": rebalanced,
         })
+    return out
+
+
+def _display_columns_from_rows(
+    rows: list[list[str]],
+    header: list[str],
+    table_index: int,
+    *,
+    start_row: int,
+) -> list[dict[str, Any]]:
+    """「列表顯示字段」表的行 → 欄位清單（name + 可选说明，保留表号/行号追溯）。"""
+    idx_name = _column_index(header, _LIST_NAME_HINTS)
+    if idx_name is None:
+        idx_name = 0
+    idx_desc = len(header) - 1
+    if idx_desc == idx_name:
+        idx_desc = 1 if len(header) > 1 else idx_name
+    out: list[dict[str, Any]] = []
+    header_len = len(header)
+    for offset, row in enumerate(rows):
+        if not any(_normalize_cell(c) for c in row):
+            continue
+        cells = _rebalance_row([_normalize_cell(c) for c in row], header_len)
+        name = cells[idx_name] if idx_name < len(cells) else ""
+        # 与 field_rules 同一保守标准：长段落/列表项不当欄位名（防說明列串行）
+        if not name or not _looks_like_field_label(name):
+            continue
+        desc = cells[idx_desc] if idx_desc < len(cells) and idx_desc != idx_name else ""
+        out.append({"name": name, "desc": desc,
+                    "source": {"table": table_index, "row": start_row + offset}})
     return out
 
 
@@ -528,6 +806,7 @@ def _merge_raw_rows(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
             nxt = raw[i + 1] if i + 1 < len(raw) else None
             if nxt is not None and nxt["name"] and not nxt["required"]:
                 nxt["required"] = nxt["required"] or item["required"]
+                nxt["editable"] = nxt["editable"] or item.get("editable", "")
                 nxt["desc"] = (item["desc"] + " " + nxt["desc"]).strip()
                 nxt["table"] = min(item["table"], nxt["table"])
                 nxt["row"] = min(item["row"], nxt["row"])
@@ -538,6 +817,7 @@ def _merge_raw_rows(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if merged:
                 merged[-1]["desc"] = (merged[-1]["desc"] + " " + item["desc"]).strip()
                 merged[-1]["required"] = merged[-1]["required"] or item["required"]
+                merged[-1]["editable"] = merged[-1].get("editable", "") or item.get("editable", "")
                 merged[-1]["rebalanced"] = bool(
                     merged[-1].get("rebalanced") or item.get("rebalanced")
                 )
@@ -577,17 +857,63 @@ def _looks_like_field_label(name: str) -> bool:
     return True
 
 
+def _looks_like_field_continuation(
+    rows: list[list[str]],
+    header: list[str],
+    *,
+    max_rows: int = 12,
+) -> bool:
+    """判断一张同宽的表是不是**上一张字段说明表**的续页（跨页表头只在首页）。
+
+    rev132 实测（小杨生煎问卷 PDF p4-p5）：状态表 `['状态','说明','可操作按钮']` 与其后的
+    `['待启用','初始创建完成的问卷状态即为待启用…','查看、编辑、启用、删除、导出明细']`
+    宽度都是 3，被无脑当成字段表续行 ⇒ 产出「说明/状态」「已启用的问卷即为投入使用…/启用」
+    这类**噪音规则**（永远过不了生成门槛，却污染规则总数与追溯矩阵）。
+
+    判据：
+    1. 首行本身带「按钮/按鈕」列 → 是状态×操作矩阵，不是字段表；
+    2. 名称列的非空值里 ≥60% 长得像字段标签（短、无编号、非整句）才算续页；
+       合并单元格留下的空名称不参与判定。
+    """
+    first = " ".join(_normalize_cell(c) for c in (rows[0] if rows else []))
+    if "按钮" in first or "按鈕" in first:
+        return False
+    idx_name = _column_index(header, ("字段",))
+    if idx_name is None:
+        idx_name = 0
+    checked = 0
+    plausible = 0
+    for row in rows[:max_rows]:
+        cells = [_normalize_cell(c) for c in row]
+        if idx_name >= len(cells):
+            continue
+        name = cells[idx_name]
+        if not name:
+            continue
+        checked += 1
+        # 字段名不会带逗号/顿号（那是整句说明被抽到名称列的特征）
+        if _looks_like_field_label(name) and "，" not in name and "、" not in name:
+            plausible += 1
+    if checked == 0:
+        return False
+    return plausible / checked >= 0.6
+
+
 def _split_tables(
     tables: list[list[list[str]]],
-) -> tuple[list[FieldRule], list[dict[str, Any]], list[dict[str, Any]], int]:
-    """把表格分成「字段说明表」与「模板表」，并处理跨页续表（表头只在首页）。
+) -> tuple[list[FieldRule], list[dict[str, Any]], list[dict[str, Any]], int,
+           list[dict[str, Any]]]:
+    """把表格分成「字段说明表」/「列表顯示字段表」/「模板表」，并处理跨页续表（表头只在首页）。
 
-    返回 `(field_rules, template_tables, rejected_fields, rebalanced_rows)`；
-    最后一个值是"需要重列化才恢复的行数"，用于审计 PDF 抽取质量。
+    返回 `(field_rules, template_tables, rejected_fields, rebalanced_rows, display_columns)`；
+    倒数第二个值是"需要重列化才恢复的行数"，用于审计 PDF 抽取质量；
+    最后一个值是列表显示表的欄位清單（每表一项：table + columns[name/desc/source]）。
     """
     raw: list[dict[str, Any]] = []
     template_tables: list[dict[str, Any]] = []
+    display_columns: list[dict[str, Any]] = []
     current_header: list[str] | None = None
+    current_kind = ""
 
     for index, rows in enumerate(tables):
         if not rows:
@@ -595,12 +921,42 @@ def _split_tables(
         header = rows[0]
         if _is_field_table(header):
             current_header = header
+            current_kind = "field"
             raw.extend(_raw_rows_from_table(rows[1:], header, index, start_row=2))
             continue
-        if current_header is not None and len(header) == len(current_header):
-            # 续表：表头只在首页，续页直接是数据行
-            raw.extend(_raw_rows_from_table(rows, current_header, index, start_row=1))
+        if _is_list_display_table(header):
+            current_header = header
+            current_kind = "list"
+            display_columns.append({
+                "table": index,
+                "columns": _display_columns_from_rows(rows[1:], header, index, start_row=2),
+            })
             continue
+        is_continuation = current_header is not None and len(header) == len(current_header)
+        if is_continuation and current_kind == "field" and not _looks_like_field_continuation(
+            rows, current_header
+        ):
+            # 同宽但主题不同的表（状态×可操作按钮矩阵等）不是字段表续页：
+            # 强行当续行会产出永远过不了门槛的噪音规则（rev132 实测 3 条）
+            is_continuation = False
+        if is_continuation:
+            # 续表：表头只在首页，续页直接是数据行
+            if current_kind == "list":
+                display_columns[-1]["columns"].extend(
+                    _display_columns_from_rows(rows, current_header, index, start_row=1))
+            else:
+                raw.extend(_raw_rows_from_table(rows, current_header, index, start_row=1))
+            continue
+        if current_header is not None and current_kind == "field" and len(header) > len(current_header):
+            # 宽续表：PDF 評論列把續表撐寬（实测 YL 9列 vs 表頭5列）→ 按內容對齊偏移後接入
+            off = _continuation_offset(rows, current_header)
+            if off is not None:
+                sliced = [
+                    (list(r) + [""] * (off + len(current_header)))[off:off + len(current_header)]
+                    for r in rows
+                ]
+                raw.extend(_raw_rows_from_table(sliced, current_header, index, start_row=1))
+                continue
         body = [r for r in rows[1:] if any(_normalize_cell(c) for c in r)]
         if header and len(header) <= 6:
             template_tables.append({
@@ -624,6 +980,19 @@ def _split_tables(
                            "rebalanced": bool(item.get("rebalanced"))},
             })
             continue
+        if not any(str(item.get(key) or "").strip()
+                   for key in ("type", "required", "editable", "desc")):
+            # rev111：只有名称、其余列全空 → 实测是**分组标题行**
+            # （YL p3 的「排隊/控制該店鋪是否支持排隊，以及優先取票規則」「訂位/控制該店鋪
+            # 是否支持訂位」「外賣/控制該店鋪是否支持跳轉到外賣頁」）：它们不是字段，
+            # 此前被当成字段规则（零用例的噪音）。
+            rejected_fields.append({
+                "name": item["name"][:120],
+                "reason": "疑似小节/分组标题行（只有名称、无类型无说明），不生成字段规则",
+                "source": {"table": item["table"], "row": item["row"],
+                           "rebalanced": bool(item.get("rebalanced"))},
+            })
+            continue
         field_rules.append(FieldRule(
             name=item["name"],
             field_type=item["type"],
@@ -635,12 +1004,14 @@ def _split_tables(
             ),
             description=item["desc"],
             condition=extract_condition(item["desc"]),
+            # 「是否可編輯」列原文（无该列时为空串）；「否/系統自動生成」→ 生成层只讀用例的列證據
+            editable=item.get("editable", ""),
             constraints=extract_constraints(item["desc"]),
             source={"table": item["table"], "row": item["row"],
                     "rebalanced": bool(item.get("rebalanced"))},
         ))
     rebalanced_rows = sum(1 for item in merged_rows if item.get("rebalanced"))
-    return field_rules, template_tables, rejected_fields, rebalanced_rows
+    return field_rules, template_tables, rejected_fields, rebalanced_rows, display_columns
 
 
 #: 文本行重建时的表头判据：同时出现"字段/欄位"与"说明/説明/描述/备注/必填"
@@ -771,7 +1142,8 @@ def _merge_wrapped_lines(text: str) -> str:
                 out.append(buf)
                 buf = ""
             continue
-        if _starts_new_block(line) or (_is_short_label(buf) and buf[-1] not in _SENTENCE_END):
+        if (_starts_new_block(line) or re.match(r"^(操作[-－]|字段说明|字段說明|题目类型|題目類型)", line)
+                or (_is_short_label(buf) and buf[-1] not in _SENTENCE_END)):
             if buf:
                 out.append(buf)
                 buf = ""
@@ -796,30 +1168,255 @@ def _merge_wrapped_lines(text: str) -> str:
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------------------
+# 文档定位：证据文本 → 行号 → 最近标题 → 一级章节
+# ---------------------------------------------------------------------------
+#
+# 用途（本轮质量问题收口）：把「这条用例/这条字段规则」钉回 PRD 的具体位置，
+# 从而按**文档证据**判定它属于哪个一级章节、位于哪个子场景（字段说明 / 筛选查询区 …）。
+# 纪律：定位不到就返回 ``None``，由调用方保留原模块——**绝不猜归属**。
+
+#: 定位用的压缩口径：去掉空白与常见分隔标点（与生成侧 compact 口径一致）
+_LOCATE_COMPACT_RE = re.compile(r"[\s\u200b\u200c\u200d\ufeff，。；、：:,.（）()]")
+#: 带编号的标题行：捕获编号与标题正文
+_LOCATE_HEADING_RE = re.compile(r"^\s*(\d+(?:[.．]\d+)*)\s*[.．、]?\s+(\S.*)$")
+
+
+@dataclass(frozen=True)
+class _DocumentIndex:
+    """全文压缩串 + 字符→行号映射 + 标题清单（构建一次，供多次定位复用）。"""
+
+    compact: str
+    line_of: tuple[int, ...]
+    #: (行号, 标题全文, 标题正文, 层级)；层级 = 编号里的点数（"1." → 0）
+    headings: tuple[tuple[int, str, str, int], ...]
+    #: 每页起始行号（0-based）；无分页信息时为空
+    page_starts: tuple[int, ...]
+
+
+@lru_cache(maxsize=8)
+def _document_index(full_text: str, page_line_counts: tuple[int, ...]) -> _DocumentIndex:
+    lines = (full_text or "").splitlines()
+    compact_chars: list[str] = []
+    line_of: list[int] = []
+    headings: list[tuple[int, str, str, int]] = []
+    page_starts: list[int] = []
+    cursor = 0
+    for page_index, count in enumerate(page_line_counts or ()):
+        page_starts.append(cursor)
+        cursor += count
+    for line_no, raw in enumerate(lines):
+        text = _strip_zero_width(raw).strip()
+        if text:
+            match = _LOCATE_HEADING_RE.match(text)
+            if match and is_heading_line(text):
+                numbering = match.group(1)
+                headings.append((line_no, text, match.group(2).strip(), numbering.count(".")))
+        for ch in _LOCATE_COMPACT_RE.sub("", raw):
+            compact_chars.append(ch)
+            line_of.append(line_no)
+    return _DocumentIndex(
+        compact="".join(compact_chars),
+        line_of=tuple(line_of),
+        headings=tuple(headings),
+        page_starts=tuple(page_starts),
+    )
+
+
+def _page_line_range(index: _DocumentIndex, page: int | None) -> tuple[int, int] | None:
+    """页码（1-based）→ 行号区间 ``[start, end)``；页码或分页信息缺失时返回 ``None``。"""
+    if not page or page < 1 or not index.page_starts:
+        return None
+    if page > len(index.page_starts):
+        return None
+    start = index.page_starts[page - 1]
+    end = (index.page_starts[page] if page < len(index.page_starts)
+           else _total_lines(index))
+    return start, end
+
+
+def _total_lines(index: _DocumentIndex) -> int:
+    """全文行数（用字符→行号映射的最后一个行号 + 1 推得，避免另存字段）。"""
+    return (index.line_of[-1] + 1) if index.line_of else 0
+
+
+def _nearest_headings(
+    index: _DocumentIndex, line_no: int
+) -> tuple[str, str, str]:
+    """返回 ``(最近标题全文, 最近标题正文, 最近一级章节标题正文)``。"""
+    heading_text = heading_title = section = ""
+    for h_line, h_text, h_title, depth in index.headings:
+        if h_line > line_no:
+            break
+        heading_text, heading_title = h_text, h_title
+        if depth == 0:
+            section = h_title
+    return heading_text, heading_title, section
+
+
+#: 定位时的候选前缀长度（由长到短；越长越不易误命中）
+_LOCATE_PREFIX_LENGTHS = (120, 80, 60, 40, 24, 16, 12, 8)
+
+
+def locate_evidence(
+    full_text: str,
+    evidence: str,
+    *,
+    page: int | None = None,
+    page_line_counts: list[int] | None = None,
+    min_chars: int = 4,
+) -> dict[str, Any] | None:
+    """把证据文本定位到文档行号与所属标题/一级章节（确定性、只读）。
+
+    - 先按**最长可唯一命中**的前缀定位；无唯一前缀时退化为最长命中前缀的首次出现
+      （与条款抽取的文档序一致）；
+    - 给了 ``page`` 就先把搜索限制在该页（同名文本跨页重复时靠页号区分），
+      页内找不到才放宽到全文并如实标注 ``scope``；
+    - 定位不到返回 ``None``，由调用方保留原归属。
+
+    返回 ``{line, heading, heading_title, section, matches, unique, scope}``。
+    """
+    key = _LOCATE_COMPACT_RE.sub("", evidence or "")
+    if len(key) < min_chars:
+        return None
+    index = _document_index(full_text or "", tuple(page_line_counts or ()))
+    if not index.compact:
+        return None
+
+    scope = "document"
+    window: tuple[int, int] | None = _page_line_range(index, page)
+    if window is not None:
+        scope = "page"
+    found: tuple[int, int] | None = None  # (命中次数, 起点字符下标)
+    unique = False
+    for scope_name, active in (("page", window), ("document", None)):
+        if scope_name == "page" and active is None:
+            continue
+        for length in (*_LOCATE_PREFIX_LENGTHS, len(key)):
+            if length < min_chars or length > len(key):
+                continue
+            prefix = key[:length]
+            positions = []
+            start = 0
+            while True:
+                hit = index.compact.find(prefix, start)
+                if hit < 0:
+                    break
+                positions.append(hit)
+                start = hit + 1
+                if len(positions) > 50:
+                    break
+            if active is not None:
+                lower, upper = active
+                positions = [p for p in positions
+                             if lower <= index.line_of[p] < upper]
+            if not positions:
+                continue
+            if len(positions) == 1:
+                found = (1, positions[0])
+                unique = True
+            elif found is None:
+                found = (len(positions), positions[0])
+            if unique:
+                break
+        if found is not None:
+            scope = scope_name
+            break
+    if found is None:
+        return None
+    line_no = index.line_of[found[1]]
+    heading_text, heading_title, section = _nearest_headings(index, line_no)
+    return {
+        "line": line_no,
+        "heading": heading_text,
+        "heading_title": heading_title,
+        "section": section,
+        "matches": found[0],
+        "unique": unique,
+        "scope": scope,
+    }
+
+
+def locate_table_locations(
+    tables: list[list[list[str]]],
+    pages: list[int | None],
+    full_text: str,
+    page_line_counts: list[int] | None = None,
+) -> dict[int, dict[str, Any]]:
+    """表号 → 文档位置：用表头行文本（退化用首行/最长单元格）定位该表所在子章节。
+
+    表头是表自身的**原文**，比按字段名全文搜更可靠（同名表在多个章节重复时，
+    用表所在页号区分）。定位不到的表不出现在结果里。
+    """
+    out: dict[int, dict[str, Any]] = {}
+    for index, rows in enumerate(tables or []):
+        if not rows:
+            continue
+        page = pages[index] if index < len(pages or []) else None
+        candidates: list[str] = []
+        header = " ".join(_normalize_cell(c) for c in rows[0] if _normalize_cell(c))
+        if header:
+            candidates.append(header)
+        for row in rows[1:3]:
+            joined = " ".join(_normalize_cell(c) for c in row if _normalize_cell(c))
+            if joined:
+                candidates.append(joined)
+                break
+        longest = max((_normalize_cell(c) for row in rows for c in row), key=len, default="")
+        if longest:
+            candidates.append(longest)
+        for candidate in candidates:
+            location = locate_evidence(
+                full_text, candidate, page=page, page_line_counts=page_line_counts
+            )
+            if not location:
+                continue
+            out[index] = {"page": page, **location}
+            break
+    return out
+
+
 def _parse_docx(content: bytes) -> tuple[str, str, list[list[list[str]]]]:
+    """解析 docx：**按正文顺序**拍平段落与表格（表格不再一律堆到文末）。
+
+    顺序很重要：表 → 子章节的归属（``table_locations``）靠"表在正文中的位置"推算，
+    早前把全部表格拼到全文末尾，会让每张表都被算到最后一个标题之下。
+    """
     from docx import Document
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
     document = Document(io.BytesIO(content))
     paragraphs = [p.text for p in document.paragraphs if _strip_zero_width(p.text).strip()]
     tables: list[list[list[str]]] = []
-    for table in document.tables:
-        rows: list[list[str]] = []
-        for row in table.rows:
-            rows.append([cell.text for cell in row.cells])
-        if rows:
+    ordered: list[str] = []
+    for block in document.element.body.iterchildren():
+        tag = str(getattr(block, "tag", "")).rsplit("}", 1)[-1]
+        if tag == "p":
+            text = Paragraph(block, document).text
+            if _strip_zero_width(text).strip():
+                ordered.append(text)
+        elif tag == "tbl":
+            rows = [[cell.text for cell in row.cells] for row in Table(block, document).rows]
+            if not rows:
+                continue
             tables.append(rows)
-    table_text = "\n".join("\t".join(_normalize_cell(c) for c in row) for rows in tables for row in rows)
-    full_text = "\n".join(paragraphs + ([table_text] if table_text else []))
+            ordered.append("\n".join(
+                "\t".join(_normalize_cell(c) for c in row) for row in rows))
+    full_text = "\n".join(ordered)
     return full_text, "\n".join(paragraphs), tables
 
 
-def _parse_pdf(content: bytes) -> tuple[str, str, list[list[list[str]]]]:
+def _parse_pdf(
+    content: bytes,
+) -> tuple[str, str, list[list[list[str]]], list[int | None], list[int]]:
     import fitz
 
     doc = fitz.open(stream=content, filetype="pdf")
     page_texts: list[str] = []
     tables: list[list[list[str]]] = []
-    for page in doc:
+    table_pages: list[int | None] = []
+    for page_no, page in enumerate(doc, start=1):
         page_texts.append(page.get_text("text") or "")
         finder = getattr(page, "find_tables", None)
         if finder is None:
@@ -835,8 +1432,10 @@ def _parse_pdf(content: bytes) -> tuple[str, str, list[list[list[str]]]]:
                 continue
             if rows:
                 tables.append(rows)
+                table_pages.append(page_no)
     full_text = "\n".join(page_texts)
-    return full_text, full_text, tables
+    page_line_counts = [len(text.splitlines()) for text in page_texts]
+    return full_text, full_text, tables, table_pages, page_line_counts
 
 
 def _parse_plain(content: bytes) -> tuple[str, str, list[list[list[str]]]]:
@@ -859,27 +1458,31 @@ def parse_requirement_document(
     normalized_type = (content_type or "").lower()
 
     source_type = "text"
+    table_pages: list[int | None] = []
+    page_line_counts: list[int] = []
     try:
         if suffix == ".docx" or "openxmlformats-officedocument.wordprocessingml" in normalized_type:
             source_type = "docx"
             full_text, narrative, tables = _parse_docx(content)
         elif suffix == ".pdf" or normalized_type == "application/pdf" or content[:4] == b"%PDF":
             source_type = "pdf"
-            full_text, narrative, tables = _parse_pdf(content)
+            full_text, narrative, tables, table_pages, page_line_counts = _parse_pdf(content)
         else:
             full_text, narrative, tables = _parse_plain(content)
     except Exception:  # noqa: BLE001 —— 结构化失败降级为纯文本
         full_text, narrative, tables = _parse_plain(content)
         source_type = "text"
+    if not table_pages:
+        table_pages = [None] * len(tables)
 
-    field_rules, template_tables, rejected_fields, rebalanced_rows = _split_tables(tables)
+    field_rules, template_tables, rejected_fields, rebalanced_rows, display_columns = _split_tables(tables)
     # 兜底（rev104 起**总是**执行，不再仅零规则时）：fitz 表格提取会被行内
     # 評論塊截斷（实测 YL 主數據：店鋪字段表中段 12 行被「評論（7）」打散丟失），
     # 用文本行的列间隙重建并**按字段名去重合并**——既兜零表，也补断表。
     rebuilt = _tables_from_text_lines(full_text)
     rebuilt_table_count = 0
     if rebuilt:
-        extra_rules, extra_templates, extra_rejected, extra_rebalanced = _split_tables(rebuilt)
+        extra_rules, extra_templates, extra_rejected, extra_rebalanced, extra_display = _split_tables(rebuilt)
         seen = {rule.name for rule in field_rules}
         added = [rule for rule in extra_rules if rule.name not in seen]
         if added:
@@ -888,21 +1491,54 @@ def parse_requirement_document(
             template_tables = template_tables + extra_templates
             rejected_fields = rejected_fields + extra_rejected
             rebalanced_rows += extra_rebalanced
+        # 列表显示表按**列名序列签名**去重：find_tables 与文本重建可能重复捕获同一张表
+        seen_disp = {tuple(c["name"] for c in d["columns"]) for d in display_columns}
+        for d in extra_display:
+            sig = tuple(c["name"] for c in d["columns"])
+            if sig and sig not in seen_disp:
+                seen_disp.add(sig)
+                display_columns.append(d)
     if source_type == "pdf":
         # PDF 的表格文本混在页文本里 → 从叙述文本中剔除，避免重复生成噪音用例
-        narrative = _drop_table_lines(narrative, _table_text_blob(tables))
+        # 只剔除已进入规则通道的表格；功能清单、流程和状态表仍需叙述承接。
+        used_tables = {r.source.get("table") for r in field_rules}
+        used_tables.update(d.get("table") for d in display_columns)
+        narrative = _drop_table_lines(narrative, _table_text_blob(
+            [rows for index, rows in enumerate(tables) if index in used_tables]))
         # 再把硬换行碎片合并成完整句子（否则一条需求会被算成 2~3 条，挤掉真规则）
         narrative = _merge_wrapped_lines(narrative)
+
+    # 表/规则 → 文档位置（本轮质量收口）：用表头行文本定位表所在子章节，
+    # 再把定位结果写回每条字段规则的 source（page / line / heading / section）。
+    # 定位不到就不写——调用方据此保留原归属，**不猜**。
+    table_locations = locate_table_locations(
+        tables, table_pages, full_text, page_line_counts)
+    for rule in field_rules:
+        location = table_locations.get(rule.source.get("table"))
+        if location is None:
+            location = locate_evidence(
+                full_text, rule.description or rule.name,
+                page=rule.source.get("page"), page_line_counts=page_line_counts)
+        if not location:
+            continue
+        rule.source.setdefault("page", location.get("page"))
+        rule.source["line"] = location["line"]
+        rule.source["heading"] = location["heading"]
+        rule.source["heading_title"] = location["heading_title"]
+        rule.source["section"] = location["section"]
 
     return StructuredRequirement(
         full_text=full_text,
         narrative_text=narrative,
         field_rules=field_rules,
         template_tables=template_tables,
+        display_columns=display_columns,
         source_type=source_type,
         rejected_fields=rejected_fields,
         rebalanced_rows=rebalanced_rows,
         rebuilt_table_count=rebuilt_table_count,
+        page_line_counts=page_line_counts,
+        table_locations=table_locations,
     )
 
 
@@ -913,5 +1549,7 @@ __all__ = [
     "extract_condition",
     "extract_constraints",
     "is_heading_line",
+    "locate_evidence",
+    "locate_table_locations",
     "parse_requirement_document",
 ]

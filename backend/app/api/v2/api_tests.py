@@ -19,6 +19,72 @@ from app.schemas.common import SuccessResponse
 
 router = APIRouter(prefix="/projects/{project_identifier}/api-tests")
 
+# Static intent routes must precede /{api_test_id} routes.
+from pydantic import BaseModel, Field, field_validator
+from app.api.deps import CurrentUserDep, DbSessionDep
+from app.schemas.intent import ApiIntent
+
+
+class CompileIntentRequest(BaseModel):
+    natural_language: str = Field(min_length=1, max_length=10000)
+    endpoint_id: UUID | None = None
+    base_url: str | None = None
+
+    @field_validator('natural_language')
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('请输入自然语言描述')
+        return value.strip()
+
+
+class PreviewIntentRequest(BaseModel):
+    intent: ApiIntent
+
+
+async def _check_intent_project(db, project_identifier, endpoint_id=None):
+    from fastapi import HTTPException
+    from sqlalchemy import select
+    from app.models.project import Project
+    from app.models.api_endpoint import APIEndpoint
+    project = (await db.execute(select(Project).where(Project.identifier == project_identifier))).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(404, '项目不存在')
+    if endpoint_id:
+        endpoint = (await db.execute(select(APIEndpoint).where(
+            APIEndpoint.id == endpoint_id, APIEndpoint.project_id == project.id,
+        ))).scalar_one_or_none()
+        if endpoint is None:
+            raise HTTPException(404, '接口不属于当前项目或不存在')
+
+
+@router.post('/compile-intent', response_model=SuccessResponse)
+async def compile_intent(project_identifier: str, request: CompileIntentRequest,
+                         user: CurrentUserDep, db: DbSessionDep):
+    import json
+    from app.agents.api.tools.intent_tools import compile_api_intent
+    await _check_intent_project(db, project_identifier, request.endpoint_id)
+    result = compile_api_intent.invoke({
+        'natural_language': request.natural_language,
+        'endpoint_id': str(request.endpoint_id) if request.endpoint_id else None,
+        'base_url': request.base_url,
+        'project_identifier': project_identifier,
+    })
+    return SuccessResponse(data=json.loads(result))
+
+
+@router.post('/preview-config', response_model=SuccessResponse)
+async def preview_intent(project_identifier: str, request: PreviewIntentRequest,
+                         user: CurrentUserDep, db: DbSessionDep):
+    import json
+    from app.agents.api.tools.intent_tools import preview_intent_config
+    await _check_intent_project(db, project_identifier, request.intent.endpoint_id)
+    result = preview_intent_config.invoke({
+        'intent_json': request.intent.model_dump_json(exclude_none=True),
+        'intent_type': 'api',
+    })
+    return SuccessResponse(data=json.loads(result))
+
 # ============ API 测试管理接口 ============
 
 @router.post(

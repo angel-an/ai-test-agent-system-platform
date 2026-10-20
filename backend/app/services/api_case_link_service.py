@@ -40,7 +40,24 @@ from app.schemas.enums import (
     TestResultStatus,
     TestRunState,
 )
+from app.services.api_pagination_contracts import (
+    load_contract_core,
+    resolve_pagination_contract,
+)
+from app.services.api_response_envelope import resolve_envelope_field
 from app.utils.identifier import generate_test_case_identifier
+
+
+def _unverified_reason(contract: Any) -> str:
+    """``provenance=unverified`` 的显式跳过理由。
+
+    参数没确认过的接口，"测出来通过"是没有意义的结论 —— 比不跑更危险。
+    因此生成 ``test.skip(true, ...)``：报告里显示 skipped，绝不伪装成通过。
+    """
+    return (
+        f"分页参数未确认（provenance=unverified）：{contract.note}"
+        " —— 该接口当前无法给出可信结论，显式跳过（不静默通过）"
+    )
 
 
 class APICaseLinkService:
@@ -527,6 +544,72 @@ class APICaseLinkService:
         if method in {"POST", "PUT", "PATCH"}:
             options["data"] = payload
 
+        # ---- 分页契约（P5 / DEFECT-002）----
+        pagination = resolve_pagination_contract(endpoint.path)
+        # ---- 响应信封字段（F1 复核修复）----
+        # 不再写死 resultCode：按接口数据解析（custom_config 显式声明 → 已导入 responses 推断），
+        # 拿不到就**不硬判**（降级为只判 HTTP + 可解析，并输出机读标记）。
+        # 依据：1892 个 APIEndpoint 分布在 14 个项目，非 PR-2 项目声明的是 `Code`，
+        # 写死 resultCode 会让这些 SUT 的**成功响应**被判失败（已复现）。
+        envelope_field = resolve_envelope_field(endpoint)
+        if pagination is not None and getattr(pagination, "envelope_field", ""):
+            # 契约表已按接口声明了该 SUT 的信封字段名 —— 它比接口推断更具体，优先采用。
+            envelope_field = pagination.envelope_field
+        wants_contract = pagination is not None and pagination.provenance != "unverified"
+        core = load_contract_core() if wants_contract else None
+        # 拿不到核心段 → 降级为"仅信封断言"。**不静默**：脚本里留注解，日志里有 error。
+        # 不做成硬失败，因为降级只是"少断言一层"，并非"给出错误结论"。
+        contract_degraded = wants_contract and core is None
+        contract_active = wants_contract and core is not None
+        unverified_guard = (
+            f"test.skip(true, {json.dumps(_unverified_reason(pagination), ensure_ascii=False)});"
+            if pagination is not None and pagination.provenance == "unverified"
+            else ""
+        )
+        if contract_active and pagination is not None:
+            target_url_expr = f"buildPageUrl(buildUrl({json.dumps(path, ensure_ascii=False)}), 1)"
+        else:
+            target_url_expr = f"buildUrl({json.dumps(path, ensure_ascii=False)})"
+        # testInfo 必须**无条件**注入：信封降级分支（ENVELOPE_FIELD 为 null 时 push
+        # `envelope_check_skipped` 注解）与 `if (ENVELOPE_FIELD) {{...}} else {{...}}` 一样
+        # 是**静态文本**，任何产物里都引用了 testInfo。漏注入会让 envelope_field 已声明的
+        # 端点编译出 TS2304（实测被 test_rendered_scripts_compile 捕获）。
+        test_params = "{ request }, testInfo"
+        pagination_helper = (
+            f"""
+const PAGE_NUM_PARAM = {json.dumps(pagination.page_num_param)};
+const PAGE_SIZE_PARAM = {json.dumps(pagination.page_size_param)};
+const PAGE_SIZE = {pagination.page_size};
+const OUT_OF_RANGE_PAGE = {pagination.out_of_range_page};
+
+function buildPageUrl(base: string, page: number): string {{
+  const url = new URL(base);
+  url.searchParams.set(PAGE_NUM_PARAM, String(page));
+  url.searchParams.set(PAGE_SIZE_PARAM, String(PAGE_SIZE));
+  return url.toString();
+}}
+"""
+            if contract_active and pagination is not None
+            else ""
+        )
+        pagination_block = (
+            self._render_pagination_block(
+                method=method, path=path, contract=pagination, core=core or "",
+            )
+            if contract_active and pagination is not None
+            else ""
+        )
+        if contract_degraded and pagination is not None:
+            pagination_block = (
+                "\n  // ⚠️ 该接口声明了分页契约（provenance="
+                f"{pagination.provenance}），但契约核心段未能加载 —— "
+                "本次**只**执行信封断言，分页结构未被验证。\n"
+                "  testInfo.annotations.push({ type: 'pagination_contract_skipped', "
+                "description: '契约核心段未加载：分页结构未被验证（不是通过）' });\n"
+            )
+
+        envelope_field_json = json.dumps(envelope_field, ensure_ascii=False)
+
         return f"""import {{ test, expect }} from '@playwright/test';
 
 const BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000';
@@ -569,8 +652,9 @@ function buildUrl(path: string): string {{
   const normalizedBase = BASE_URL.endsWith('/') ? BASE_URL : BASE_URL + '/';
   return new URL(path.replace(/^\\/+/, ''), normalizedBase).toString();
 }}
-
-test('{method} {endpoint.path} basic contract', async ({{ request }}) => {{
+{pagination_helper}
+test('{method} {endpoint.path} basic contract', async ({test_params}) => {{
+  {unverified_guard}
   {skip_guard}
   const rawOptions = {json.dumps(options, ensure_ascii=False, indent=4)};
   const missingVariables = missingTemplateVariables(rawOptions)
@@ -583,8 +667,22 @@ test('{method} {endpoint.path} basic contract', async ({{ request }}) => {{
       [AUTH_HEADER]: process.env.API_TEST_AUTHORIZATION,
     }};
   }}
+  // 额外请求头（JSON，由 data_profile 注入，只进子进程、不落库）。
+  // 真实动机：小杨生煎网关按 referer 识别实例，不带 referer 会返回
+  // "SaasUserInfoInterceptor 应用识别失败"（HTTP 200）—— 看着像接口问题，
+  // 实为平台没带够头，归因错向。配置写坏时**报错**而不是静默少带头。
+  if (process.env.API_TEST_EXTRA_HEADERS) {{
+    let extraHeaders: Record<string, string>;
+    try {{
+      extraHeaders = JSON.parse(process.env.API_TEST_EXTRA_HEADERS);
+    }} catch {{
+      throw new Error('PLATFORM_CONFIG_ERROR API_TEST_EXTRA_HEADERS 不是合法 JSON'
+        + `（这是平台侧配置问题，不是被测接口问题）：${{process.env.API_TEST_EXTRA_HEADERS}}`);
+    }}
+    resolvedOptions.headers = {{ ...(resolvedOptions.headers || {{}}), ...extraHeaders }};
+  }}
   const response = await request.{method.lower()}(
-    buildUrl({json.dumps(path, ensure_ascii=False)}),
+    {target_url_expr},
     resolvedOptions
   );
   const status = response.status();
@@ -593,7 +691,165 @@ test('{method} {endpoint.path} basic contract', async ({{ request }}) => {{
     expect(status).toBeGreaterThanOrEqual(200);
     expect(status).toBeLessThan(300);
   }});
-}});
+
+  // ===== 信封断言（ENVELOPE）=====
+  // 动机（2026-09-30 实测）：小杨生煎的 SUT 是**信封式响应**——业务成功/失败 HTTP 恒为 200，
+  // 靠响应体业务码区分（实测：过期令牌也返回 {{"resultCode":401,"resultMsg":"no login"}} 且 HTTP 200）。
+  // 因此**只看 HTTP 2xx 等于没有断言**：认证/业务失败会被误判为"通过"。
+  // 信封字段名**不写死**（复核 F1）：按接口数据解析（custom_config.response_envelope_field →
+  // 已导入 responses 推断）。写死会把一个业务的响应结构套到别的业务上，实测会让 MX 系
+  // SUT 的**成功响应**被判失败。
+  const ENVELOPE_FIELD: string | null = {envelope_field_json};
+  const rawBody = await response.text().catch(() => '');
+  let envelope: any = null;
+  try {{
+    envelope = rawBody ? JSON.parse(rawBody) : null;
+  }} catch {{
+    envelope = null;
+  }}
+  await test.step(`断言：响应信封可解析（实际：${{envelope === null ? '非 JSON' : 'JSON'}}）`, async () => {{
+    expect(
+      envelope,
+      `响应体不是合法 JSON（前 300 字符）：${{rawBody.slice(0, 300)}}`,
+    ).not.toBeNull();
+  }});
+  const envelopeCode =
+    ENVELOPE_FIELD && envelope && envelope[ENVELOPE_FIELD] !== undefined && envelope[ENVELOPE_FIELD] !== null
+      ? String(envelope[ENVELOPE_FIELD])
+      : '';
+  if (ENVELOPE_FIELD) {{
+    await test.step(`断言：信封含 ${{ENVELOPE_FIELD}} 字段（实际：${{envelopeCode || '<缺失>'}}）`, async () => {{
+      expect(
+        envelopeCode,
+        `响应信封缺少 ${{ENVELOPE_FIELD}} 字段，无法判定业务结果（响应体前 300 字符）：${{rawBody.slice(0, 300)}}`,
+      ).not.toBe('');
+    }});
+    await test.step(`断言：业务结果为成功（${{ENVELOPE_FIELD}}=0，实际：${{envelopeCode}}）`, async () => {{
+      expect(
+        envelopeCode,
+        `AUTH_OR_BUSINESS_ENVELOPE ${{ENVELOPE_FIELD}}=${{envelopeCode}} resultMsg=${{envelope && (envelope.resultMsg || envelope.Message)}}`
+          + '（凭据/权限或业务失败，不是 HTTP 层问题；修复凭据或业务流程后应自然通过）',
+      ).toBe('0');
+    }});
+  }} else {{
+    // 未声明信封形状 → 只判"可解析"就够，**不硬判业务结果**。
+    // 但必须**不静默**：与 P5 分页契约降级**同一口径** —— 在报告里留注解（黄灯），
+    // 否则"少判一层"会表现为绿灯假通过（报告里看不出这轮根本没判业务结果）。
+    console.log('{endpoint.path} ENVELOPE_CHECK_SKIPPED ' + JSON.stringify({{
+      reason: 'envelope_field_not_declared',
+      hint: '在 APIEndpoint.custom_config.response_envelope_field 声明该 SUT 的信封字段名后即可启用业务结果断言',
+      raw: rawBody.slice(0, 300),
+    }}));
+    testInfo.annotations.push({{
+      type: 'envelope_check_skipped',
+      description: '未声明信封字段（custom_config.response_envelope_field）：'
+        + '本轮**只校验 HTTP 与响应可解析，未判定业务结果**（不是通过）。'
+        + '在 APIEndpoint.custom_config.response_envelope_field 声明该 SUT 的信封字段名后可启用业务结果断言。',
+    }});
+  }}
+{pagination_block}}});
+"""
+
+    def _render_pagination_block(
+        self,
+        *,
+        method: str,
+        path: str,
+        contract: Any,
+        core: str,
+    ) -> str:
+        """渲染分页契约断言段（第 2 层正常页 + 第 3 层越界页）。
+
+        验收要求"平台跑出的结论与手跑矩阵
+        （``p5_pagination_contract_matrix.spec.ts``）一致"，因此这里的判定调用
+        与矩阵**逐字对齐**：同样的 ``checkPaginationContract``、
+        同样的 ``reportContractResult``，且核心段是**抽取**来的同源代码。
+
+        比矩阵更严的一处（有意为之）：越界页也先判 ``resultCode``。
+        否则"越界页 + 凭据失效"会得到一个 ``data:null``，被 known_issue 例外
+        吸收成"已知问题"—— 那等于用 DEFECT-002 掩盖另一个问题，比不测更危险。
+        """
+        known_expr = "null"
+        if contract.expect_out_of_range == "known_issue":
+            known_expr = json.dumps(
+                {"id": contract.known_issue_id, "until": contract.known_issue_until,
+                 "note": contract.note},
+                ensure_ascii=False,
+            )
+        label = f"{method} {path}"
+        core_indented = "\n".join(
+            ("  " + line) if line.strip() else line for line in core.splitlines()
+        )
+        return f"""
+  // ===== 分页契约断言（P5 / DEFECT-002）=====
+  // 判定逻辑按标记抽取自 workspace/api/_lib/response_contract.ts（与手跑矩阵同源，
+  // 不另写一份实现——两份实现迟早漂移，且漂移时表现为"某边悄悄变宽"，正是漏检藏身处）。
+  // 配置：provenance={contract.provenance} 越界页期望={contract.expect_out_of_range}
+  // 备注：{contract.note}
+{core_indented}
+
+  // 第 2 层：正常页结构（data 为对象 / list 为数组 / total·pages 为数字）
+  const normalContract = checkPaginationContract(envelope, {{ pageNum: 1 }});
+  if (!normalContract.ok) {{
+    console.log('{label} P5_CONTRACT ' + JSON.stringify({{
+      stage: 'normal_page', ok: normalContract.ok, failures: normalContract.failures,
+      summary: normalContract.summary,
+    }}));
+    testInfo.annotations.push({{ type: 'contract_failure', description: `正常页 ${{normalContract.summary}}` }});
+    throw new Error(`CONTRACT_FAILURE 正常页 {label}：${{normalContract.summary}}｜raw=${{normalContract.raw}}`);
+  }}
+
+  // 第 3 层：越界页行为（越界仍须是完整空结构，否则要么是缺陷、要么是已声明的 known_issue）
+  const oorResponse = await request.{method.lower()}(
+    buildPageUrl(buildUrl({json.dumps(path, ensure_ascii=False)}), OUT_OF_RANGE_PAGE),
+    resolvedOptions
+  );
+  const oorRaw = await oorResponse.text().catch(() => '');
+  let oorEnvelope: any = null;
+  try {{
+    oorEnvelope = oorRaw ? JSON.parse(oorRaw) : null;
+  }} catch {{
+    oorEnvelope = null;
+  }}
+  const oorCode =
+    ENVELOPE_FIELD && oorEnvelope
+      && oorEnvelope[ENVELOPE_FIELD] !== undefined && oorEnvelope[ENVELOPE_FIELD] !== null
+      ? String(oorEnvelope[ENVELOPE_FIELD])
+      : '';
+  // 越界页同样先判信封：**必须** 业务码=0 才继续。
+  // 只判"字段存在"是不够的（实测漏过）：越界页返回 401 时它也是 data:null，
+  // 会被 known_issue 例外吸收成"已知问题" —— 那等于用 DEFECT-002 掩盖另一个问题。
+  await test.step(`断言：越界页信封有效（实际：http=${{oorResponse.status()}} ${{ENVELOPE_FIELD || '未声明'}}=${{oorCode || '<缺失>'}}）`, async () => {{
+    expect(
+      oorEnvelope,
+      `越界页响应不是合法 JSON（前 300 字符）：${{oorRaw.slice(0, 300)}}`,
+    ).not.toBeNull();
+    if (ENVELOPE_FIELD) {{
+      expect(
+        oorCode,
+        `AUTH_OR_BUSINESS_ENVELOPE 越界页 ${{ENVELOPE_FIELD}}=${{oorCode || '<缺失>'}}`
+          + `（凭据/权限问题，不能算作分页契约结论；响应体前 300 字符）：${{oorRaw.slice(0, 300)}}`,
+      ).toBe('0');
+    }}
+  }});
+  const oorContract = checkPaginationContract(
+    oorEnvelope,
+    {{ pageNum: OUT_OF_RANGE_PAGE }},
+    {known_expr},
+  );
+  console.log('{label} P5_CONTRACT ' + JSON.stringify({{
+    stage: 'out_of_range',
+    provenance: {json.dumps(contract.provenance)},
+    expect_out_of_range: {json.dumps(contract.expect_out_of_range)},
+    ok: oorContract.ok, known_issue: oorContract.knownIssue,
+    known_issue_id: oorContract.knownIssueId, failures: oorContract.failures,
+    summary: oorContract.summary, raw: oorContract.raw,
+  }}));
+  reportContractResult(oorContract, {{
+    annotate: (type, description) => testInfo.annotations.push({{ type, description }}),
+    attach: (name, body) =>
+      testInfo.attach(`{label}-${{name}}`, {{ body, contentType: 'application/json' }}),
+  }});
 """
 
     @staticmethod

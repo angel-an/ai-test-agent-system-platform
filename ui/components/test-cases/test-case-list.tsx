@@ -932,10 +932,21 @@ export function TestCaseList({
                   从文档生成
                 </Button>
               )}
-              <Button variant="outline" onClick={() => toast.info("导入测试用例功能开发中")}>
-                <Download className="mr-2 h-4 w-4" />
-                导入测试用例
-              </Button>
+              {/* 空状态导入入口：与工具栏共用同一 hidden input / handler */}
+              {onImportTestCases && (
+                <Button
+                  variant="outline"
+                  disabled={importing}
+                  onClick={() => importFileRef.current?.click()}
+                >
+                  {importing ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="mr-2 h-4 w-4" />
+                  )}
+                  导入测试用例
+                </Button>
+              )}
             </div>
           </div>
         ) : (

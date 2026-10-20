@@ -474,6 +474,9 @@ class ApiBundleService:
         # ---- 5. 变量落库（幂等） ----
         if environment is not None:
             await self._upsert_variables_from_environment(bundle, environment)
+        # Collection 自身定义的变量也提取为环境变量（自动识别）
+        if collection is not None and collection.variables:
+            await self._upsert_variables_from_collection(bundle, collection)
 
         # ---- 6. 冲突落库 ----
         await self._sync_conflicts(bundle, match_result)
@@ -1027,6 +1030,51 @@ class ApiBundleService:
             row.environment = environment.environment
             row.source_type = "postman_environment"
             row.enabled = var.enabled
+        await self.db.flush()
+
+    async def _upsert_variables_from_collection(
+        self,
+        bundle: ApiDocumentBundle,
+        collection: ParsedCollection,
+    ) -> None:
+        """把 Collection 自身定义的变量写入环境变量表（自动识别）。
+
+        Collection 的 ``variable`` 字段（Postman 导出格式）里常包含
+        base_url、api-sign 等变量，这些变量与 Environment JSON 里的
+        变量同等重要，但之前只在 matcher 里做 env_missing 检查，
+        没有落库导致执行时无法引用。
+
+        规则：
+        - 按 (bundle, name) 幂等 upsert；
+        - Environment 来源优先：同名变量已存在时跳过，不覆盖；
+        - 同样只存 ``env:NAME`` 引用，不存明文值；
+        - ``source_type`` 标记为 ``postman_collection`` 以区分来源。
+        """
+        for var in collection.variables:
+            key = var.get("key") or var.get("name")
+            if not key:
+                continue
+            key = str(key)
+            stmt = select(ApiVariable).where(
+                ApiVariable.bundle_id == bundle.id,
+                ApiVariable.name == key,
+            )
+            row = (await self.db.execute(stmt)).scalar_one_or_none()
+            if row is not None:
+                continue  # Environment 优先，不覆盖
+            var_type = var.get("type", "default")
+            is_secret = var_type == "secret" or bool(
+                re.search(r"password|secret|token|apikey|api_key|appsecret|authorization", key, re.IGNORECASE)
+            )
+            self.db.add(ApiVariable(
+                bundle_id=bundle.id,
+                name=key,
+                value_ref=f"env:{key}",
+                is_secret=is_secret,
+                environment=None,
+                source_type="postman_collection",
+                enabled=not var.get("disabled", False),
+            ))
         await self.db.flush()
 
     async def _sync_conflicts(

@@ -186,6 +186,7 @@ SYSTEM_PROMPT = """# API 自动化测试专家
 - ⚠️ 生成测试计划、测试用例、测试代码后必须立即保存
 - ⚠️ `get_endpoint_details` 返回的信息包含：method、path、summary、description、parameters、request_body、responses
 - ⚠️ 根据这些信息自动设计测试场景，不需要用户重复提供
+- ⚠️ `execute_api_script` 的 `run_id` 参数是可选的，不传时会自动生成（格式：run_YYYYMMDD_HHMMSS），不需要手动提供
 
 ### 流程 A：单端点完整测试
 1. `get_endpoint_details` 获取端点信息
@@ -256,7 +257,7 @@ AI：
 | 🏃 执行测试 | `run_tests` | 运行测试文件 |
 | 📥 查询脚本 | `get_api_script_info` | 查询脚本详细信息 |
 | 📥 下载脚本 | `download_api_script` | 从 MinIO 下载脚本到本地测试目录 |
-| ▶️ 执行脚本 | `execute_api_script` | 执行已下载的本地脚本 |
+| ▶️ 执行脚本 | `execute_api_script` | 执行已下载的本地脚本（`run_id` 可选，不传时自动生成） |
 | 📊 解析结果 | `parse_test_results` | 解析测试输出 |
 | 🎬 创建场景 | `create_test_scenario` | 创建多接口测试场景 |
 | 📶 添加步骤 | `add_scenario_step` | 向场景添加 API 调用步骤 |
@@ -278,6 +279,11 @@ AI：
 - 生成测试用例后，必须使用 `save_test_cases(test_cases=[...])` 保存
 - 生成测试代码后，必须使用 `save_test_script(script_content=...)` 保存
 - 使用上下文中的 `project_identifier`，不要询问用户
+
+**执行与报告（重要）：**
+- `execute_api_script` 执行成功后会**自动**把 HTML 报告打包上传到 MinIO 并落库，返回里的 `report_attachment_id` 就是报告附件 ID，**无需再手动保存报告**
+- 想查看某端点已有的成果物（计划/用例/脚本/历史报告）时，用 `get_endpoint_artifacts(endpoint_id=...)`；读取某个成果物内容用 `get_artifact_content(attachment_id=...)`
+- 执行完成后应向用户说明：报告已生成并可在页面成果物面板查看，附上 `report_attachment_id`
 
 **路径处理：**
 - 优先使用 `plan_content` 或 `script_content` 参数直接传递内容

@@ -187,6 +187,13 @@ export interface TestCaseInfo {
   case_type: TestCaseType;
   template: TestCaseTemplate;
   automation_status: AutomationStatus;
+  //: 最近一次执行状态（来源 test_run_test_cases），与 status(生命周期) 区分：
+  //: status 执行不会更新，列表里永远显示"新建"。
+  latest_run_status?: string | null;
+  latest_run_identifier?: string | null;
+  //: 执行原因/明细（断言级摘要）与未验证条数：让"跳过/未执行"也能说明为什么
+  latest_run_reason?: string | null;
+  latest_run_unverified?: number | null;
   project_id: string;
   folder_id?: string | null;
   owner?: string;
@@ -310,8 +317,10 @@ export interface TestCaseFilter {
 export interface ConfigurationMapping { test_case_id: string | string[]; configuration_ids: number[]; }
 export interface TestRunLinks { self?: string; test_cases?: string; }
 export interface OverallProgress {
-  untested: number; passed: number; retest: number; failed: number;
-  blocked: number; skipped: number; in_progress: number;
+  // 后端实际契约（app/schemas/test_run.py OverallProgress）：五状态口径
+  passed: number; failed: number; skipped: number; blocked: number; not_executed: number;
+  // 兼容旧字段（后端不再下发，读取处须用 ?? 0 兜底）
+  untested?: number; retest?: number; in_progress?: number;
 }
 export interface TestPlanRef { identifier: string; name: string; }
 export interface TestStepBrief { id: string; order: number; description: string; result?: string | null; }
@@ -321,6 +330,8 @@ export interface TestRunTestCaseInfo {
   description?: string | null; case_type?: TestCaseType | null; priority?: Priority | null;
   status?: string | null; folder_id?: string | null; folder_path?: string | null;
   configuration_id?: number | null; assignee?: string | null; latest_status: TestResultStatus;
+  // 最新一次执行的明细原因（断言级摘要）与未验证条数（后端 latest_reason/latest_unverified）
+  latest_reason?: string | null; latest_unverified?: number | null;
   latest_result_id?: string | null; dataset?: Array<Record<string, unknown>> | null;
   steps?: TestStepBrief[] | null; created_at?: string | null; last_updated_at?: string | null;
   created_by?: string | null; last_updated_by?: string | null;

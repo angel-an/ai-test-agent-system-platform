@@ -1,0 +1,108 @@
+{
+ "id": "1a214692-470c-4a5a-a991-70958db978bd",
+ "identifier": "TR-115",
+ "name": "Web 最小闭环验证 20260928-123142",
+ "description": "由 Web 最小闭环接口自动创建",
+ "run_state": "rejected",
+ "active_state": "active",
+ "assignee": null,
+ "test_cases_count": 35,
+ "tags": [],
+ "issues": [],
+ "configurations": [],
+ "overall_progress": {
+  "passed": 0,
+  "failed": 0,
+  "skipped": 2,
+  "blocked": 0,
+  "not_executed": 33
+ },
+ "execution_mode": "sequential",
+ "max_concurrency": 1,
+ "script_jobs": [
+  {
+   "id": "23654d43-ff74-480a-9573-a8b2404bf884",
+   "test_run_id": "1a214692-470c-4a5a-a991-70958db978bd",
+   "script_type": "web_test",
+   "script_id": "61cbadb9-cdc2-48b6-86e5-117b27b0f772",
+   "script_identifier": "WT-E88F62B8",
+   "script_name": "TC-194969 - CS工单管理冒烟",
+   "execution_order": 1,
+   "execution_mode": "sequential",
+   "status": "failed",
+   "started_at": "2026-09-28T04:31:48.784926Z",
+   "completed_at": "2026-09-28T04:51:54.373046Z",
+   "duration_ms": 1205565,
+   "result_summary": {
+    "total": 1,
+    "failed": 0,
+    "passed": 0,
+    "skipped": 1
+   },
+   "error_message": "Error: 编译断言执行受阻：1 项",
+   "report_path": "123b4493-13ee-4a05-86df-bfe614a8a3d9",
+   "retry_count": 0,
+   "max_retries": 0,
+   "created_at": "2026-09-28T04:31:41.598380Z",
+   "updated_at": "2026-09-28T04:51:54.391247Z"
+  },
+  {
+   "id": "9a16f8e7-19cf-47ed-9bda-13e7a105484f",
+   "test_run_id": "1a214692-470c-4a5a-a991-70958db978bd",
+   "script_type": "web_test",
+   "script_id": "becee108-178f-4d6b-aa97-a53f519e5ac4",
+   "script_identifier": "WT-C0C7B1E6",
+   "script_name": "TC-834931 - CS工单管理冒烟",
+   "execution_order": 2,
+   "execution_mode": "sequential",
+   "status": "failed",
+   "started_at": "2026-09-28T04:51:54.406595Z",
+   "completed_at": "2026-09-28T04:52:03.586990Z",
+   "duration_ms": 9172,
+   "result_summary": {
+    "total": 1,
+    "failed": 1,
+    "passed": 0,
+    "skipped": 0
+   },
+   "error_message": "Error: 企业控制台登录失败（验证码 OCR 重试 10 次后仍未离开登录页）",
+   "report_path": "b3f6e9ca-6f80-4b4a-813b-f3097fffe29d",
+   "retry_count": 0,
+   "max_retries": 0,
+   "created_at": "2026-09-28T04:31:44.200292Z",
+   "updated_at": "2026-09-28T04:52:03.594876Z"
+  },
+  {
+   "id": "fc721567-11f0-49fc-81f3-8a4a2928923f",
+   "test_run_id": "1a214692-470c-4a5a-a991-70958db978bd",
+   "script_type": "web_test",
+   "script_id": "67a0aef3-857e-4f7d-8801-af512738a335",
+   "script_identifier": "WT-2BE3E37D",
+   "script_name": "TC-120991 - CS工单管理冒烟",
+   "execution_order": 3,
+   "execution_mode": "sequential",
+   "status": "completed",
+   "started_at": "2026-09-28T04:52:03.646244Z",
+   "completed_at": "2026-09-28T04:52:56.245404Z",
+   "duration_ms": 52578,
+   "result_summary": {
+    "total": 1,
+    "failed": 0,
+    "passed": 1,
+    "skipped": 0
+   },
+   "error_message": null,
+   "report_path": "3ef69687-dae4-456e-90b6-df8d58a35ec1",
+   "retry_count": 0,
+   "max_retries": 0,
+   "created_at": "2026-09-28T04:31:46.431858Z",
+   "updated_at": "2026-09-28T04:52:56.250554Z"
+  }
+ ],
+ "created_at": "2026-09-28T04:31:41.598380Z",
+ "updated_at": "2026-09-28T04:52:56.276619Z",
+ "links": {
+  "self": "/api/v2/projects/PR-9/test-runs/TR-115",
+  "test_cases": "/api/v2/projects/PR-9/test-runs/TR-115/test-cases"
+ }
+}

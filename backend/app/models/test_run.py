@@ -126,6 +126,30 @@ class TestRun(Base, UUIDMixin, TimestampMixin):
         comment="未执行数量"
     )
 
+    # ---- R5（2026-10-17）：断言指标模型，run 级只存聚合数，明细走 /assertion-ledger ----
+    # 两类**分别计数、分别算通过率，不得合并**（共享一个 passed_count 无法给出
+    # "用例通过率"与"配置检查通过率"两个口径）：
+    # - case_attributed：检查带 case_id/owner，是**用例结论**的唯一依据；
+    # - config_only：来自定位器配置（无对应用例断言），只反映配置声明与页面是否一致。
+    # 另有 unattributed（既无归属、又非配置驱动）——只告警，不计入任何通过率。
+    case_attributed_total: Mapped[int] = mapped_column(
+        Integer, default=0, comment="归属用例的检查数（去重后的检查口径）"
+    )
+    case_attributed_pass: Mapped[int] = mapped_column(Integer, default=0, comment="归属用例的检查通过数")
+    case_attributed_fail: Mapped[int] = mapped_column(Integer, default=0, comment="归属用例的检查失败数")
+    case_attributed_unverified: Mapped[int] = mapped_column(Integer, default=0, comment="归属用例的检查未验证数")
+    case_attributed_blocked: Mapped[int] = mapped_column(Integer, default=0, comment="归属用例的检查阻塞数")
+    config_only_total: Mapped[int] = mapped_column(
+        Integer, default=0, comment="配置驱动检查数（无对应用例断言）"
+    )
+    config_only_pass: Mapped[int] = mapped_column(Integer, default=0, comment="配置驱动检查通过数")
+    config_only_fail: Mapped[int] = mapped_column(Integer, default=0, comment="配置驱动检查失败数")
+    config_only_unverified: Mapped[int] = mapped_column(Integer, default=0, comment="配置驱动检查未验证数")
+    config_only_blocked: Mapped[int] = mapped_column(Integer, default=0, comment="配置驱动检查阻塞数")
+    unattributed_checks: Mapped[int] = mapped_column(
+        Integer, default=0, comment="未归属检查数（只告警，不计入任何通过率）"
+    )
+
     # 执行配置字段（来自 0002 迁移）
     execution_mode: Mapped[ExecutionMode] = mapped_column(
         SQLEnum(ExecutionMode, name="executionmode", values_callable=lambda x: [e.value for e in x]),
@@ -218,6 +242,32 @@ class TestRunTestCase(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True),
         nullable=True,
         comment="最新测试结果 ID"
+    )
+    # ---- N2（2026-10-17）：写入来源与轮次，供"唯一写入者 + 旧作业不得覆盖新轮次"判定 ----
+    # 迁移前的行（以及非作业路径创建的行）保持 -1/NULL，视作"无轮次信息"，不阻断写入。
+    latest_job_id: Mapped[UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        comment="最后写入该行结论的脚本作业 ID"
+    )
+    latest_execution_order: Mapped[int] = mapped_column(
+        Integer,
+        default=-1,
+        nullable=False,
+        server_default="-1",
+        comment="最后写入的作业执行顺序（-1=无轮次信息）"
+    )
+    latest_retry_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        server_default="0",
+        comment="最后写入的作业重试次数"
+    )
+    latest_writer: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="最后写入者：mapper/engine/finalize/manual"
     )
 
     # 关系

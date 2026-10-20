@@ -1,0 +1,33 @@
+{
+ "test_run": "TR-127",
+ "loops": [
+  {
+   "sub": "WSF-48576960",
+   "wts": [
+    "WT-A9C1C11F"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-RC-CREATE",
+   "wts": [
+    "WT-1582B9FF"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-GW-CREATE",
+   "wts": [
+    "WT-EF16E7E8"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-TL-PHONE",
+   "wts": [
+    "WT-E6635AD7"
+   ],
+   "http": null
+  }
+ ]
+}

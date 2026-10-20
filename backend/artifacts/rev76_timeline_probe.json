@@ -1,0 +1,1752 @@
+{
+ "pages": [
+  {
+   "tag": "case_detail",
+   "url": "https://mkt.uat.eatizen.com.hk/saas-imarketing-web-pc/#/cs/case/edit?id=1452518590040834101",
+   "labels": [
+    {
+     "label": "Case Title",
+     "id": "title",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Case No",
+     "id": "caseNo",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Brand",
+     "id": "brand",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Branch",
+     "id": "branch",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "Branch Code",
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Display Name",
+     "id": "displayName",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Display Name Chinese",
+     "id": "displayNameChinese",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Customer",
+     "id": "nonMember",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Member",
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "Mobile Number",
+     "id": "phone",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Email Address",
+     "id": "email",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Case Category",
+     "id": "caseCategory",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Subcategory Level 1",
+     "id": "categoryL1",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Subcategory Level 2",
+     "id": "categoryL2",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Channel",
+     "id": "channel",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "BU",
+     "id": "buId",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Invoice Number",
+     "id": "invoiceNumber",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Invoice Date",
+     "id": "invoiceDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Service Mode",
+     "id": "serviceMode",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "CS Agent",
+     "id": "agentId",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Remarks",
+     "id": "remarks",
+     "tag": "TEXTAREA",
+     "ro": false
+    },
+    {
+     "label": "Priority",
+     "id": "priority",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Ready to Close",
+     "id": "readyToClose",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Due Date",
+     "id": "dueDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Closed By",
+     "id": "closedBy",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Close Date",
+     "id": "closeDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Follow Up",
+     "id": "followUp",
+     "tag": "TEXTAREA",
+     "ro": false
+    }
+   ],
+   "ids": [
+    {
+     "id": "smooth-dnd-style-definitions",
+     "tag": "STYLE",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "app",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "_yx_sy",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "2603361721682333979$Menu",
+     "tag": "UL",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "status",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "title",
+     "tag": "INPUT",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "caseNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "brand",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "brand",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "branch",
+     "tag": "INPUT",
+     "ph": "Select Shop",
+     "ro": true
+    },
+    {
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "displayName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "displayNameChinese",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "nonMember",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ph": "Select Member",
+     "ro": true
+    },
+    {
+     "id": "memberId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberCardNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "phone",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "email",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "caseCategory",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "caseCategory",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL1",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL1",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL2",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL2",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "channel",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "channel",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buId",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "invoiceNumber",
+     "tag": "INPUT",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "invoiceDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "serviceMode",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "serviceMode",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "agentId",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "agentId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "csAgentName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "remarks",
+     "tag": "TEXTAREA",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "priority",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "priority",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "readyToClose",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "readyToClose",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "dueDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedBy",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedBy",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedByName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closeDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "followUp",
+     "tag": "TEXTAREA",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "editor",
+     "tag": "SCRIPT",
+     "ph": null,
+     "ro": false
+    }
+   ],
+   "menu_items": [
+    "CS Cases",
+    "CS Retro Claim",
+    "CS GoodWill",
+    "CS Task",
+    "CS Agents",
+    "CS BUs",
+    "CS Subcategory Level 1",
+    "CS Subcategory Level 2"
+   ]
+  },
+  {
+   "tag": "timeline_add_menu",
+   "url": "https://mkt.uat.eatizen.com.hk/saas-imarketing-web-pc/#/cs/case/edit?id=1452518590040834101",
+   "labels": [
+    {
+     "label": "Case Title",
+     "id": "title",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Case No",
+     "id": "caseNo",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Brand",
+     "id": "brand",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Branch",
+     "id": "branch",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "Branch Code",
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Display Name",
+     "id": "displayName",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Display Name Chinese",
+     "id": "displayNameChinese",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Customer",
+     "id": "nonMember",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Member",
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "Mobile Number",
+     "id": "phone",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Email Address",
+     "id": "email",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Case Category",
+     "id": "caseCategory",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Subcategory Level 1",
+     "id": "categoryL1",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Subcategory Level 2",
+     "id": "categoryL2",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Channel",
+     "id": "channel",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "BU",
+     "id": "buId",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Invoice Number",
+     "id": "invoiceNumber",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Invoice Date",
+     "id": "invoiceDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Service Mode",
+     "id": "serviceMode",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "CS Agent",
+     "id": "agentId",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Remarks",
+     "id": "remarks",
+     "tag": "TEXTAREA",
+     "ro": false
+    },
+    {
+     "label": "Priority",
+     "id": "priority",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Ready to Close",
+     "id": "readyToClose",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Due Date",
+     "id": "dueDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Closed By",
+     "id": "closedBy",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Close Date",
+     "id": "closeDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Follow Up",
+     "id": "followUp",
+     "tag": "TEXTAREA",
+     "ro": false
+    }
+   ],
+   "ids": [
+    {
+     "id": "smooth-dnd-style-definitions",
+     "tag": "STYLE",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "app",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "_yx_sy",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "2603361721682333979$Menu",
+     "tag": "UL",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "status",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "title",
+     "tag": "INPUT",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "caseNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "brand",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "brand",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "branch",
+     "tag": "INPUT",
+     "ph": "Select Shop",
+     "ro": true
+    },
+    {
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "displayName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "displayNameChinese",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "nonMember",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ph": "Select Member",
+     "ro": true
+    },
+    {
+     "id": "memberId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberCardNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "phone",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "email",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "caseCategory",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "caseCategory",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL1",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL1",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL2",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL2",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "channel",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "channel",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buId",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "invoiceNumber",
+     "tag": "INPUT",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "invoiceDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "serviceMode",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "serviceMode",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "agentId",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "agentId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "csAgentName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "remarks",
+     "tag": "TEXTAREA",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "priority",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "priority",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "readyToClose",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "readyToClose",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "dueDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedBy",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedBy",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedByName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closeDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "followUp",
+     "tag": "TEXTAREA",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "editor",
+     "tag": "SCRIPT",
+     "ph": null,
+     "ro": false
+    }
+   ],
+   "menu_items": [
+    "CS Cases",
+    "CS Retro Claim",
+    "CS GoodWill",
+    "CS Task",
+    "CS Agents",
+    "CS BUs",
+    "CS Subcategory Level 1",
+    "CS Subcategory Level 2",
+    "Phone Call",
+    "Task",
+    "Post",
+    "Note"
+   ]
+  },
+  {
+   "tag": "timeline_Note",
+   "url": "https://mkt.uat.eatizen.com.hk/saas-imarketing-web-pc/#/cs/case/edit?id=1452518590040834101",
+   "labels": [
+    {
+     "label": "Case Title",
+     "id": "title",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Case No",
+     "id": "caseNo",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Brand",
+     "id": "brand",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Branch",
+     "id": "branch",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "Branch Code",
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Display Name",
+     "id": "displayName",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Display Name Chinese",
+     "id": "displayNameChinese",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Customer",
+     "id": "nonMember",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Member",
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "Mobile Number",
+     "id": "phone",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Email Address",
+     "id": "email",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Case Category",
+     "id": "caseCategory",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Subcategory Level 1",
+     "id": "categoryL1",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Subcategory Level 2",
+     "id": "categoryL2",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Channel",
+     "id": "channel",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "BU",
+     "id": "buId",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Invoice Number",
+     "id": "invoiceNumber",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Invoice Date",
+     "id": "invoiceDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Service Mode",
+     "id": "serviceMode",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "CS Agent",
+     "id": "agentId",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Remarks",
+     "id": "remarks",
+     "tag": "TEXTAREA",
+     "ro": false
+    },
+    {
+     "label": "Priority",
+     "id": "priority",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Ready to Close",
+     "id": "readyToClose",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Due Date",
+     "id": "dueDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Closed By",
+     "id": "closedBy",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Close Date",
+     "id": "closeDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Follow Up",
+     "id": "followUp",
+     "tag": "TEXTAREA",
+     "ro": false
+    },
+    {
+     "label": "Subject",
+     "id": "subject",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Description",
+     "id": "description",
+     "tag": "TEXTAREA",
+     "ro": false
+    },
+    {
+     "label": "Assist",
+     "id": "assist",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Attachment",
+     "id": "",
+     "tag": "INPUT",
+     "ro": false
+    }
+   ],
+   "ids": [
+    {
+     "id": "smooth-dnd-style-definitions",
+     "tag": "STYLE",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "app",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "_yx_sy",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "2603361721682333979$Menu",
+     "tag": "UL",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "status",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "title",
+     "tag": "INPUT",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "caseNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "brand",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "brand",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "branch",
+     "tag": "INPUT",
+     "ph": "Select Shop",
+     "ro": true
+    },
+    {
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "displayName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "displayNameChinese",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "nonMember",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ph": "Select Member",
+     "ro": true
+    },
+    {
+     "id": "memberId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberCardNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberNo",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "phone",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "email",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "caseCategory",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "caseCategory",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL1",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL1",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL2",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "categoryL2",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "channel",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "channel",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buId",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "buName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "invoiceNumber",
+     "tag": "INPUT",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "invoiceDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "serviceMode",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "serviceMode",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "agentId",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "agentId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "csAgentName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "remarks",
+     "tag": "TEXTAREA",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "priority",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "priority",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "readyToClose",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "readyToClose",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "dueDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedBy",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedBy",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closedByName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "closeDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "followUp",
+     "tag": "TEXTAREA",
+     "ph": "Input",
+     "ro": false
+    },
+    {
+     "id": "editor",
+     "tag": "SCRIPT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "rcDialogTitle0",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "subject",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "description",
+     "tag": "TEXTAREA",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "assist",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "assist",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    }
+   ],
+   "menu_items": [
+    "CS Cases",
+    "CS Retro Claim",
+    "CS GoodWill",
+    "CS Task",
+    "CS Agents",
+    "CS BUs",
+    "CS Subcategory Level 1",
+    "CS Subcategory Level 2",
+    "Phone Call",
+    "Task",
+    "Post",
+    "Note"
+   ]
+  },
+  {
+   "tag": "goodwill_create",
+   "url": "https://mkt.uat.eatizen.com.hk/saas-imarketing-web-pc/#/cs/goodwill/create",
+   "labels": [
+    {
+     "label": "Status Reason",
+     "id": "statusReason",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Member",
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "",
+     "id": "memberId",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Case Title",
+     "id": "caseLabel",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "",
+     "id": "caseId",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Business Date",
+     "id": "businessDate",
+     "tag": "SPAN",
+     "ro": false
+    },
+    {
+     "label": "Branch Code",
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ro": true
+    },
+    {
+     "label": "GoodWill Type",
+     "id": "goodwillType",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Select",
+     "id": "selectType",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Point Bucket",
+     "id": "pointBasket",
+     "tag": "DIV",
+     "ro": false
+    },
+    {
+     "label": "Value",
+     "id": "value",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Reasons",
+     "id": "reasons",
+     "tag": "TEXTAREA",
+     "ro": false
+    },
+    {
+     "label": "Modified On",
+     "id": "modifiedOn",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Owner",
+     "id": "ownerName",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Approval 1",
+     "id": "",
+     "tag": "INPUT",
+     "ro": false
+    },
+    {
+     "label": "Approval Result Description",
+     "id": "",
+     "tag": "TEXTAREA",
+     "ro": false
+    }
+   ],
+   "ids": [
+    {
+     "id": "smooth-dnd-style-definitions",
+     "tag": "STYLE",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "app",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "_yx_sy",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "2603361721682333979$Menu",
+     "tag": "UL",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "manualStatus",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "statusReason",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "memberLabel",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": true
+    },
+    {
+     "id": "memberId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "caseLabel",
+     "tag": "INPUT",
+     "ph": "Please Select",
+     "ro": true
+    },
+    {
+     "id": "caseId",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "businessDate",
+     "tag": "SPAN",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "branchCode",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": true
+    },
+    {
+     "id": "goodwillType",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "selectType",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "pointBasket",
+     "tag": "DIV",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "pointBasket",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "value",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "reasons",
+     "tag": "TEXTAREA",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "modifiedOn",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "ownerName",
+     "tag": "INPUT",
+     "ph": null,
+     "ro": false
+    },
+    {
+     "id": "editor",
+     "tag": "SCRIPT",
+     "ph": null,
+     "ro": false
+    }
+   ],
+   "menu_items": [
+    "CS Cases",
+    "CS Retro Claim",
+    "CS GoodWill",
+    "CS Task",
+    "CS Agents",
+    "CS BUs",
+    "CS Subcategory Level 1",
+    "CS Subcategory Level 2"
+   ]
+  }
+ ],
+ "screenshots": [
+  "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\artifacts\\rev76_case_detail.png",
+  "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\artifacts\\rev76_timeline_add_menu.png",
+  "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\artifacts\\rev76_timeline_Note.png",
+  "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\artifacts\\rev76_goodwill_create.png"
+ ]
+}

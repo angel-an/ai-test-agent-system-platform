@@ -42,6 +42,10 @@ async def version_engine():
             "test_config TEXT, target_pages TEXT, test_flows TEXT, "
             "generated_by_agent VARCHAR(50), generation_params TEXT, "
             "total_pages INTEGER, total_flows INTEGER, "
+            # N7 编译清单列（迁移 0024）：与模型同步，避免 ORM 查询/插入缺列
+            "compile_status VARCHAR(24), compiled_check_count INTEGER, "
+            "compiled_skipped_count INTEGER, compiled_at DATETIME, "
+            "is_legacy_asset BOOLEAN DEFAULT 0, "
             "created_at DATETIME, updated_at DATETIME)"
         ))
     yield engine

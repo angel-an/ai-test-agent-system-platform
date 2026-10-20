@@ -282,8 +282,10 @@ async def retry_defect_sync(
         else:
             result = await idp_client.create_issue(mapping.idp_project_id, issue_data)
 
-        issue_id = result.get("issueId")
-        issue_key = result.get("issueNum")
+        # dry-run 返回 snake_case（issue_id/issue_key），真实 API 返回 camelCase；
+        # 两处键都兼容，否则 dry-run 灰度时 key/url 恒为空。
+        issue_id = result.get("issueId") or result.get("issue_id")
+        issue_key = result.get("issueNum") or result.get("issue_key")
         web_base = getattr(settings, 'idp_web_base_url', settings.idp_base_url).rstrip('/')
         issue_url = f"{web_base}/agile/issues/{issue_id}" if issue_id else None
 

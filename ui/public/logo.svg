@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFE082"/>
+      <stop offset="50%" stop-color="#F5C542"/>
+      <stop offset="100%" stop-color="#C8941A"/>
+    </linearGradient>
+
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFD54F" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#FFD54F" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- 背景 -->
+  <rect width="64" height="64" rx="12" fill="#1a1a1a"/>
+
+  <!-- 中心光晕 -->
+  <circle cx="32" cy="32" r="18" fill="url(#coreGlow)"/>
+
+  <!-- 左门弧线（光晕层） -->
+  <path d="M20 10 Q30 32 20 54" fill="none" stroke="#FFD54F" stroke-width="5" stroke-linecap="round" opacity="0.15"/>
+  <!-- 左门弧线（主体） -->
+  <path d="M20 10 Q30 32 20 54" fill="none" stroke="url(#gold)" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- 右门弧线（光晕层） -->
+  <path d="M44 10 Q34 32 44 54" fill="none" stroke="#FFD54F" stroke-width="5" stroke-linecap="round" opacity="0.15"/>
+  <!-- 右门弧线（主体） -->
+  <path d="M44 10 Q34 32 44 54" fill="none" stroke="url(#gold)" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- 光核外环 -->
+  <circle cx="32" cy="32" r="11" fill="none" stroke="url(#gold)" stroke-width="2" opacity="0.9"/>
+
+  <!-- 光核实心 -->
+  <circle cx="32" cy="32" r="6" fill="url(#gold)"/>
+
+  <!-- 光核高光 -->
+  <circle cx="32" cy="32" r="3" fill="#FFFFFF" filter="url(#glow)"/>
+</svg>

@@ -113,25 +113,63 @@ async def register_script_provenance(
     await session.execute(stmt)
 
 
+#: minimal-loop（从文档生成自动追加的 Web 冒烟）产物标识。
+#: 这类资产的脚本是平台按用例自动生成的"只读冒烟"，不应顶掉子功能下由 Agent
+#: 产出/登记的正式脚本——否则 legacy 解析会把正式脚本的"当前附件"指向冒烟脚本，
+#: 造成正式脚本 hash 不符被拒。执行侧对自动产物改用 script_object_name 显式解析。
+MINIMAL_LOOP_AGENT = "web_case_link_service"
+
+
 async def resolve_current_script_attachment(
     session: AsyncSession, sub_function_id: UUID
 ) -> UUID | None:
     """解析子功能当前脚本附件 ID（rev23：以 **WebTest.script_path** 为准，
-    而非附件 created_at——避免"先 .ts 后 .py 再更新旧 .ts"时按创建时间取错附件）。"""
+    而非附件 created_at——避免"先 .ts 后 .py 再更新旧 .ts"时按创建时间取错附件）。
+
+    rev62：同一子功能下存在 minimal-loop 自动冒烟 WebTest 时，**优先取正式脚本**
+    （generated_by_agent != MINIMAL_LOOP_AGENT）；全部都是自动产物时才回退取最新。
+    """
     from app.models.attachment import Attachment
     from app.models.web_test import WebTest
 
     wt_stmt = (
-        select(WebTest.script_path)
+        select(WebTest.script_path, WebTest.generated_by_agent)
         .where(WebTest.sub_function_id == sub_function_id)
         .order_by(WebTest.created_at.desc())
+    )
+    rows = [r for r in (await session.execute(wt_stmt)).all() if r[0]]
+    if not rows:
+        return None
+    preferred = [r for r in rows if (r[1] or "") != MINIMAL_LOOP_AGENT]
+    script_path = (preferred or rows)[0][0]
+
+    att_stmt = (
+        select(Attachment.id)
+        .where(Attachment.object_name == script_path)
         .limit(1)
     )
-    script_path = (await session.execute(wt_stmt)).scalar_one_or_none()
-    if not script_path:
+    value = (await session.execute(att_stmt)).scalars().first()
+    return value if isinstance(value, UUID) else None
+
+
+async def resolve_attachment_by_object_name(
+    session: AsyncSession, object_name: str
+) -> UUID | None:
+    """按脚本对象名解析附件 ID（方案 A：以**正在执行的 WebTest** 为准）。
+
+    与 `resolve_current_script_attachment` 不同，这里不依赖"子功能最新 WebTest"，
+    因此同一子功能下多个 WebTest 各自执行各自脚本时不会互相影响。
+    """
+    from app.models.attachment import Attachment
+
+    if not object_name:
         return None
-    att_stmt = select(Attachment.id).where(Attachment.object_name == script_path)
-    value = (await session.execute(att_stmt)).scalar_one_or_none()
+    stmt = (
+        select(Attachment.id)
+        .where(Attachment.object_name == object_name)
+        .limit(1)
+    )
+    value = (await session.execute(stmt)).scalars().first()
     return value if isinstance(value, UUID) else None
 
 
@@ -166,17 +204,50 @@ async def check_script_registered(
     return True, "ok"
 
 
+async def attachment_owner_sub_function(
+    session: AsyncSession, attachment_id: UUID
+) -> UUID | None:
+    """附件归属的 Web 子功能（不属于任何子功能时返回 None）。
+
+    历史产物的脚本附件挂在 WebTest 上（entity_id = web_test.id），此时返回 None，
+    归属校验按"不适用"处理，避免误伤既有资产。
+    """
+    from app.models.attachment import Attachment
+    from app.models.web_function import WebSubFunction
+
+    entity_id = (
+        await session.execute(
+            select(Attachment.entity_id).where(Attachment.id == attachment_id).limit(1)
+        )
+    ).scalars().first()
+    if entity_id is None:
+        return None
+    found = (
+        await session.execute(
+            select(WebSubFunction.id).where(WebSubFunction.id == entity_id).limit(1)
+        )
+    ).scalars().first()
+    return found if isinstance(found, UUID) else None
+
+
 async def authorize_script_execution(
     project_identifier: str,
     script_path: Path,
     workspace_root: Path,
     session_factory: Callable[[], Awaitable[AsyncSession]],
     sub_function_ids: list[UUID] | None,
+    *,
+    script_object_name: str | None = None,
 ) -> tuple[bool, str]:
     """执行前授权门（rev22 严格模式，无降级回退）：
     - sub_function_ids **必填**（空 → 拒绝）；
     - 每个子功能的**当前附件**都必须解析成功，并与 真实项目 + 当前哈希 绑定；
-    - 任一子功能附件缺失/解析失败/哈希不符/项目不符 → 终局拒绝。"""
+    - 任一子功能附件缺失/解析失败/哈希不符/项目不符 → 终局拒绝。
+
+    rev62（方案 A，可选）：传入 ``script_object_name``（= 正在执行的 WebTest.script_path）
+    时，改为**按该对象名解析附件**再校验登记，而不是"按子功能取最新 WebTest 的脚本"。
+    这样同一子功能下多个 WebTest 各自执行各自脚本时互不干扰；不传时行为与原先完全一致。
+    """
     if not sub_function_ids:
         return (
             False,
@@ -190,6 +261,32 @@ async def authorize_script_execution(
     except OSError as e:
         return False, f"读取脚本内容失败: {e}"
     async with session_factory() as session:
+        if script_object_name:
+            attachment_id = await resolve_attachment_by_object_name(
+                session, script_object_name
+            )
+            if attachment_id is None:
+                return (
+                    False,
+                    f"脚本附件不存在（object_name={script_object_name}），无法建立三要素绑定"
+                    "（请先 save_web_test_script 保存并登记后再执行）",
+                )
+            ok, reason = await check_script_registered(
+                session, project_identifier, script_hash, attachment_id
+            )
+            if not ok:
+                return False, f"授权失败: {reason}"
+            # 归属校验（容错）：附件若明确归属某个子功能，必须属于调用方声明的子功能之一，
+            # 防止"用 A 子功能的已登记脚本冒充 B 子功能执行"。
+            owner = await attachment_owner_sub_function(session, attachment_id)
+            if owner is not None and owner not in set(sub_function_ids):
+                return (
+                    False,
+                    f"脚本归属子功能（{owner}）与调用方声明的子功能"
+                    f"（{', '.join(str(x) for x in sub_function_ids)}）不一致，拒绝执行",
+                )
+            return True, "ok"
+
         for sf_id in sub_function_ids:
             try:
                 attachment_id = await resolve_current_script_attachment(session, sf_id)
@@ -210,9 +307,11 @@ async def authorize_script_execution(
 
 
 __all__ = [
+    "MINIMAL_LOOP_AGENT",
     "authorize_script_execution",
     "check_script_registered",
     "register_script_provenance",
+    "resolve_attachment_by_object_name",
     "resolve_current_script_attachment",
     "resolve_real_project_identifier",
     "resolve_within_workspace",

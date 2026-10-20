@@ -1,0 +1,102 @@
+{
+ "success": true,
+ "test_cases": [],
+ "message": "需求分析完成：完整（Complete）",
+ "prd_quality": {
+  "status": "Complete",
+  "status_label": "完整",
+  "can_generate_testcases": true,
+  "missing_count": 0,
+  "ambiguous_count": 0,
+  "blocked_count": 0
+ },
+ "analysis_report": {
+  "status": "Complete",
+  "status_label": "完整",
+  "can_generate_testcases": true,
+  "blocked_reasons": [],
+  "missing_items": [],
+  "ambiguous_items": [],
+  "flagged_items": [
+   {
+    "item": "优先级",
+    "kind": "flagged",
+    "detail": "命中：优先级",
+    "evidence": "P0"
+   }
+  ],
+  "affected_features": [],
+  "parse_error": null,
+  "applicable_profile": "",
+  "profile_reason": "",
+  "not_applicable_items": []
+ },
+ "testcase_generation": {
+  "status": "generated",
+  "reasons": [],
+  "created_count": 0
+ },
+ "assertability_preview": [
+  {
+   "point": "CS Module 客户服务管理系统需求文档",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "系统环境：CRM Console UAT（Customer Service > CS 工单管理）",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "功能点编号：FP-001",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "功能点名称：CS工单列表搜索与筛选",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "业务目标：帮助客服按多条件组合快速定位工单，统一归集客户诉求的查询入口",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "角色/权限：拥有 CS 模块页面访问权限的 CS客服账号可用",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "前置条件：已登录 CRM Console 且账号具备 CS 模块权限",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "系统已存在多条 CS 工单",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "操作流程：1.进入 Customer Service 的 CS 工单列表",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "搜索框输入工单名称/工单编号/会员名称/会员ID/创建人名称做模糊搜索",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "输入会员电话/会员电邮/发票编号做精准搜索",
+   "assertable": false,
+   "matched_field": null
+  },
+  {
+   "point": "下拉单选业务单元/客服/工单类别/工单状态（Draft、In Progress、Pending Customer、Pending Approval、Approved、Rejected、Resolved、Closed、Reopened）",
+   "assertable": false,
+   "matched_field": null
+  }
+ ],
+ "analysis_report_markdown": "# 需求质量分析报告\n**来源**: CS_Module_需求_功能点清单_v2.txt\n**质量状态**: 完整（Complete）\n**测试用例生成**: 允许\n\n## 阻断原因\n\n- 无\n\n## 缺失项\n\n- 无\n\n## 歧义项 / 待确认\n\n- 无\n\n## 标记项（不阻断）\n\n- 🏷️ **优先级**：命中：优先级\n\n## 受影响功能点\n\n- 无（或未识别到功能点编号）\n\n## 检查明细\n\n| 检查项 | 结果 | 说明 |\n| --- | --- | --- |\n| 功能点编号 | ✅ | 命中：功能点 |\n| 功能点名称 | ✅ | 命中：功能点 |\n| 业务目标 | ✅ | 命中：业务目标 |\n| 角色/权限 | ✅ | 命中：角色 |\n| 前置条件 | ✅ | 命中：前置条件 |\n| 操作流程 | ✅ | 命中：操作流程 |\n| 输入与数据规则 | ✅ | 命中：输入 |\n| 验收标准 | ✅ | 命中：验收标准 |\n| 正常结果 | ✅ | 命中：正常结果 |\n| 基本业务规则 | ✅ | 命中：基本业务规则 |\n| 计算公式与精度 | ➖ | 涉及「计算」，已补齐 |\n| 状态流转 | ➖ | 涉及「状态」，已补齐 |\n| 跨系统失败与重试 | ➖ | 涉及「跨系统」，已补齐 |\n| 无权限处理 | ➖ | 涉及「角色」，已补齐 |\n| 并发与幂等 | ➖ | 涉及「并发」，已补齐 |\n\n## 可断言性预览（自动生成）\n\n- 字段说明规则数：0\n- 可提取可判定断言的需求点：0 个\n- 无法提取可判定断言的需求点：12 个（对应用例将标记为「需人工执行」，非用例错误）\n\n以下需求点为概述性描述，未关联到字段说明表的字段规则，缺少可自动判定的输入与预期：\n\n- CS Module 客户服务管理系统需求文档——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 系统环境：CRM Console UAT（Customer Service > CS 工单管理）——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 功能点编号：FP-001——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 功能点名称：CS工单列表搜索与筛选——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 业务目标：帮助客服按多条件组合快速定位工单，统一归集客户诉求的查询入口——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 角色/权限：拥有 CS 模块页面访问权限的 CS客服账号可用——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 前置条件：已登录 CRM Console 且账号具备 CS 模块权限——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 系统已存在多条 CS 工单——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 操作流程：1.进入 Customer Service 的 CS 工单列表——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 搜索框输入工单名称/工单编号/会员名称/会员ID/创建人名称做模糊搜索——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 输入会员电话/会员电邮/发票编号做精准搜索——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n- 下拉单选业务单元/客服/工单类别/工单状态（Draft、In Progress、Pending Customer、Pending Approval、Approved、Rejected、Resolved、Closed、Reopened）——建议：补充字段说明/边界值/判定标准，或在用例上人工补充规则体与断言\n"
+}

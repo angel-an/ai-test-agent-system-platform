@@ -92,50 +92,59 @@ class RequirementSectionSpec:
 
 
 # 最小必填检查（8 项）
+#: 别名同时覆盖简体与繁體：实测 PR-9 的 `CS Module方案説明2.0.pdf` 用繁體
+#: （`字段説明`/`欄位`/`驗收標準`…），而原别名全为简体 → 章节几乎全判"缺失"。
 REQUIRED_SECTIONS: tuple[RequirementSectionSpec, ...] = (
     RequirementSectionSpec(
         item="功能点编号",
         spec="功能点编号（如 FP-001 / 功能点 1）",
-        aliases=("功能点编号", "功能编号", "需求编号", "功能点清单", "功能清单", "功能点"),
+        aliases=("功能点编号", "功能编号", "需求编号", "功能点清单", "功能清单", "功能点",
+                 "功能點編號", "功能編號", "需求編號", "功能點清單", "功能清單", "功能點"),
     ),
     RequirementSectionSpec(
         item="功能点名称",
         spec="功能点名称",
-        aliases=("功能点名称", "功能名称", "功能点"),
+        aliases=("功能点名称", "功能名称", "功能点", "功能點名稱", "功能名稱", "功能點"),
     ),
     RequirementSectionSpec(
         item="业务目标",
         spec="业务目标/背景，说明该功能解决什么业务问题",
-        aliases=("业务目标", "需求目标", "背景", "需求背景", "业务背景"),
+        aliases=("业务目标", "需求目标", "背景", "需求背景", "业务背景",
+                 "業務目標", "需求目標", "需求背景", "業務背景"),
         blocking_missing=True,
     ),
     RequirementSectionSpec(
         item="角色/权限",
         spec="角色与权限，说明谁可以操作、无权限如何处理",
-        aliases=("角色", "权限", "角色权限", "角色与权限", "操作角色"),
+        aliases=("角色", "权限", "角色权限", "角色与权限", "操作角色",
+                 "權限", "角色權限", "角色與權限"),
         detect_markers=("权限",),
         requires_markers=("无权限", "无权", "拒绝访问", "越权", "权限不足"),
     ),
     RequirementSectionSpec(
         item="前置条件",
         spec="前置条件",
-        aliases=("前置条件", "前提条件", "前置"),
+        aliases=("前置条件", "前提条件", "前置", "前置條件", "前提條件"),
     ),
     RequirementSectionSpec(
         item="操作流程",
         spec="操作流程/主流程，可据此推导测试步骤",
-        aliases=("操作流程", "业务流程", "主流程", "流程说明", "功能流程", "操作步骤"),
+        aliases=("操作流程", "业务流程", "主流程", "流程说明", "功能流程", "操作步骤",
+                 "業務流程", "流程説明", "操作步驟"),
         blocking_missing=True,
     ),
     RequirementSectionSpec(
         item="输入与数据规则",
         spec="输入与数据规则（字段、类型、必填、取值范围）",
-        aliases=("输入", "输入规则", "数据规则", "字段说明", "输入与数据规则", "字段规则"),
+        aliases=("输入", "输入规则", "数据规则", "字段说明", "输入与数据规则", "字段规则",
+                 "輸入", "輸入規則", "數據規則", "字段説明", "輸入與數據規則", "字段規則",
+                 "欄位", "欄位説明", "欄位規則"),
     ),
     RequirementSectionSpec(
         item="验收标准",
         spec="验收标准/验收条件，缺失时无法判断用例通过口径",
-        aliases=("验收标准", "验收条件", "验收口径", "验收准则", "定义完成"),
+        aliases=("验收标准", "验收条件", "验收口径", "验收准则", "定义完成",
+                 "驗收標準", "驗收條件", "驗收口徑", "驗收準則", "定義完成"),
         # 按 V1.2 口径：缺失验收标准 → Incomplete（存在缺失但仍可理解）；
         # 只有目标/流程无法确认才升级为 Blocked。
     ),
@@ -146,12 +155,14 @@ BASE_RESULT_SECTIONS: tuple[RequirementSectionSpec, ...] = (
     RequirementSectionSpec(
         item="正常结果",
         spec="正常结果/正常场景预期",
-        aliases=("正常结果", "正常场景", "预期结果", "正常流程结果"),
+        aliases=("正常结果", "正常场景", "预期结果", "正常流程结果",
+                 "正常結果", "正常場景", "預期結果", "正常流程結果"),
     ),
     RequirementSectionSpec(
         item="基本业务规则",
         spec="基本业务规则",
-        aliases=("业务规则", "基本业务规则", "规则说明", "校验规则"),
+        aliases=("业务规则", "基本业务规则", "规则说明", "校验规则",
+                 "業務規則", "基本業務規則", "規則説明", "校驗規則"),
     ),
 )
 
@@ -160,42 +171,71 @@ CONDITIONAL_SECTIONS: tuple[RequirementSectionSpec, ...] = (
     RequirementSectionSpec(
         item="计算公式与精度",
         spec="涉及计算时，必须给出公式与精度",
-        aliases=("公式", "计算规则", "计算方式", "精度", "舍入规则"),
-        detect_markers=("公式", "计算", "金额", "额度", "积分", "折扣", "利息", "比例"),
-        requires_markers=("公式", "精度", "小数位", "舍入", "进位", "四舍五入"),
+        aliases=("公式", "计算规则", "计算方式", "精度", "舍入规则",
+                 "計算規則", "計算方式", "捨入規則"),
+        detect_markers=("公式", "计算", "金额", "额度", "积分", "折扣", "利息", "比例",
+                        "計算", "金額", "額度", "積分", "折扣", "利息"),
+        requires_markers=("公式", "精度", "小数位", "舍入", "进位", "四舍五入",
+                          "小數位", "捨入", "進位", "四捨五入"),
     ),
     RequirementSectionSpec(
         item="状态流转",
         spec="涉及状态时，必须给出状态流转（from → action → to）",
-        aliases=("状态流转", "状态机", "状态变更", "状态说明"),
-        detect_markers=("状态", "冻结", "解冻", "注销", "审核", "生效", "失效"),
-        requires_markers=("状态流转", "状态变更", "状态机", "流转", "→", "->"),
+        aliases=("状态流转", "状态机", "状态变更", "状态说明",
+                 "狀態流轉", "狀態機", "狀態變更", "狀態説明"),
+        detect_markers=("状态", "冻结", "解冻", "注销", "审核", "生效", "失效",
+                        "狀態", "凍結", "解凍", "註銷", "審核"),
+        requires_markers=("状态流转", "状态变更", "状态机", "流转", "→", "->",
+                          "狀態流轉", "狀態變更", "狀態機", "流轉"),
     ),
     RequirementSectionSpec(
         item="跨系统失败与重试",
         spec="涉及跨系统时，必须给出失败、超时、重试处理",
-        aliases=("失败处理", "超时", "重试", "异常处理", "容错"),
-        detect_markers=("跨系统", "第三方", "外部系统", "接口调用", "回调", "同步", "对账"),
-        requires_markers=("超时", "重试", "失败处理", "降级", "补偿"),
+        aliases=("失败处理", "超时", "重试", "异常处理", "容错",
+                 "失敗處理", "超時", "重試", "異常處理", "容錯"),
+        detect_markers=("跨系统", "第三方", "外部系统", "接口调用", "回调", "同步", "对账",
+                        "跨系統", "外部系統", "接口調用", "回調", "對賬"),
+        requires_markers=("超时", "重试", "失败处理", "降级", "补偿",
+                          "超時", "重試", "失敗處理", "降級", "補償"),
     ),
     RequirementSectionSpec(
         item="无权限处理",
         spec="涉及权限时，必须给出无权限处理",
-        aliases=("无权限", "无权限处理", "权限不足", "越权处理"),
-        detect_markers=("权限", "角色", "鉴权", "授权"),
-        requires_markers=("无权限", "无权", "拒绝访问", "越权", "权限不足"),
+        aliases=("无权限", "无权限处理", "权限不足", "越权处理",
+                 "無權限", "無權限處理", "權限不足", "越權處理"),
+        detect_markers=("权限", "角色", "鉴权", "授权", "權限", "鑒權", "授權"),
+        requires_markers=("无权限", "无权", "拒绝访问", "越权", "权限不足",
+                          "無權限", "無權", "拒絕訪問", "越權", "權限不足"),
     ),
     RequirementSectionSpec(
         item="并发与幂等",
         spec="涉及并发时，必须给出幂等和重复提交处理",
-        aliases=("并发", "幂等", "重复提交", "并发控制"),
-        detect_markers=("并发", "批量", "重复提交", "同时", "锁", "多线程"),
-        requires_markers=("幂等", "重复提交", "并发控制", "加锁", "唯一约束", "去重"),
+        aliases=("并发", "幂等", "重复提交", "并发控制", "併發", "冪等", "重複提交", "併發控制"),
+        detect_markers=("并发", "批量", "重复提交", "同时", "锁", "多线程",
+                        "併發", "重複提交", "同時", "鎖", "多線程"),
+        requires_markers=("幂等", "重复提交", "并发控制", "加锁", "唯一约束", "去重",
+                          "冪等", "重複提交", "併發控制", "加鎖", "唯一約束"),
     ),
 )
 
 # 明确不参与判定 / 不阻断的项：菜单路径缺失不影响分析继续
 NON_BLOCKING_ITEMS: tuple[str, ...] = ("菜单路径",)
+
+# ---------------------------------------------------------------------------
+# 文档类型适配（B1，2026-09-24）
+# ---------------------------------------------------------------------------
+#: 触发「字段规格类文档」适配所需的最小结构化字段规则数。
+#: 依据：`CS Module方案説明2.0.pdf` 这类**字段规格/方案说明**文档没有 PRD 章节体
+#: （业务目标/操作流程天然不存在），但能产出 128 条字段规则、19 条约束。
+#: 少于该阈值说明结构化证据不足，仍按 PRD 口径严格判定。
+FIELD_SPEC_MIN_FIELD_RULES = 10
+#: 文档类型标识
+FIELD_SPEC_PROFILE = "field_spec"
+#: 字段规格类文档中「PRD 专属、不适用」的章节：不再计入缺失，也不阻断
+FIELD_SPEC_NOT_APPLICABLE_ITEMS: tuple[str, ...] = (
+    "功能点编号", "功能点名称", "业务目标", "前置条件",
+    "操作流程", "验收标准", "正常结果", "基本业务规则",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +327,11 @@ class PRDAnalysisResult:
     flagged_items: list[RequirementGap] = field(default_factory=list)
     checks: list[RequirementGap] = field(default_factory=list)
     parse_error: Optional[str] = None
+    #: 文档类型档案（当前仅 "field_spec"）：为空表示按 PRD 口径判定
+    applicable_profile: str = ""
+    #: 档案内「不适用」的章节（不计入缺失、不阻断），保留以便审计
+    not_applicable_items: list[RequirementGap] = field(default_factory=list)
+    profile_reason: str = ""
     testcase_generation_status: TestCaseGenerationStatus = (
         TestCaseGenerationStatus.NOT_STARTED
     )
@@ -296,6 +341,10 @@ class PRDAnalysisResult:
     @property
     def is_complete(self) -> bool:
         return self.status == PRDQualityStatus.COMPLETE
+
+    @property
+    def is_field_spec(self) -> bool:
+        return self.applicable_profile == FIELD_SPEC_PROFILE
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -309,6 +358,9 @@ class PRDAnalysisResult:
             "flagged_items": [g.to_dict() for g in self.flagged_items],
             "checks": [g.to_dict() for g in self.checks],
             "parse_error": self.parse_error,
+            "applicable_profile": self.applicable_profile,
+            "not_applicable_items": [g.to_dict() for g in self.not_applicable_items],
+            "profile_reason": self.profile_reason,
             "testcase_generation_status": self.testcase_generation_status.value,
         }
 
@@ -329,8 +381,13 @@ class PRDAnalysisResult:
             flagged_items=_coerce_gap_list(d.get("flagged_items")),
             checks=_coerce_gap_list(d.get("checks")),
             parse_error=d.get("parse_error"),
+            applicable_profile=str(d.get("applicable_profile") or ""),
+            not_applicable_items=_coerce_gap_list(d.get("not_applicable_items")),
+            profile_reason=str(d.get("profile_reason") or ""),
         )
-        # 门控不变量：只有 Complete 才允许生成正式用例
+        # 门控不变量：只有 Complete 才允许生成正式用例。
+        # 注意：字段规格档案（applicable_profile=field_spec）**只由确定性分析器**判定，
+        # payload（LLM 结果）不得自行声明该档案来绕过门控——因此这里不放宽。
         if result.status != PRDQualityStatus.COMPLETE:
             result.can_generate_testcases = False
         return result
@@ -479,7 +536,8 @@ def _parse_analysis_payload_inner(payload: Any) -> PRDAnalysisResult:
             + "），已降级为 Incomplete，请按 {item, kind, detail} 结构重新提交"
         )
 
-    for list_key in ("missing_items", "ambiguous_items", "flagged_items", "checks"):
+    for list_key in ("missing_items", "ambiguous_items", "flagged_items", "checks",
+                     "not_applicable_items"):
         value = normalized.get(list_key)
         if value is None:
             normalized[list_key] = []
@@ -688,8 +746,10 @@ def _conditional_marker_present(text: str, markers: tuple[str, ...]) -> str:
     return ""
 
 
-# 行首装饰与序号
-_LINE_PREFIX_RE = re.compile(r"^\s*(?:[-*•#>]+\s*|\d+[.、)）]\s*)*")
+# 行首装饰与序号（含中文数字：实测真实文档大量使用「一、业务目标」「二、操作流程」）
+_LINE_PREFIX_RE = re.compile(
+    r"^\s*(?:[-*•#>]+\s*|\d+[.、)）]\s*|[一二三四五六七八九十]+[、.．)）]\s*)*"
+)
 
 
 def _normalize_line(line: str) -> str:
@@ -843,6 +903,8 @@ def analyze_requirement_text(
     requirement_text: str,
     source: str = "",
     requirement_id: str = "",
+    *,
+    field_rule_count: int = 0,
 ) -> PRDAnalysisResult:
     """对需求原文做最小必填 + 基础结果 + 条件检查，并给出状态判定。
 
@@ -853,12 +915,18 @@ def analyze_requirement_text(
         requirement_text: 需求原文（Markdown/纯文本均可）
         source: 来源位置（文件名/章节），写入缺口 evidence
         requirement_id: 需求编号（用于报告回指）
+        field_rule_count: 解析器从文档「字段说明表」抽出的**结构化字段规则数**。
+            >0 时视为已提供「输入与数据规则」证据（不再因正文没有该章节判缺失）；
+            ≥ :data:`FIELD_SPEC_MIN_FIELD_RULES` 时按**字段规格类文档**判定，
+            PRD 专属章节转为「不适用」并允许生成（见 B1 说明）。
     """
     text = _normalize(requirement_text)
     checks: list[RequirementGap] = []
     missing: list[RequirementGap] = []
     ambiguous: list[RequirementGap] = []
     blocked_reasons: list[str] = []
+    not_applicable: list[RequirementGap] = []
+    is_field_spec = int(field_rule_count or 0) >= FIELD_SPEC_MIN_FIELD_RULES
 
     def _evaluate(spec: RequirementSectionSpec) -> None:
         """按「标题存在 + 内容有效」双重判定一个章节。"""
@@ -874,6 +942,28 @@ def analyze_requirement_text(
                     evidence=evidence,
                 )
             )
+            return
+
+        # 结构化证据：字段说明表本身就是「输入与数据规则」的载体
+        if spec.item == "输入与数据规则" and int(field_rule_count or 0) > 0:
+            detail = (
+                f"命中：结构化字段规则 {int(field_rule_count)} 条"
+                "（来自文档字段说明表，非正文章节）"
+            )
+            checks.append(RequirementGap(item=spec.item, kind=GapCheckKind.FLAGGED,
+                                         detail=detail, evidence=detail))
+            return
+
+        # 字段规格类文档：PRD 专属章节「不适用」（计入审计，不计入缺失/阻断）
+        if is_field_spec and spec.item in FIELD_SPEC_NOT_APPLICABLE_ITEMS:
+            detail = (
+                f"字段规格类文档不适用：{spec.item}"
+                f"（已由 {int(field_rule_count)} 条结构化字段规则及约束覆盖）"
+            )
+            gap = RequirementGap(item=spec.item, kind=GapCheckKind.FLAGGED,
+                                 detail=detail, evidence=detail)
+            checks.append(gap)
+            not_applicable.append(gap)
             return
 
         blocking = spec.blocking_missing
@@ -992,6 +1082,8 @@ def analyze_requirement_text(
         flagged=[flagged],
         blocked_reasons=blocked_reasons,
         affected_features=_extract_affected_features(text),
+        not_applicable=not_applicable,
+        field_rule_count=int(field_rule_count or 0),
     )
 
 
@@ -1027,20 +1119,44 @@ def _build_result(
     flagged: list[RequirementGap],
     blocked_reasons: list[str],
     affected_features: list[str],
+    not_applicable: list[RequirementGap] | None = None,
+    field_rule_count: int = 0,
 ) -> PRDAnalysisResult:
-    """按 V1.2 规则判定状态。
+    """按 V1.2 规则判定状态，并叠加「字段规格类文档」适配（B1）。
 
     判定顺序（高优先级先命中）：
     1. 目标/流程无法确认（必填阻断缺失）→ Blocked
     2. 存在缺失但仍可理解（含缺验收标准）→ Incomplete
     3. 满足测试设计条件 → Complete
+
+    字段规格适配（`field_rule_count >= FIELD_SPEC_MIN_FIELD_RULES`）：
+    - PRD 专属章节已被移入 `not_applicable`，因此不再阻断、也不计入缺失；
+    - 状态**仍如实保留 Incomplete**（PRD 章节确实不存在），
+      但 `can_generate_testcases=True` —— 允许生成，并以
+      `applicable_profile` / `profile_reason` 说明依据，避免把"字段规格完整"谎报成"PRD 完整"。
     """
+    profile = FIELD_SPEC_PROFILE if field_rule_count >= FIELD_SPEC_MIN_FIELD_RULES else ""
     if blocked_reasons:
         status = PRDQualityStatus.BLOCKED
+    elif profile:
+        # 字段规格档案：PRD 章节已转为「不适用」，但**不得**因此谎报 Complete——
+        # 文档确实不含 PRD 章节，状态如实保留 Incomplete。
+        status = PRDQualityStatus.INCOMPLETE
     elif missing:
         status = PRDQualityStatus.INCOMPLETE
     else:
         status = PRDQualityStatus.COMPLETE
+
+    can_generate = status == PRDQualityStatus.COMPLETE
+    profile_reason = ""
+    if profile:
+        can_generate = True
+        profile_reason = (
+            f"按字段规格类文档判定：文档提供 {field_rule_count} 条结构化字段规则"
+            f"（≥{FIELD_SPEC_MIN_FIELD_RULES}），"
+            "PRD 专属章节（业务目标/操作流程等）不适用，故允许生成用例；"
+            "质量状态仍如实标记为「缺失 PRD 章节」。"
+        )
 
     # 受影响功能点：阻断/缺失优先，其次歧义线索
     affected: list[str] = []
@@ -1052,13 +1168,16 @@ def _build_result(
 
     return PRDAnalysisResult(
         status=status,
-        can_generate_testcases=(status == PRDQualityStatus.COMPLETE),
+        can_generate_testcases=can_generate,
         missing_items=missing,
         ambiguous_items=ambiguous,
         blocked_reasons=blocked_reasons,
         affected_features=affected,
         flagged_items=flagged,
         checks=checks,
+        applicable_profile=profile,
+        not_applicable_items=list(not_applicable or []),
+        profile_reason=profile_reason,
     )
 
 
@@ -1078,6 +1197,10 @@ def render_analysis_report(result: PRDAnalysisResult) -> dict[str, Any]:
         "flagged_items": [g.to_dict() for g in result.flagged_items],
         "affected_features": list(result.affected_features),
         "parse_error": result.parse_error,
+        # 文档类型适配：为空表示按 PRD 口径判定
+        "applicable_profile": result.applicable_profile,
+        "profile_reason": result.profile_reason,
+        "not_applicable_items": [g.to_dict() for g in result.not_applicable_items],
     }
 
 
@@ -1098,6 +1221,18 @@ def render_analysis_markdown(
         f"**测试用例生成**: {'允许' if result.can_generate_testcases else '禁止'}"
     )
     lines.append("")
+
+    if result.applicable_profile:
+        lines.append("## 文档类型适配")
+        lines.append("")
+        lines.append(f"- 适用档案：**{result.applicable_profile}**（字段规格类文档）")
+        if result.profile_reason:
+            lines.append(f"- 判定依据：{result.profile_reason}")
+        if result.not_applicable_items:
+            lines.append("- PRD 专属章节按「不适用」处理（不计入缺失、不阻断）：")
+            for gap in result.not_applicable_items:
+                lines.append(f"  - {gap.item}")
+        lines.append("")
 
     if result.parse_error:
         lines.append("## 解析降级说明")

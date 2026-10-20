@@ -27,6 +27,7 @@ from app.agents.tools.testcase.testcase_tools import (
     list_staged_uat_scenarios,
     export_all_uat_scenarios,
     clear_staged_uat_scenarios,
+    supplement_case_rule_tool,
 )
 
 from app.agents.tools.testcase.document_tools import (
@@ -48,6 +49,7 @@ TESTCASE_TOOLS = [
     create_test_case_tool,
     update_test_case_tool,
     batch_create_test_cases_tool,
+    supplement_case_rule_tool,
 ]
 
 STAGING_TOOLS = [
@@ -108,6 +110,7 @@ __all__ = [
     # 测试用例管理
     "create_test_case_tool",
     "update_test_case_tool",
+    "supplement_case_rule_tool",
     "batch_create_test_cases_tool",
     # 暂存与导出
     "stage_testcases",

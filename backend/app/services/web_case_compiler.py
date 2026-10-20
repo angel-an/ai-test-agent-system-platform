@@ -14,9 +14,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import inspect
 import json
 import re
 from dataclasses import dataclass, field as dc_field
+from functools import lru_cache
 from typing import Any, Iterable, Mapping
 
 from app.services.web_upload_fixtures import (
@@ -27,6 +30,272 @@ from app.services.web_upload_fixtures import (
     xls_base64,
     xlsx_parts_base64,
 )
+
+#: 产物编译器版本指纹（P0-2，2026-10-19）。
+#: 生成期写入 spec 头部（注释 + 模块级常量）与 ``web_tests.generation_params.compiler_rev``；
+#: 执行前由 ``runner`` 读 spec 头部比对，缺失/不一致即判「旧产物」。
+#: ⚠️ 改动执行器模板（``_FORM_EXECUTOR_TS`` / 各业务模板）或编译逻辑时**必须同步 bump 本值**。
+#:    **不要依赖这条注释——它由两处机制强制执行**（见 ``compiler_source_digest``）：
+#:     1. ``backend/tests/test_compiler_rev_guard.py``：模板/逻辑源码变了而本值没变 → 测试必红；
+#:     2. 产物头部同时写 ``COMPILER_DIGEST``；执行期 digest 不符即判旧产物，
+#:        即便有人手工把 rev 改成同一个字符串也逃不过。
+#:    bump 记录：
+#:   - rev117（2026-10-19）：首次引入指纹；提交项看门狗 + SUBMIT_STAGE 心跳（P0-1）
+#:   - rev118（2026-10-19）：引入 digest 绑定 + 严格模式三态（auto/on/off）
+#:   - rev119（2026-10-20）：字段级上传放行（A1）—— ``field_locators.upload_allow``
+#:     经 ``upload_policy.allow_upload_rules`` 下发；新增 ``UPLOAD_POLICY`` 自证日志与
+#:     ``upload_policy_gap`` 缺口诊断。修的是「附件类用例没有场景 ⇒ 从无上传放行 ⇒ 恒 unverified」。
+#:   - rev120（2026-10-20）：CS 模板抽出 ``enterStorageAccountList``。
+#:     原先 form_executor 的上传隔离分支调用了一个**只在储值模板里存在**的函数 ⇒ 每轮抛
+#:     ``ReferenceError`` 并静默回退 ``main_fallback``（TR-726/728/729 实测一致），
+#:     所谓"上传独立上下文"从未生效过。抽成函数后主流程与隔离上下文共用同一段入口。
+#:   - rev121（2026-10-20）：digest 扩围到 ``web_case_link_service`` 的 ``_generate_*_script``。
+#:     rev120 暴露的盲点：产物一半来自那些业务模板，而 digest 只算本模块 ⇒ 改模板时 digest 不变，
+#:     registry「rev ↔ digest 一一对应」被打破（守卫当场拦下）。改为 AST 静态抽取，不 import。
+#:   - rev122（2026-10-20）：隔离上下文先落到登录页再进 CRM。
+#:     rev121 起 ``enterStorageAccountList`` 真的被调用了，但隔离上下文是**新开 page**（about:blank），
+#:     直接 ``openCrm`` 找不到 CRM 入口（TR-730 实测 ``UPLOAD_CONTEXT main_fallback: 未找到…CRM 入口``）。
+#:     只在页面还没加载任何文档时先 goto 登录页；主流程 page 已在控制台，不触发。
+#:   - rev123（2026-10-20）：隔离上下文改为**重放登录**。
+#:     rev122 的 goto 不够：``context.storageState()`` 只带 cookie 与 localStorage，
+#:     **不带 sessionStorage**，而本 SUT 会话态在 sessionStorage ⇒ goto 后仍停在登录页（TR-731）。
+#:     改为调用同一 ``loginToConsole``（含验证码 OCR），与储值模板的入口函数完全同语义。
+#:   - rev124（2026-10-20）：运行期唯一化（A2 / ``{{RUN_TAG}}``）。
+#:     真实落库场景的填值原先在**编译期**就定死（``FORM_PLAN`` 是快照）⇒ 同一份产物
+#:     重跑必撞服务端唯一约束（``20003 编号已存在``），而期望受理通道把它判成
+#:     「疑似缺陷坐实」= **假缺陷**。现在占位符原样留在快照里，执行器每次运行算新值；
+#:     同时「数据重复」类拒绝改判 unverified（非功能缺陷），并输出 ``RUN_TAG_GAP``
+#:     列出"真实落库但值固定"的字段。
+#:   - rev125（2026-10-20）：``run_tag_gap`` 判据收窄 + 纳入 digest。
+#:     TR-733 实测：店鋪電話 ``12345678`` 被"≥4 位连续数字"命中，每轮都报一条
+#:     ``RUN_TAG_GAP`` —— 这种噪声会让整条诊断被忽略，而它正是"重复运行必然 20003"
+#:     的唯一提示渠道。改为同时要求 ≥2 个字母。``run_tag_usage`` / ``run_tag_gaps``
+#:     也列入 digest（它们产出计划字段，却不属于 ``build_form_plan`` 源码）。
+#:   - rev126（2026-10-20）：唯一化自证 ``RUN_TAG_APPLIED``。
+#:     ``RUN_TAG_USED`` 只证明"我们算了这个值"，不证明**控件里真的是这个值**——
+#:     带 maxLength 的控件会静默截断，截掉的若是尾段（恰好是区分两次运行的部分），
+#:     就等于没唯一化却照样报"已唯一化"。现在填入后回读 inputValue 比对，截断即标出。
+#:   - rev127（2026-10-20）：随机段 2→3 位 + 「数据重复」判据去掉裸词「唯一」。
+#:     · 2 位随机撞车概率 1/1296，并行跑同一场景时有实际风险；3 位降到 1/46656。
+#:     · 判据里写 ``唯一`` 会把「編號唯一性校驗不通過」这类**真缺陷**文案也降级成
+#:       "数据冲突"，正好是要避免的反向误判；改为只认 ``唯一约/唯一約/unique constraint``。
+#:   - rev128（2026-10-20）：新增业务模板 ``survey_operation``（营销云-系统-调查问卷管理，
+#:     小杨生煎项目）。``link_service`` 新增 ``_generate_survey_operation_script`` 与
+#:     ``_is_survey_operation_case``（digest 覆盖 ``_generate_*_script``，故必须 bump）。
+#:   - rev129（2026-10-20）：规则级场景的 request/response 监听器挂到**应用所在页面**
+#:     （anyScope 是 Page 时挂 anyScope，FrameLocator 回退 page）。实测 TR-742：门户
+#:     卡片式应用（数盈营销云）新开标签页后，监听器挂在主 page 上一个请求都收不到，
+#:     服务端已受理（数据已落库）却判 unverified —— 判定层假阴性。
+#:   - rev130（2026-10-20，F-1/F-2/F-3 同批）：
+#:     · F-2：rev129 只修了负向场景那半，**提交层**四处 `page.on(...)` 仍是主 page ——
+#:       同一根因（门户卡片新标签页），触发条件换成 submit_phase 的 probe/required_empty
+#:       就会重演假阴性；本次统一为 `submitListenPage`。
+#:     · F-3：新增 `COVERAGE_RECONCILE`（planned / executable / skipped_no_locator /
+#:       scenario_executed / emitted + 两个 unexplained 差额），把「计划 7 / 可执行 5 /
+#:       实发 6 / 跳过 2」三套口径收成一条可判定恒等式；`FORM_PLAN.planned_assertions`
+#:       由 `build_form_plan` 写入（同快照，不再跨快照对账）。
+#:   - rev131（2026-10-20，F-3 修正）：`render_form_executor` 的 payload 是**白名单**
+#:     序列化，rev130 漏登记 `planned_assertions` ⇒ 实测 TR-748 打出
+#:     `planned=0 / unexplained_plan=-3 / balanced=false`，对账行反而制造新误导。
+#:     本版补上该键；教训：凡运行期要读的计划字段必须在 payload 白名单里显式登记。
+#:   - rev134（2026-10-20，别名与默认值落地）：①`field_locators.aliases` 的命中
+#:     写进回执（`field_alias_applied`），并单列**悬空别名**（目标键不存在）——
+#:     旧实现里"别名配错"与"别名没配"在回执上完全一样，配置方会去改定位器而不是改别名；
+#:     ②`aliases`/`defaults` 从 `NON_LOCATOR_CONFIG_KEYS` 里剔除语义（它们是行为配置，
+#:     不该在预览里被数成定位器）；③RUN_TAG 回读改走 `controlValue()`——
+#:     直连 `input.inputValue()` 对 contenteditable 返回长度错乱，唯一化自证会误报截断。
+#:   - rev135（2026-10-20，注释收敛）：rev134 执行器里的说明注释写了旧调用字面量
+#:     （`input.inputValue` 带括号），被"富文本不得走 inputValue"的护栏测试按子串命中
+#:     ⇒ 测试误红。**行为零变化**，只把注释里的字面量去掉。bump 的唯一理由：
+#:     产物 digest 覆盖执行器模板全文，注释改动也会改 digest（这是设计，不是误伤）。
+#:   - rev136（2026-10-20，对账口径修正）：`COVERAGE_RECONCILE` 的 plan 侧恒等式
+#:     减去 `config_only_checks`。配置驱动的检查（默认选中/条件显示）不是文档断言
+#:     翻译来的，旧公式把它们算进 executable ⇒ 恒为负差额。实测 TR-752 报
+#:     `planned=4 / executable=6 / unexplained_plan=-2 / balanced=false`，
+#:     那 -2 不是缺口，是 2 条默认值观测被误当断言。
+#:   - rev137（2026-10-20，字段检查前置动作 ``pre_actions``）：子功能可声明
+#:     "检查前先点一下"（labels/for_fields/times/wait_ms），执行器**按需**在第一条
+#:     作用于目标字段的检查前触发，并输出 ``PRE_ACTION`` / ``PRE_ACTIONS_PLAN`` 自证行。
+#:     实测背景（TR-752/753 + 探针）：问卷题目卡片在点「新增题目」前根本不存在
+#:     （`[class*=questionCard]` = 0），定位器本身正确 ⇒ 旧口径只能记 unverified，
+#:     与"选择器配错"无法区分。前置动作失败时后续检查报"前置动作未完成"，
+#:     不再报"未定位到输入框"（后者会把排障引向定位器）。
+#:   - rev138（2026-10-20，字段级**作用域** + 现场行诚实化）：rev137 让「新增题目」真的
+#:     点成了（TR-754 `PRE_ACTION ok=true`），但四条断言仍报"未定位到输入框"——
+#:     探针证明 `form.contains(card) === false`：题目卡片渲染在 `<form class="ant-form">`
+#:     **之外**（同一选择器全文档命中 1 / 表单内 0）。新增 `fields.<字段>.scope="page"`
+#:     让定位按**字段**切层（不放宽 `modal`：那会连带放大默认值/单选 `:has-text` 的匹配范围）。
+#:     同时修 `[observation]` 的 tried：旧实现只回显 `placeholder_hint`（本 SUT 未配 ⇒ 恒 ''），
+#:     而执行时用的是 `selector_hint` ⇒ 现场行看起来像"没配 hint"，把排障引向补 hint。
+#:     现在写出真实使用的选择器与 `scope` 层，并用 `LOCATE_SCOPE` / `LOCATE_SCOPE_INVALID`
+#:     自证声明是否落地。
+#:   - rev139（2026-10-20，对账口径补 ``submit_resubmitted``）：rev138 修好作用域后
+#:     TR-755 出现 ``emitted=9 / executable=6 / scenario=1 / unexplained_emitted=2 /
+#:     balanced=false``。那 2 条不是丢失 —— 提交层把两条 ``required_error`` **又记了一次**
+#:     （真实提交才算证据，这是设计）。旧公式把重发算成"多发"，于是"没丢"被报成"丢了 2 条"。
+#:     本版显式列出 ``submit_resubmitted`` 并计入恒等式；提交层计数改用独立包装
+#:     ``submitRec``，不拿 ``queued`` 当代数（超时/中断也会各写一条）。
+#:   - rev140（2026-10-20，错误检测**锚定控件** + 提交层时间线/限界）：TR-756 两条
+#:     ``required_error`` 卡 ``SUBMIT_TIMEOUT stage=settle_done 90s``。探针拿到地面真相：
+#:     ① 卡片内 form-item 的标签是「标题」，规则字段名是「题目标题」→ ``:has-text`` 恒不匹配；
+#:     ② ``modal`` 配置为 ``.ant-form``，题目卡片在 ``.ant-form`` 之外 → 作用域内恒 0；
+#:     ③ 错误真实形态是 antd v3（``.ant-form-explain`` + ``.ant-form-item-control.has-error``，
+#:     ``formItemHasError=0``）。三者叠加 = fieldError 恒 false → settle 永不返回。
+#:     修复：``itemHasErrorCtl`` 按字段定位路径（与 fill 同源）找到控件 → 向上找最近
+#:     ``.ant-form-item`` 查 explain/has-error，锚定失败退回旧行；客户端层与提交层
+#:     检测点全部换用。防线补强：late 观察窗限界 20s（不再吃满单项预算）；「无业务写
+#:     请求 + 错误面较基线扩大」即收敛为前端拦截（文案如实写明判定依据）；
+#:     ``SUBMIT_SETTLE`` / ``SUBMIT_LATE`` 时间线打点，卡死可归因到具体轮次。
+#:   - rev141（2026-10-20，radio 组兜底填充 + 前端拦截**归因**）：rev140 实测（TR-757）
+#:     只好了一半 —— 收敛防线触发了（``form_err_base:0→now:3``）但判定分支没有承接；
+#:     探针3（Playwright 原生交互复刻）拿到最终地面真相：三个 radio 组的默认选中
+#:     **未注册进表单状态**，保存被它们拦在**外层表单**，卡片表单（题目标题/选项1）
+#:     根本走不到校验 → 目标字段错误永不渲染（全页仅 1 条 explain「请选择业务类型」，
+#:     卡片 explainCount=0）。修复：① ``fillEmptyErrored`` 真实点击 radio/checkbox 组
+#:     （旧逻辑被 radio 的 ``inputValue`` 恒非空 + 「单选类无法程序化填充」双重跳过）；
+#:     ② ``itemHasErrorCtl`` 祖先查找改 class **精确 token** 匹配（旧 contains 会先命中
+#:     ``div.ant-form-item-control``，探针3 实锤）；③ ``__frontendBlocked`` 独立判定分支
+#:     带**归因**：重测目标字段命中才 pass，否则如实 unverified（被其他必填项拦截）；
+#:     ④ 合成点击先 count 再 evaluate（空定位器 evaluate 白等 30s —— 选项1 项 90s 卡死
+#:     的真凶）。
+#:   - rev142（2026-10-20，**toast 文本匹配** + 别名反查归因）：rev141 实测（TR-758）
+#:     归因失败——探针4 + 截图拿到最终形态：保存被拦的提示是**warning 样式 toast**
+#:     「题目 11：请输入标题」（橙色叹号），既不在 error 类 TOAST_SEL 里、也不是卡片
+#:     explain（探针4：外层表单合法后保存，卡片 explainCount 仍为 0）——必填拦截走
+#:     toast，不走 inline。且 toast 文案含的是**页面标签「标题」**而非规则字段名
+#:     「题目标题」。修复：① ``blockToastText`` 按文本（请输入/请选择/必填/不能为空）
+#:     匹配任意 message/notification，不依赖样式类；② 载荷下发 ``field_alias_applied``，
+#:     执行器反转成「定位器键 → 页面别名」表，``attrHit`` 同时查字段名与别名 → toast
+#:     归因到目标字段才 pass，否则如实 unverified 并打 ``SUBMIT_ERR_DETAIL``（explain
+#:     归属 + toast 全文）；③ late 循环加「连续 5 轮请求面/错误面无变化」早停
+#:     （TR-758 选项1 项白跑 66s）。
+#:   - rev143（2026-10-21，``ERRORED_ITEM`` 补 antd v3 形态 + toast 快查）：TR-759 的
+#:     ``SUBMIT_ERR_DETAIL`` 终于打出 3 条 explain 的真身——「请输入问卷标题 / 请选择
+#:     业务类型 / 请输入优先级」，全是**外层表单**必填项。``fillEmptyErrored`` 之所以
+#:     没填它们：``ERRORED_ITEM`` 是 v4 偏置选择器（``.ant-form-item.has-error``），
+#:     本 SUT 是 v3（`.has-error` 在 control 上，probe1 实测 formItemHasError=0）⇒
+#:     恒匹配 0 个 ⇒ 兜底填充空转 ⇒ 保存永远被外层拦死，卡片校验走不到。修复：
+#:     ① ERRORED_ITEM 补 ``:has(.ant-form-explain)`` / ``:has(.has-error)``；
+#:     ② settle/late 循环里 toast **先**于全量观察快查（toast 存续 ~3s，observe 全链
+#:     ~2.5s 可能整段错过窗口）。
+#:   - rev144（2026-10-21，guard 反转修正 + 多 toast 拼接 + 未选中优先）：TR-760 实测
+#:     ERRORED_ITEM 已能命中 3 项（remaining=3）但兜底填充仍未执行——重读控制流发现
+#:     required_empty 到达 guard 时目标字段必然无错误（有错误 settle 已命中返回）⇒
+#:     ``guardOk`` 恒 false ⇒ ``if (!guardOk) return`` 恒早退 ⇒ fillEmptyErrored 对
+#:     required_empty 是**死代码**（自 rev69 起如此，此前从未暴露是因为别家 SUT 的
+#:     必填拦截不依赖「先填满外层表单」）。修复：① required_empty 放行 guard（probe
+#:     守卫不变）；② checkbox 组优先点**未选中**项（业务类型默认视觉选中但表单状态为空，
+#:     点已选中项会把可见状态点掉）；③ blockToastText 拼接**全部**命中 toast（一保存
+#:     多条，只取第一条会让选项1 的归因被标题的 toast 挡掉）。
+#:   - rev145（2026-10-21，共享化 fillErroredItems + block_siblings + label 点击验证）：
+#:     TR-761 的 ``required_error:题目标题`` **首次 pass**（toast 快查 419ms 命中 + 别名
+#:     「标题」归因）。收尾三件事：① ``ERRORED_ITEM``/兜底填充逻辑提升为共享
+#:     ``fillErroredItems(container, skipMarked)``（提交层薄壳调用，场景层复用）；
+#:     ② ``fields.<字段>.block_siblings``：卡片校验逐字段只报**第一个**空字段且每个提交项
+#:     重开表单 ⇒ 标题恒空 ⇒ 选项1 的 toast 永远轮不到（TR-761 实测 block_toast 只有
+#:     两条标题）——提交前先填声明的兄弟必填；③ ``clickByLabels`` 对 radio/checkbox 加
+#:     **点击后验证**（label 文本点击未必触发 onChange，TR-761 外卖点击未生效 ⇒ 场景被
+#:     「请选择业务类型」拦成 unverified），未选中则对 input 合成 click 兜底。
+#:   - rev146（2026-10-21，TDZ 修复）：rev145 的 ``block_siblings`` 循环引用了声明在
+#:     下方 TOAST 区的 ``itemDef`` ⇒ ``ReferenceError: Cannot access 'itemDef' before
+#:     initialization`` ⇒ 两条 required_error 全 blocked ⇒ 硬失败闸把 TR-762 拒掉
+#:     （blocked=2 视为结构性失败，这是设计行为——恰好把回归挡在了门外）。改为直接读
+#:     ``fieldDefs[check.field]``。
+COMPILER_REV = "rev146"
+
+#: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
+#: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
+_DIGEST_CONSTANTS: tuple[str, ...] = (
+    "_FORM_EXECUTOR_TS",
+    "FORM_CHECK_KINDS",
+    "LOCATOR_DEPENDENT_KINDS",
+    "SOFT_CHECK_KINDS",
+)
+
+#: 纳入 digest 的编译函数（源码级）。新增/修改这些函数的实现都会改变 digest。
+_DIGEST_FUNCTIONS: tuple[str, ...] = (
+    "compile_cases",
+    "probe_value_for",
+    "build_form_plan_for_template",
+    "build_form_plan",
+    # rev125：计划里的 run_tag / run_tag_gap 由这两个纯函数产出，它们**不在**
+    # build_form_plan 的源码里 ⇒ 不列入就改了判据而 digest 不变（同一类盲点，
+    # 与 rev120「模板不在 digest 覆盖内」同源）。
+    "run_tag_usage",
+    "run_tag_gaps",
+    # rev137：前置动作的解析规则（次数/等待上限、labels 归一化）在这里，
+    # 它直接决定运行期点几下 ⇒ 必须纳入 digest，否则"改了判据而产物不变指纹"。
+    "parse_pre_actions",
+    "render_form_executor",
+)
+
+
+@lru_cache(maxsize=1)
+def compiler_source_digest() -> str:
+    """当前编译器「会改变产物行为」的源码摘要（12 位）。
+
+    为什么不用整文件 hash：整文件会把注释、无关服务、docstring 都算进去 —— 改一行说明就
+    要求 bump 版本，规则必然被「反正无所谓」绕开。这里只圈定**模板与编译逻辑本身**。
+
+    为什么需要它：``COMPILER_REV`` 是人手写的字符串，「忘了改」在运行时完全看不出来
+    （旧产物 rev 等于当前 rev，一切正常）。digest 由源码算出，忘改 rev 时：
+    - 单测立刻红（registry 登记不上）；
+    - 万一单测被跳过，产物里的旧 digest 与新 digest 不符，执行期仍判旧产物。
+
+    rev120 补充：产物 = 本模块的执行器片段 **+** ``web_case_link_service`` 里的业务模板
+    （``_generate_*_script``）。原先只算前者 —— 改 CS/YL 模板时 digest 不变、只有 rev 变，
+    registry 的「rev ↔ digest 一一对应」约束被打破（rev120 实测被守卫拦下，拦得对）。
+    这里用 AST 静态抽取后者，**不 import**：避免循环依赖，也保证「有无 import 都算出同一个值」。
+    """
+    g = globals()
+    parts: list[str] = []
+    for name in _DIGEST_CONSTANTS:
+        value = g.get(name)
+        if value is None:
+            continue
+        if isinstance(value, (set, frozenset)):
+            rendered = "|".join(sorted(str(item) for item in value))
+        else:
+            rendered = str(value)
+        parts.append(f"{name}={rendered}")
+    for fn_name in _DIGEST_FUNCTIONS:
+        fn = g.get(fn_name)
+        if fn is None:
+            continue
+        parts.append(f"{fn_name}:\n{inspect.getsource(fn)}")
+    parts.extend(_link_service_template_parts())
+    blob = "\x00".join(parts).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:12]
+
+
+def _link_service_template_parts() -> list[str]:
+    """``WebCaseLinkService`` 里所有 ``_generate_*_script`` 的源码（按名字排序）。
+
+    这些方法就是 CS / YL / 储值等 minimal-loop 脚本的业务模板 —— 产物的一半在它们里面。
+    抽取方式必须**确定性**（不依赖模块是否已导入），否则同一份代码在不同上下文算出不同
+    digest，执行期会把正常产物误判成旧产物。
+    """
+    import ast
+    from pathlib import Path
+
+    path = Path(__file__).with_name("web_case_link_service.py")
+    try:
+        src = path.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+    except Exception:  # noqa: BLE001 - 读不到就留痕（digest 会与正常态不同 ⇒ 守卫会红）
+        return ["link_service_template=<unreadable>"]
+    found: dict[str, str] = {}
+    for node in tree.body:
+        if not (isinstance(node, ast.ClassDef) and node.name == "WebCaseLinkService"):
+            continue
+        for item in node.body:
+            if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if item.name.startswith("_generate_") and item.name.endswith("_script"):
+                found[item.name] = ast.get_source_segment(src, item) or ""
+    if not found:
+        return ["link_service_template=<not_found>"]
+    return [f"link_service_template:{name}:\n{found[name]}" for name in sorted(found)]
 
 #: 需要页面定位器才能执行断言的类型（本版不执行，仅统计）
 LOCATOR_DEPENDENT_KINDS = {"required", "enum", "default", "boundary", "precision",
@@ -63,7 +332,14 @@ FORM_CHECK_KINDS = frozenset(LOCATOR_DEPENDENT_KINDS | SOFT_CHECK_KINDS | {"rang
 
 #: setup 允许的**动作原语闭集**。未在此集合中的动作一律**拒绝该场景**——
 #: 静默忽略未知动作会变成"配置了但从未执行"，比直接拒绝更危险。
-SETUP_ACTIONS: frozenset[str] = frozenset({"click", "select_row", "append", "fill", "wait", "select_option", "click_selector"})
+#:
+#: ``upload``（2026-10-16 新增，rev114）：把内联夹具写进 ``input[type=file]``。
+#: 背景：部分业务的**必填项本身就是附件**（实测美心 YL 店铺主数据 Store Image），
+#: 没有这个原语时该场景在正式通道下**永远不可能构造出前置条件**（只能记 unverified）。
+#: 它是**唯一**会主动产生 multipart 请求的动作 ⇒ 必须与 ``allow_upload`` 上传放行规则
+#: **成对使用**：声明了 upload 步骤却不声明放行规则时，写隔离会把上传 abort，
+#: 场景如实记为 unverified（不会静默通过）。
+SETUP_ACTIONS: frozenset[str] = frozenset({"click", "select_row", "append", "fill", "wait", "select_option", "click_selector", "clear_select", "upload", "type"})
 
 #: 允许的目标入口（仅作审计标注与文案，平台不据此猜步骤）。
 #: 唯一的**行为差异**：``create`` 表示"就用平台已经打开的那个新建表单"——
@@ -83,11 +359,37 @@ class SetupStep:
     field: str = ""
     value: str = ""
     ms: int = 0
+    #: ``upload`` 专用：内联夹具 ``{name, mime, b64}``。
+    #: 字节**全部来自配置**，平台不内置任何业务素材（也不去读本地路径——
+    #: 本地路径在其它机器上不存在，等于把"配了"变成"跑不了"）。
+    fixture: dict[str, Any] = dc_field(default_factory=dict)
+    #: ``upload`` 专用：先点哪个按钮才会渲染 ``input[type=file]``（如「Upload Image」）。
+    open_labels: tuple[str, ...] = ()
+    #: ``upload`` 专用：选完文件后要点哪个弹窗按钮确认（如「OK」/「Confirm」）。
+    confirm_labels: tuple[str, ...] = ()
+    #: ``type`` 专用（rev115）：``clear`` 非空 = 先三击全选已有文本（键入即整体替换，
+    #  否则 keyboard.type 追加导致查询串翻倍，TR-471）；``mode="set"`` = 程序化赋值
+    #  （Playwright fill 语义且**不 blur**，Google autocomplete 对 CJK 逐键输入不吐
+    #  候选、对程序化 fill 正常吐，TR-473 A/B 实测）。
+    clear: str = ""
+    mode: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"action": self.action, "labels": list(self.labels),
                                "selector": self.selector, "row_index": self.row_index,
                                "field": self.field, "value": self.value, "ms": self.ms}
+        # upload 相关字段**仅在非空时**输出：其它动作的 __dict__ 保持与历史逐字一致
+        # （既有快照/单测因此零回归），而执行器对缺键一律按"没声明"处理。
+        if self.fixture:
+            out["fixture"] = dict(self.fixture)
+        if self.open_labels:
+            out["open_labels"] = list(self.open_labels)
+        if self.confirm_labels:
+            out["confirm_labels"] = list(self.confirm_labels)
+        if self.clear:
+            out["clear"] = self.clear
+        if self.mode:
+            out["mode"] = self.mode
         return out
 
 
@@ -142,13 +444,18 @@ class RejectExpect:
     #: 历史：2026-10-13 前本字段只序列化、运行期从不读取（死配置），5xx 因此被误判成 pass。
     http_ok: bool = True
     allow: WriteAllow = WriteAllow()
+    #: 上传（multipart）放行规则，语义同 :class:`AcceptExpect.allow_upload`（rev114）。
+    allow_upload: tuple[WriteAllow, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"api_path_hint": self.api_path_hint,
-                "result_code_not": self.result_code_not,
-                "message_contains": list(self.message_contains),
-                "http_ok": self.http_ok,
-                "allow": self.allow.to_dict()}
+        out: dict[str, Any] = {"api_path_hint": self.api_path_hint,
+                               "result_code_not": self.result_code_not,
+                               "message_contains": list(self.message_contains),
+                               "http_ok": self.http_ok,
+                               "allow": self.allow.to_dict()}
+        if self.allow_upload:
+            out["allow_upload"] = [u.to_dict() for u in self.allow_upload]
+        return out
 
 
 @dataclass(frozen=True)
@@ -168,11 +475,29 @@ class AcceptExpect:
     #: 期望的**成功**业务码（信封 resultCode 等于该值即视为按期望受理）。
     result_code: str = "0"
     allow: WriteAllow = WriteAllow()
+    #: **上传（multipart）放行规则**，2026-10-16 rev114 新增（用户确认）。
+    #: 缺省空 ⇒ multipart 一律阻断（与历史行为逐字一致）。
+    #: 仅当场景**真的需要上传附件**（如必填项就是图片）时显式声明，且必须用
+    #: host + path_prefix + methods 三项收窄到目标上传域，不得写成通配。
+    allow_upload: tuple[WriteAllow, ...] = ()
+    #: 附加写放行规则（2026-10-17 rev115 新增，与 rev114 allow_upload 同款显式声明模式）。
+    #: 动机（TR-476 实测）：Select Address 弹窗的 Google Maps JS 会向
+    #: ``maps.googleapis.com`` 发内部 RPC（GetViewportInfo，POST），不在 allow
+    #: （业务写接口）也不在 allow_upload（multipart）内 ⇒ 被写隔离 abort，
+    #: 地图内部服务初始化失败 ⇒ autocomplete 永远不出候选。此类**非业务写**的
+    #: 第三方依赖必须由场景显式声明（host + path_prefix + methods 三项收窄），
+    #: 不得默认放行。
+    allow_extra: tuple[WriteAllow, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"api_path_hint": self.api_path_hint,
-                "result_code": self.result_code,
-                "allow": self.allow.to_dict()}
+        out: dict[str, Any] = {"api_path_hint": self.api_path_hint,
+                               "result_code": self.result_code,
+                               "allow": self.allow.to_dict()}
+        if self.allow_upload:
+            out["allow_upload"] = [u.to_dict() for u in self.allow_upload]
+        if self.allow_extra:
+            out["allow_extra"] = [u.to_dict() for u in self.allow_extra]
+        return out
 
 
 @dataclass(frozen=True)
@@ -221,6 +546,42 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_allow_upload(raw: Any) -> tuple[tuple[WriteAllow, ...], str]:
+    """解析场景的 ``allow_upload``（**multipart 放行规则**，2026-10-16 rev114）。
+
+    返回 ``(rules, error)``；``error`` 非空 ⇒ 调用方**拒绝该场景**。
+    为什么是"拒绝"而不是"警告后照跑"：放行上传是**安全边界**，写宽了就等于
+    把"未知上传副作用"放进来（历史口径：宁可再生环境失败，也不产生未知写副作用）。
+    因此这里把三个收窄条件全部硬校验：
+    - ``host_suffix`` 必填（不允许不限定主机）；
+    - ``path_prefix`` 必须绝对路径前缀（匹配用的是 ``path.startsWith``）；
+    - ``methods`` 缺省收敛为 ``POST``（上传不会是 GET/PUT）。
+    """
+    if raw in (None, ""):
+        return (), ""
+    if raw == []:
+        return (), ""
+    if not isinstance(raw, list):
+        return (), f"allow_upload 必须是数组（收到 {type(raw).__name__}）"
+    rules: list[WriteAllow] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            return (), f"allow_upload[{index}] 必须是对象（收到 {type(item).__name__}）"
+        host = str(item.get("host_suffix") or item.get("host") or "").strip()
+        if not host:
+            return (), f"allow_upload[{index}] 缺少 host_suffix（上传放行不允许不限定主机）"
+        if len(host.split(".")) < 2:
+            return (), (f"allow_upload[{index}].host_suffix={host!r} 过宽"
+                        "（至少形如 example.com）")
+        prefix = str(item.get("path_prefix") or "").strip()
+        if not prefix.startswith("/"):
+            return (), (f"allow_upload[{index}].path_prefix 必须是绝对路径前缀"
+                        f"（收到 {prefix!r}；写隔离按 path.startsWith 匹配）")
+        methods = tuple(m.upper() for m in _as_str_list(item.get("methods"))) or ("POST",)
+        rules.append(WriteAllow(host_suffix=host, path_prefix=prefix, methods=methods))
+    return tuple(rules), ""
 
 
 def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -282,6 +643,21 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
                 if action not in SETUP_ACTIONS:
                     bad_step = f"action {action!r} 不在 {sorted(SETUP_ACTIONS)}"
                     break
+                step_fixture: dict[str, Any] = {}
+                if action == "upload":
+                    # 上传是**产生外部副作用**的动作：宁可在计划期拒绝，也不允许
+                    # "配了 upload 但没有夹具"落到执行期变成一次必然失败的 no-op。
+                    raw_fix = step.get("fixture")
+                    if not isinstance(raw_fix, dict) \
+                            or not str(raw_fix.get("b64") or "").strip():
+                        bad_step = ("upload 步骤缺少 fixture.b64（内联夹具的 base64 字节）"
+                                    "；平台不读本地路径——路径在别的机器上不存在")
+                        break
+                    step_fixture = {
+                        "name": str(raw_fix.get("name") or "upload.bin"),
+                        "mime": str(raw_fix.get("mime") or "application/octet-stream"),
+                        "b64": str(raw_fix.get("b64") or "").strip(),
+                    }
                 steps.append(SetupStep(
                     action=action,
                     labels=tuple(_as_str_list(step.get("labels"))),
@@ -290,6 +666,11 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
                     field=str(step.get("field") or ""),
                     value=str(step.get("value") or ""),
                     ms=_as_int(step.get("ms"), 0),
+                    fixture=step_fixture,
+                    open_labels=tuple(_as_str_list(step.get("open_labels"))),
+                    confirm_labels=tuple(_as_str_list(step.get("confirm_labels"))),
+                    clear=str(step.get("clear") or ""),
+                    mode=str(step.get("mode") or ""),
                 ))
             if bad_step:
                 rejects.append({"scenario_id": sid, "reason": "setup 步骤非法",
@@ -326,6 +707,20 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
                     continue
                 methods = tuple(m.upper() for m in _as_str_list(raw_allow.get("methods"))) \
                     or ("POST", "PUT", "PATCH")
+                upload_rules, upload_err = _parse_allow_upload(raw_accept.get("allow_upload"))
+                if upload_err:
+                    rejects.append({
+                        "scenario_id": sid, "reason": "expect_accept.allow_upload 非法",
+                        "detail": upload_err,
+                    })
+                    continue
+                extra_rules, extra_err = _parse_allow_upload(raw_accept.get("allow_extra"))
+                if extra_err:
+                    rejects.append({
+                        "scenario_id": sid, "reason": "expect_accept.allow_extra 非法",
+                        "detail": extra_err,
+                    })
+                    continue
                 scenarios.append(NegativeScenario(
                     scenario_id=sid,
                     rule_ref=str(entry.get("rule_ref") or ""),
@@ -341,6 +736,8 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
                             path_prefix=path_prefix,
                             methods=methods,
                         ),
+                        allow_upload=upload_rules,
+                        allow_extra=extra_rules,
                     ),
                     case_id=str(entry.get("case_id") or ""),
                     rule_id=str(entry.get("rule_id") or ""),
@@ -386,6 +783,13 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
                 continue
             methods = tuple(m.upper() for m in _as_str_list(raw_allow.get("methods"))) \
                 or ("POST", "PUT", "PATCH")
+            upload_rules, upload_err = _parse_allow_upload(raw_expect.get("allow_upload"))
+            if upload_err:
+                rejects.append({
+                    "scenario_id": sid, "reason": "expect_reject.allow_upload 非法",
+                    "detail": upload_err,
+                })
+                continue
 
             scenarios.append(NegativeScenario(
                 scenario_id=sid,
@@ -402,6 +806,7 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
                         path_prefix=path_prefix,
                         methods=methods,
                     ),
+                    allow_upload=upload_rules,
                 ),
                 case_id=str(entry.get("case_id") or ""),
                 rule_id=str(entry.get("rule_id") or ""),
@@ -411,6 +816,433 @@ def parse_negative_scenarios(raw: Any) -> tuple[list[dict[str, Any]], list[dict[
             rejects.append({"scenario_id": sid, "reason": "场景解析异常",
                             "detail": f"{type(exc).__name__}: {exc}"[:200]})
     return scenarios, rejects
+
+
+# ==========================================================================
+# 运行期唯一化（A2 / RUN_TAG，2026-10-20）
+# ==========================================================================
+#: 配置侧占位符：任何 ``setup`` 步骤 ``value`` 里出现它，**运行期**替换成本次运行的
+#: 唯一标记（``MMDDHHMMSS`` + 3 位随机，共 13 字符）。
+#:
+#: 为什么必须是「运行期」而不是「编译期」：``FORM_PLAN`` 是写进产物的**快照**，
+#: 编译期定死等于每次跑都用同一个编号——那正是要修的病（二次提交被服务端按
+#: 唯一约束拒绝 ``20003 编号已存在``，而期望受理的通道会把它判成「疑似缺陷坐实」，
+#: 属**假缺陷**）。占位符原样留在快照里，执行器每次运行自己算新值。
+RUN_TAG_TOKEN = "{{RUN_TAG}}"
+
+#: 「疑似业务唯一编码」的固定值：含 ≥4 位连续数字**且**至少 2 个字母。
+#: **只用于诊断**——列出"这个场景的数据没唯一化"，绝不自动改写（猜错字段比报出来更糟）。
+#: 为什么要求字母：TR-733 实测，店鋪電話 ``12345678`` 被纯数字规则命中，
+#: 于是每次运行都报一条 RUN_TAG_GAP —— 噪声会让人把这条诊断整体忽略，
+#: 而它恰恰是"重复运行必然 20003"的唯一提示渠道。
+_FIXED_CODE_DIGITS_RE = re.compile(r"\d{4,}")
+_FIXED_CODE_LETTERS_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def run_tag_usage(scenarios: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """统计计划里有多少 ``setup`` 步骤用到 ``{{RUN_TAG}}``。
+
+    回执口径：``enabled`` 真 = 本次产物里至少一处值会在运行时唯一化；
+    ``fields`` 供运行期 ``RUN_TAG`` 行自证"改了哪几个字段"，避免只看到
+    "用了 tag"却不知道该去核对哪个提交字段。
+    """
+    fields: list[str] = []
+    steps = 0
+    for sc in scenarios or []:
+        for step in (sc.get("setup") or []):
+            value = str((step or {}).get("value") or "")
+            if RUN_TAG_TOKEN not in value:
+                continue
+            steps += 1
+            name = str((step or {}).get("field") or "")
+            if name and name not in fields:
+                fields.append(name)
+    return {"enabled": bool(steps), "fields": fields, "steps": steps}
+
+
+def run_tag_gaps(scenarios: Iterable[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """列出**真实落库**场景里"值看着是固定编码、却没写占位符"的字段。
+
+    判据保守：只有 ``expect_accept``（正路径 = 会真的写库）+ 值里同时有 ≥4 位连续数字
+    与 ≥2 个字母才入选（纯数字如店鋪電話 ``12345678`` 是业务值，不是唯一编码）。
+    命中不代表一定冲突，只代表**不可重复运行**——这正是历史缺陷
+    （二次跑 ``20003``）的成因，必须能在编译回执与运行日志里看见。
+    """
+    out: list[dict[str, str]] = []
+    for sc in scenarios or []:
+        if not ((sc.get("expect_accept") or {}).get("api_path_hint")):
+            continue
+        for step in (sc.get("setup") or []):
+            step = step or {}
+            if str(step.get("action") or "") not in {"fill", "type"}:
+                continue
+            value = str(step.get("value") or "")
+            if not value or RUN_TAG_TOKEN in value:
+                continue
+            if not _FIXED_CODE_DIGITS_RE.search(value):
+                continue
+            if not _FIXED_CODE_LETTERS_RE.search(value):
+                continue
+            out.append({
+                "scenario_id": str(sc.get("scenario_id") or ""),
+                "field": str(step.get("field") or ""),
+                "value": value[:60],
+                "hint": f"固定值疑似唯一编码：重复运行会被服务端唯一约束拒绝；"
+                        f"改为前缀 + {RUN_TAG_TOKEN}",
+            })
+    return out[:12]
+
+
+# ==========================================================================
+# 「列表域」字段与列契约（N3，2026-10-18）
+# ==========================================================================
+# 背景：文档里存在一类"字段名"，它其实不是表单控件，而是**列表区整体期望**：
+#   列表顯示欄位（列清单）/ 列表排序 / 列表搜索 / 筛选 / 分页。
+# 现状（真实库取证，2026-10-18）：
+#   · 这类用例在库里**断言数为 0**（72 条「列表/筛选/分页」人工用例 72/72 无断言，
+#     12 条"列表零检查"资产的用例同样 assertions=0，只有 requirement_rule.rule 里的列名文字）；
+#   · 因此给它们配 `fields` 定位器**一条都救不回来**——缺的不是定位器，是"规则体 → 列表检查"
+#     的生成器。历史 skip 原因统一写"无定位器"，把人引向错误的修法（配定位器）。
+# 这里做两件事（都不改变执行能力，只让口径正确）：
+#   1) 把列表域字段单独识别出来，skip 原因与 `scope` 如实标注；
+#   2) 定义列契约 `field_locators.columns`，并兼容 CS 侧的旧键（`columns_22` /
+#      `requirement_fields_16`），供**将来**的列表检查生成器与预览接口共用一份解析。
+#      ★ 本期**没有**列表检查执行器：`columns` 只用于诊断与配置校对，
+#      不会凭空产生检查（避免"配了就以为已经验了"）。
+#: 列表域字段的**前缀**：这类名字一定是"整块列表"的期望（列清单/分页）。
+_LIST_SCOPE_PREFIXES: tuple[str, ...] = ("列表", "分頁", "分页")
+#: 列表域字段的**整名**：筛选/排序/搜索本身就是动作，不会再带控件后缀。
+#: 单独列整名而不是做包含匹配，是因为真实配置里存在表单控件
+#: ``地圖搜索框`` / ``筛选值`` / ``搜索關鍵詞``（148 个子功能的定位器实测），
+#: 包含匹配会把它们误判成"列表域"，从而把"缺定位器"错报成"缺生成器"。
+_LIST_SCOPE_EXACT: frozenset[str] = frozenset({
+    "篩選", "筛选", "篩選區", "筛选区", "篩選條件", "筛选条件",
+    "排序", "搜索", "搜尋", "搜索區", "排序規則",
+})
+
+
+def is_list_scope_field(name: Any) -> bool:
+    """字段名是否属于"列表域"（列清单/筛选/分页），而非表单控件。
+
+    判据刻意收紧（前缀 + 整名），不做关键词包含：
+    ``筛选值`` / ``搜索關鍵詞`` / ``地圖搜索框`` 都是**表单控件**，
+    把它们归到列表域会掩盖真正的"缺定位器"。
+    """
+    text = str(name or "").strip()
+    if not text:
+        return False
+    if text in _LIST_SCOPE_EXACT:
+        return True
+    return text.startswith(_LIST_SCOPE_PREFIXES)
+
+
+def parse_columns(locators: dict[str, Any] | None) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """把列配置归一成一份**契约**，返回 ``(契约|None, 被拒条目)``。
+
+    契约形状（将来列表检查生成器的唯一输入）::
+
+        {"table_scope": ".ant-table-thead th",
+         "items": [{"key": "工单编号", "header_text": "Case No.", "aliases": ["工单编号"]}],
+         "source": "explicit" | "legacy_cs", "notes": [...], "column_count": 22}
+
+    支持的输入（按优先级）：
+      1. ``columns``：显式契约。``{"table_scope": str, "items": [...]}``；
+         ``items`` 里的条目可以是字符串（等价于只声明 header_text）。
+      2. 旧 CS 键：``columns_22``（表头文本数组）+ ``requirement_fields_16``
+         （中文名 → 英文表头）。二者合并成 key=中文名、header_text=英文表头；
+         只有表头没有中文名时 key 取表头本身。
+      3. ``sortable_columns``：是**文字说明**（"实测 22 列表头全部 sorter=true"），
+         解析不出列，原样记进 ``notes``，不冒充列。
+
+    畸形输入只产生 rejects、不抛异常（配置错误不得阻断编译）。
+    """
+    loc = locators if isinstance(locators, dict) else {}
+    rejects: list[dict[str, Any]] = []
+    notes: list[str] = []
+
+    # 旧 CS 的列键挂在 ``custom_config`` 顶层，**不在** ``field_locators`` 里
+    # （真实库取证：columns_22/requirement_fields_16/sortable_columns 只出现在
+    #  WSF-48576974 的 custom_config 顶层）。调用方用 ``columns_legacy`` 把它们带进来，
+    # 这样编译链与预览能读到同一份配置，而**不需要**改库、也不改变配置形状。
+    legacy = loc.get("columns_legacy") if isinstance(loc.get("columns_legacy"), dict) else {}
+
+    def _pick(key: str) -> Any:
+        if key in loc:
+            return loc[key]
+        return legacy.get(key)
+
+    def _norm_item(entry: Any, *, key_hint: str = "") -> dict[str, Any] | None:
+        if isinstance(entry, str):
+            text = entry.strip()
+            if not text:
+                return None
+            return {"key": key_hint or text, "header_text": text,
+                    "aliases": [key_hint] if key_hint and key_hint != text else []}
+        if not isinstance(entry, dict):
+            rejects.append({"reason": "列条目必须是字符串或对象",
+                            "detail": f"got {type(entry).__name__}"})
+            return None
+        header = str(entry.get("header_text") or entry.get("header") or entry.get("text") or "").strip()
+        key = str(entry.get("key") or entry.get("field") or key_hint or header).strip()
+        if not header and not key:
+            rejects.append({"reason": "列条目缺少 header_text/key", "detail": ""})
+            return None
+        aliases = _as_str_list(entry.get("aliases"))
+        if key and key != header:
+            aliases = aliases + [key]
+        return {"key": key or header, "header_text": header or key,
+                "aliases": list(dict.fromkeys(a for a in aliases if a))}
+
+    items: list[dict[str, Any]] = []
+    source = ""
+    #: 旧 CS 的表头数组键名带列数后缀（``columns_22``），后缀是**唯一线索**，
+    #: 不能写死——同一个项目里不同子功能的列数不同。
+    legacy_columns_key = next(
+        (str(k) for k in list(loc) + list(legacy) if re.match(r"^columns_\d+$", str(k))),
+        "",
+    )
+    raw = loc.get("columns")
+    if isinstance(raw, dict) or isinstance(raw, list):
+        source = "explicit"
+        table_scope = ""
+        entries: Any = raw
+        if isinstance(raw, dict):
+            table_scope = str(raw.get("table_scope") or raw.get("scope") or "").strip()
+            entries = raw.get("items") or raw.get("columns") or []
+        if not isinstance(entries, list):
+            rejects.append({"reason": "columns.items 必须是数组",
+                            "detail": type(entries).__name__})
+            entries = []
+        for entry in entries:
+            item = _norm_item(entry)
+            if item:
+                items.append(item)
+    elif legacy_columns_key or isinstance(_pick("requirement_fields_16"), dict):
+        # CS 侧旧键：表头数组 + 中文名映射（键名带列数后缀，属一次性命名，不能当 schema 用）
+        source = "legacy_cs"
+        cn_to_header = _pick("requirement_fields_16")
+        cn_to_header = cn_to_header if isinstance(cn_to_header, dict) else {}
+        headers = [h for h in _as_str_list(_pick(legacy_columns_key) if legacy_columns_key else None)]
+        header_to_cn: dict[str, str] = {}
+        for cn, header in cn_to_header.items():
+            header_text = str(header or "").strip()
+            if header_text and header_text not in header_to_cn:
+                header_to_cn[header_text] = str(cn or "").strip()
+        for header in headers:
+            item = _norm_item(header, key_hint=header_to_cn.get(header, ""))
+            if item:
+                items.append(item)
+        # 映射里有、表头数组里没有的列：不静默丢，登记到 notes
+        missing = [h for h in header_to_cn if h not in headers]
+        if missing:
+            notes.append(
+                "requirement_fields_16 中有 %d 列不在 %s：%s"
+                % (len(missing), legacy_columns_key or "表头数组", "、".join(missing[:8]))
+            )
+        notes.append(
+            f"来源为 CS 一次性键 {legacy_columns_key or 'requirement_fields_16'}"
+            "/requirement_fields_16（非 schema），建议迁入 columns"
+        )
+
+    sortable = _pick("sortable_columns")
+    if isinstance(sortable, str) and sortable.strip():
+        notes.append(f"sortable_columns 为文字说明、未解析成列：{sortable.strip()[:80]}")
+
+    if not items:
+        return None, rejects
+
+    # 去重：同一 header_text 只保留一次（旧键里中英文可能重复登记同一列）
+    deduped: list[dict[str, Any]] = []
+    seen_headers: set[str] = set()
+    for item in items:
+        if item["header_text"] in seen_headers:
+            continue
+        seen_headers.add(item["header_text"])
+        deduped.append(item)
+
+    # 旧键名自带列数（``columns_22``）——它与实际解析出的列数**必须对得上**，
+    # 对不上说明配置本身漂移了（真实库实测：WSF-48576974 的 columns_22 实含 23 项，
+    # 多出的是"（勾选列）"）。不报出来，后面按 22 列做断言就会错位。
+    if source == "legacy_cs" and legacy_columns_key:
+        declared = re.match(r"^columns_(\d+)$", legacy_columns_key)
+        if declared:
+            expected = int(declared.group(1))
+            if expected != len(deduped):
+                notes.append(
+                    f"键名 {legacy_columns_key} 声明 {expected} 列，实际解析出 {len(deduped)} 列"
+                    f"（差额 {len(deduped) - expected:+d}），请核对是否含勾选列/表头重复"
+                )
+
+    table_scope = ""
+    if isinstance(raw, dict):
+        table_scope = str(raw.get("table_scope") or raw.get("scope") or "").strip()
+    if not table_scope:
+        inner = loc.get("locators") if isinstance(loc.get("locators"), dict) else {}
+        legacy_inner = legacy.get("locators") if isinstance(legacy.get("locators"), dict) else {}
+        table_scope = str(
+            inner.get("table_thead") or legacy_inner.get("table_thead")
+            or loc.get("table_thead") or legacy.get("table_thead") or ""
+        ).strip()
+
+    # 硬门禁开关：只有配置**显式**要求时才因列头不一致判失败。
+    # 默认不判失败——配置列数与真实表头尚未对齐（见上面 columns_22 的列数漂移），
+    # 一开就判会把配置问题变成整批假失败（同 N3 "缺规则化" 的老坑）。
+    # 两处都认：`columns.assert_on_mismatch`（与 items 同级，显式契约的自然位置）
+    # 与 `field_locators.assert_on_mismatch`（旧键/顶层开关）。
+    _assert_flag = _pick("assert_on_mismatch")
+    if _assert_flag is None and isinstance(raw, dict):
+        _assert_flag = raw.get("assert_on_mismatch")
+    return {
+        "table_scope": table_scope,
+        "items": deduped,
+        "column_count": len(deduped),
+        "source": source,
+        "notes": notes,
+        **({"assert_on_mismatch": True} if _assert_flag is True else {}),
+    }, rejects
+
+
+# ==========================================================================
+# 「列表可见」断言（``extra_config.list_checks``，2026-10-16 新增）
+# ==========================================================================
+# 背景（YL 三模块覆盖评估）：三条「新建-必填全填-真实落库**并在列表可见**」用例，
+# 【预期结果】写的是"列表中可查询到"，但正式通道只机检了服务端 resultCode=0 ——
+# 列表可见性一直靠人工探针（TR-424/425/426/429）补验，不在回归里。
+#
+# 本节把「写入成功后到列表页按值检索、确认记录可见」做成**独立阶段**，
+# 与 ``negative_scenarios`` 同形（配置驱动、独立阶段、复用既有原语）：
+# 写请求发生在负路径阶段，因此本阶段排在它**之后**执行。
+#
+# ★ 与 negative_scenarios 一致的两条口径：
+#   1) 被拒配置**不静默丢弃**（带 ``value`` 与 ``reason``，运行期以 ``[list-skip]`` 输出）；
+#   2) 非法配置不阻断编译（最外层 try/except，畸形输入只产生一条拒绝记录）。
+LIST_CHECK_EXPECTS: frozenset[str] = frozenset({"found", "absent"})
+
+
+def parse_list_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """解析 ``extra_config.list_checks``，返回 ``(可用检查, 被拒检查)``。
+
+    单条配置字段：
+      ``name``                断言名（缺省由 value 生成）
+      ``value``               **必填**：要在列表里检索到的记录标识（如店鋪編號/商品編碼）
+      ``list_url``            列表页直链（缺省回退 ``locators.list_url``；两者都空 → 拒绝）
+      ``search_placeholder``  搜索框 placeholder 候选（数组或字符串；可空 → 退化为翻页扫描）
+      ``expect``              ``found``（缺省）/ ``absent``
+      ``case_id`` / ``rule_id``  证据归属
+      ``max_pages``           翻页上限（缺省 3）
+    """
+    if raw is None or raw == "":
+        return [], []
+    if not isinstance(raw, list):
+        return [], [{"value": "", "reason": "list_checks 必须是数组",
+                     "detail": type(raw).__name__}]
+
+    items: list[dict[str, Any]] = []
+    rejects: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, entry in enumerate(raw):
+        try:
+            if not isinstance(entry, dict):
+                rejects.append({"value": "", "reason": "检查必须是对象",
+                                "detail": f"index={index}"})
+                continue
+            value = str(entry.get("value") or "").strip()
+            if not value:
+                rejects.append({"value": "", "reason": "缺少 value（要检索的记录标识）",
+                                "detail": f"index={index}"})
+                continue
+            expect = str(entry.get("expect") or "found").strip().lower()
+            if expect not in LIST_CHECK_EXPECTS:
+                rejects.append({"value": value, "reason": "expect 非法",
+                                "detail": f"{expect!r}，允许：{sorted(LIST_CHECK_EXPECTS)}"})
+                continue
+            key = (value, expect)
+            if key in seen:
+                rejects.append({"value": value, "reason": "同一 value+expect 重复",
+                                "detail": f"index={index}"})
+                continue
+            phs = _as_str_list(entry.get("search_placeholder"))
+            items.append({
+                "name": str(entry.get("name") or f"list_visible:{value}"),
+                "value": value,
+                "expect": expect,
+                "list_url": str(entry.get("list_url") or ""),
+                "search_placeholder": phs,
+                "max_pages": max(1, _as_int(entry.get("max_pages"), 3)),
+                "case_id": str(entry.get("case_id") or ""),
+                "rule_id": str(entry.get("rule_id") or ""),
+                "rule_ref": str(entry.get("rule_ref") or "列表可见"),
+            })
+            seen.add(key)
+        except Exception as exc:  # noqa: BLE001  配置畸形不得阻断编译
+            rejects.append({"value": "", "reason": "检查解析异常",
+                            "detail": f"{type(exc).__name__}: {exc}"[:200]})
+    return items, rejects
+
+
+#: ``pre_actions`` 的硬上限：配置写错时不能把整批运行拖死（每项都在检查循环里同步等待）。
+PRE_ACTION_MAX_TIMES = 5
+PRE_ACTION_MAX_WAIT_MS = 10000
+PRE_ACTION_DEFAULT_WAIT_MS = 800
+
+
+def parse_pre_actions(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """解析 ``field_locators.pre_actions``：字段检查**之前**必须完成的一次点击。
+
+    为什么需要它（2026-10-20，TR-752/753 实测 + 只读探针复核）：问卷「题目」区的输入框
+    在点「新增题目」之前**根本不存在**（探针：点击前 `[class*=questionCard]` = 0 个，
+    页面上只有一个 `#sbjTypeName`）。定位器
+    ``[class*=questionCard] input[maxlength="50"]`` 本身是对的 —— 缺的是"让这块区域
+    渲染出来"的那一次点击。旧口径下这类用例只能记 ``unverified``，
+    与"选择器配错"在回执上**完全一样**，配置方会反复去改本来就正确的定位器。
+
+    单条配置：
+      ``labels``      **必填**：可点击文本候选（数组或字符串），按顺序试，命中即停
+      ``for_fields``  可选：只在"作用到这些字段"的检查要执行前触发；缺省＝首条检查前一次
+      ``times``       可选：连点次数（1–``PRE_ACTION_MAX_TIMES``，缺省 1）
+      ``wait_ms``     可选：每次点击后等待毫秒（0–``PRE_ACTION_MAX_WAIT_MS``，缺省 800）
+      ``reason``      可选：人读的动机（进 ``PRE_ACTION`` 日志，日后据此判断该不该保留）
+
+    返回 ``(可用动作, 被拒动作)``。被拒项**不阻断编译**，但要进计划并在运行期日志可见——
+    "配了但没生效"与"没配"必须能分开。
+    """
+    if raw is None or raw == "":
+        return [], []
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return [], [{"labels": [], "reason": "pre_actions 必须是数组",
+                     "detail": type(raw).__name__}]
+
+    actions: list[dict[str, Any]] = []
+    rejects: list[dict[str, Any]] = []
+    for index, entry in enumerate(raw):
+        try:
+            if isinstance(entry, str):
+                entry = {"labels": [entry]}
+            if not isinstance(entry, dict):
+                rejects.append({"labels": [], "reason": "前置动作必须是对象或字符串",
+                                "detail": f"index={index}"})
+                continue
+            labels = _as_str_list(entry.get("labels") or entry.get("click"))
+            labels = [lab for lab in labels if lab]
+            if not labels:
+                rejects.append({"labels": [], "reason": "缺少 labels（可点击文本）",
+                                "detail": f"index={index}"})
+                continue
+            scope_fields = _as_str_list(entry.get("for_fields"))
+            actions.append({
+                "labels": labels,
+                "for_fields": [f for f in scope_fields if f],
+                "times": max(1, min(PRE_ACTION_MAX_TIMES, _as_int(entry.get("times"), 1))),
+                "wait_ms": max(0, min(PRE_ACTION_MAX_WAIT_MS,
+                                      _as_int(entry.get("wait_ms"), PRE_ACTION_DEFAULT_WAIT_MS))),
+                "reason": str(entry.get("reason") or "").strip()[:200],
+            })
+        except Exception as exc:  # noqa: BLE001  配置畸形不得阻断编译
+            rejects.append({"labels": [], "reason": "前置动作解析异常",
+                            "detail": f"{type(exc).__name__}: {exc}"[:200]})
+    return actions, rejects
 
 
 @dataclass
@@ -564,11 +1396,32 @@ def render_coverage_snippet(*, scope_var: str = "appScope",
     """
     return f"""
   // ---- 编译覆盖度（来自文档生成的用例/规则；软校验不判定失败）----
+  // rev116（2026-10-19，实测 `店鋪名稱(CN）` 命中 0/3）：文档标签与页面文案常常只差
+  // **全/半角括号、冒号、空格**（`店鋪名稱(CN）` vs `店鋪名稱（CN）`、
+  // `營業時間：開始` vs `營業時間: 開始`）。直接 getByText(label) 做精确子串匹配会 0 命中，
+  // 把"标签写法差异"误读成"字段不存在"。这里逐字建正则：括号/冒号放宽成字符类，
+  // 字与字之间允许任意空白，末尾必填星号视为 UI 标记去掉；
+  // 并把**未命中的标签名**打出来——旧输出只有 `0/3`，无法定位是哪几个。
+  const __labelRe = (label: string): RegExp => {{
+    const tokens: string[] = [];
+    for (const ch of label) {{
+      if (/\\s/.test(ch)) continue;  // 空白统一交给 join 处的 \\s*
+      if (ch === '(' || ch === '（') tokens.push('[（(]');
+      else if (ch === ')' || ch === '）') tokens.push('[)）]');
+      else if (ch === ':' || ch === '：') tokens.push('[：:]');
+      else tokens.push(ch.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&'));
+    }}
+    if (tokens.length && tokens[tokens.length - 1] === '\\\\*') tokens.pop();
+    return new RegExp(tokens.join('\\\\s*'));
+  }};
   let __labelHits = 0;
+  const __labelMiss: string[] = [];
   for (const label of {manifest_var}.field_labels) {{
     try {{
-      if (await {scope_var}.getByText(label, {{ exact: false }}).first().count()) {{
+      if (await {scope_var}.getByText(__labelRe(label)).first().count()) {{
         __labelHits += 1;
+      }} else {{
+        __labelMiss.push(label);
       }}
     }} catch {{
       // 单个标签查询失败不影响整体
@@ -585,6 +1438,8 @@ def render_coverage_snippet(*, scope_var: str = "appScope",
     soft_label_checks: {manifest_var}.soft_assertion_count,
     field_labels_found: __labelHits,
     field_labels_total: {manifest_var}.field_labels.length,
+    //: 未命中的标签名（最多 8 个）：区分"页面没有该字段"与"标签写法不一致"
+    field_labels_missing: __labelMiss.slice(0, 8),
     sample_rule_ids: {manifest_var}.rule_ids.slice(0, 5),
   }}));
 """
@@ -867,7 +1722,27 @@ REGISTRATION_META_KEYS: tuple[str, ...] = ("template_key", "registration_id", "s
 #: ``locator_keys`` 会让配置方以为多注册了一个叫这个名字的定位器（实测于
 #: ``test_resolve_preview_exposes_negative_scenarios_and_rejects``）。
 #: 执行侧做同类剔除时必须用**这个**集合，否则两端又会分叉。
-NON_LOCATOR_CONFIG_KEYS: tuple[str, ...] = REGISTRATION_META_KEYS + ("negative_scenarios",)
+#: 预览接口的"定位器键"列表必须把这些也剔掉——把 ``negative_scenarios`` / ``list_checks``
+#: 列进 locator_keys 会让"这是定位器"的语义失真（它们是行为配置，不是选择器）。
+NON_LOCATOR_CONFIG_KEYS: tuple[str, ...] = REGISTRATION_META_KEYS + ("negative_scenarios",
+                                                                     "list_checks",
+                                                                     # rev119：字段级上传放行
+                                                                     # 是**行为配置**，不是选择器；
+                                                                     # 列进 locator_keys 会让配置方
+                                                                     # 以为多注册了一个定位器。
+                                                                     "upload_allow",
+                                                                     # rev134：别名表与默认值声明同样是
+                                                                     # 行为配置——不进定位器键清单，否则
+                                                                     # 预览会显示"配了 9 个定位器"，其中
+                                                                     # 两个其实是 `aliases`/`defaults`。
+                                                                     "aliases",
+                                                                     "defaults",
+                                                                     # rev137：前置动作同样是**行为配置**
+                                                                     #（"检查前先点一下"），不是选择器。
+                                                                     # 列进 locator_keys 会让配置方
+                                                                     # 以为多注册了一个叫
+                                                                     # `pre_actions` 的定位器。
+                                                                     "pre_actions")
 
 
 def merge_registered_locators(row: Any) -> dict[str, Any]:
@@ -988,6 +1863,29 @@ def build_form_plan(
     field_modes = loc.get("field_modes") or {}
     default_mode = loc.get("default_field_mode") or {}
     upload_fields = loc.get("upload_fields") or {}
+    #: 字段别名（2026-10-17，P1-②）：PRD 文档字段名常带英文前缀（如
+    #: ``Item Code商品編碼``），与定位器键（``商品編碼``）精确匹配不上而全部
+    #: 落入 pending_locator。别名表由定位器配置显式声明（``aliases``:
+    #: 文档字段名 → 定位器键），**不做模糊自动匹配**——避免跨业务套用。
+    aliases = loc.get("aliases") or {}
+    #: 别名命中流水（rev134）：别名表配了不等于生效——键名拼错、目标键不存在都会
+    #: 静默退化成"仍无定位器"。这里把**真实发生的改写**记下来，回执里可核对
+    #: "配了 N 条、命中 M 条"，避免用"配置存在"冒充"已生效"。
+    alias_hits: dict[tuple[str, str], int] = {}
+    #: 列契约（N3，2026-10-18）：与预览接口共用**同一个**解析函数。
+    #: 本期只用于诊断/配置校对，不产生检查（尚无列表检查执行器）。
+    columns_contract, column_rejects = parse_columns(loc)
+
+    def _resolve_field_name(name: str) -> str:
+        """文档字段名 → 定位器键。仅按**显式别名表**解析，不做模糊匹配。"""
+        if not name or name in fields:
+            return name
+        target = aliases.get(name) if isinstance(aliases, dict) else None
+        if isinstance(target, str) and target in fields:
+            key = (name, target)
+            alias_hits[key] = alias_hits.get(key, 0) + 1
+            return target
+        return name
 
     wants = _visibility_wants(manifest)
     default_state = _default_state(loc)
@@ -1049,35 +1947,110 @@ def build_form_plan(
             state[field] = option
         check = {"type": "visibility", "field": field, "option": option,
                  "expect_labels": toggle.get("expect_labels") or [], "mode": mode,
-                 "rule": "条件显示"}
+                 "rule": "条件显示",
+                 # R5（2026-10-17）：与 default_selected 同口径标来源。否则无 owner 的
+                 # 切换检查在台账里既无 case_id 又无 source，会被判成"未归属"并每次报
+                 # 假告警（实测 TR-697 的 2 条 visibility:* 即如此）。
+                 "source": "locator_config"}
         owners = owners_for(state, check["expect_labels"])
         if owners:
             check["owners"] = owners
         toggle_checks.append(check)
 
     for case in manifest.get("cases") or []:
-        field = case.get("field") or ""
-        if not field:
+        # ---- R1（2026-10-17）：字段**逐断言**解析 ----
+        # 历史实现只取 ``rule.field`` 一个字段，于是「同一条用例的多个断言作用于
+        # 不同字段」时只有那个字段能落地，其余要么错配、要么整条用例被跳过。
+        # 实测本项目库内 **1016/1016 条断言都自带 field**，编译器一个都没用上。
+        # 现在：断言自身的 field 优先，规则字段仅在断言缺 field 时兜底。
+        case_field = _resolve_field_name(case.get("field") or "")
+        planned: list[tuple[dict[str, Any], str]] = [
+            (assertion, _resolve_field_name(str(assertion.get("field") or "") or case_field))
+            for assertion in (case.get("assertions") or [])
+        ]
+
+        def landed(name: str) -> bool:
+            return bool(name) and (name in fields or name in upload_fields)
+
+        if not any(name for _a, name in planned):
+            # 没有断言 ⇒ 叙述型用例，静默跳过（本来就没有可执行内容）。
+            # 但**有断言却没字段**不能静默（2026-10-17 补）：那说明断言写坏了，
+            # 静默会让它混进"零检查"里，审计时无从下手。
+            if planned:
+                skipped.append({
+                    "field": "",
+                    "reason": "断言缺少 field（无法确定作用于哪个控件）",
+                    "case_id": case.get("identifier") or "",
+                    "rule_id": case.get("rule_id") or "",
+                    "kinds": sorted({
+                        str(a.get("kind") or "") for a, _f in planned if a.get("kind")
+                    }),
+                    "declared_fields": list(fields.keys())[:20],
+                    "suggestions": [],
+                })
+            elif is_list_scope_field(case.get("field")):
+                # N3（2026-10-18）：列表域规则（列清单/筛选/排序/分页）**不是叙述型用例**。
+                # 真实库取证：这类用例 72/72 断言数为 0，规则体里只有列名文字。
+                # 历史实现把它当 narrative 静默吞掉，于是"零检查"既无原因也无归属；
+                # 更要紧的是它会被误读成"配定位器就能修"——列清单不是表单控件，
+                # 补 fields 一条都救不回来，缺的是列表检查生成器。
+                skipped.append({
+                    "field": str(case.get("field") or ""),
+                    "scope": "list",
+                    "reason": (
+                        "列表域规则未生成断言（需列表检查生成器：列头/筛选/分页）；"
+                        "配 fields 定位器无效"
+                    ),
+                    "case_id": case.get("identifier") or "",
+                    "rule_id": case.get("rule_id") or "",
+                    "kinds": [],
+                    "columns_declared": int((columns_contract or {}).get("column_count") or 0),
+                    "declared_fields": list(fields.keys())[:20],
+                    "suggestions": [],
+                })
             continue
-        is_upload = field in upload_fields
-        if field not in fields and not is_upload:
-            # 计划期跳过也必须**可诊断**（实测：字段名差一点时断言会静默不执行，
-            # 运行期又没有现场 —— 三次验收都卡在这里）。给出用例/规则号、
-            # 已声明的字段名与近似候选，一次就能改对。
+        if not any(landed(name) for _a, name in planned):
+            # 一条都落不了地 → 整条记一次（保留既有的可诊断信息）
+            probe_field = next(name for _a, name in planned if name)
+            list_scope = is_list_scope_field(probe_field)
             skipped.append({
-                "field": field,
-                "reason": "无定位器",
+                "field": probe_field,
+                "scope": "list" if list_scope else "form",
+                "reason": (
+                    "列表域字段无执行通道（需列契约 + 列表检查生成器，配 fields 无效）"
+                    if list_scope else "无定位器"
+                ),
                 "case_id": case.get("identifier") or "",
                 "rule_id": case.get("rule_id") or "",
                 "kinds": sorted({
                     str(a.get("kind") or "")
-                    for a in (case.get("assertions") or []) if a.get("kind")
+                    for a, _f in planned if a.get("kind")
                 }),
+                "columns_declared": int((columns_contract or {}).get("column_count") or 0),
                 "declared_fields": list(fields.keys())[:20],
-                "suggestions": _suggest_fields(field, fields.keys()),
+                "suggestions": [] if list_scope else _suggest_fields(probe_field, fields.keys()),
             })
             continue
-        for assertion in case.get("assertions") or []:
+        for assertion, field in planned:
+            is_upload = field in upload_fields
+            if not landed(field):
+                # 部分落地：只跳过这一条断言，其余断言照常编译
+                list_scope = is_list_scope_field(field)
+                skipped.append({
+                    "field": field,
+                    "scope": "list" if list_scope else "form",
+                    "reason": (
+                        "列表域字段无执行通道（该断言）" if list_scope
+                        else "无定位器（该断言的字段）"
+                    ),
+                    "case_id": case.get("identifier") or "",
+                    "rule_id": case.get("rule_id") or "",
+                    "kinds": [str(assertion.get("kind") or "")],
+                    "columns_declared": int((columns_contract or {}).get("column_count") or 0),
+                    "declared_fields": list(fields.keys())[:20],
+                    "suggestions": [] if list_scope else _suggest_fields(field, fields.keys()),
+                })
+                continue
             kind = assertion.get("kind")
             if kind == "required":
                 # 单选组无法 fill()：其"必填"只能在提交时校验 → **显式记为未验证**，
@@ -1094,6 +2067,28 @@ def build_form_plan(
                     checks.append({"type": "submit_only", "field": field,
                                    "rule": assertion.get("rule", "是否必填=是"),
                                    "reason": "单选组无自由输入：必填只在提交时校验（本版不提交）",
+                                   "rule_id": case.get("rule_id") or "",
+                                   "case_id": case.get("identifier") or ""})
+                    assertion_checks += 1
+                    continue
+                # rev116（2026-10-17，P1-③ 实测 TR-500/TR-505）：勾选组（checkbox 群组，
+                # 如 YL「營業時間」= Mon~Sun 7 个勾选框）无自由输入路径，fill 必然抛
+                # ``Input of type "checkbox" cannot be filled`` → 整条作业 blocked。
+                # 其"必填"只能在提交时校验 ⇒ 显式转负路径提交层，不静默跳过、也不硬失败。
+                if (fields.get(field) or {}).get("kind") in {"checkbox", "checkbox_group", "multi_select"}:
+                    checks.append({"type": "submit_only", "field": field,
+                                   "rule": assertion.get("rule", "是否必填=是"),
+                                   "reason": "勾选组（多选）无自由输入：必填只能在提交时校验（本版不提交，避免创建脏数据）",
+                                   "rule_id": case.get("rule_id") or "",
+                                   "case_id": case.get("identifier") or ""})
+                    assertion_checks += 1
+                    continue
+                # 开关控件（ant-switch）始终有值，"必填"语义不成立；UI 层无法构造空值，
+                # 也不需要提交（提交也造不出空值）⇒ 如实记未验证。
+                if (fields.get(field) or {}).get("kind") == "switch":
+                    checks.append({"type": "submit_only", "field": field,
+                                   "rule": assertion.get("rule", "是否必填=是"),
+                                   "reason": "开关控件始终有值：必填不适用（UI 层无法构造空值）",
                                    "rule_id": case.get("rule_id") or "",
                                    "case_id": case.get("identifier") or ""})
                     assertion_checks += 1
@@ -1123,6 +2118,18 @@ def build_form_plan(
                     check["probe_value"] = probe_value
                     check["probe_note"] = probe_note
                 checks.append(check)
+                assertion_checks += 1
+            elif kind == "enum" and (fields.get(field) or {}).get("kind") in {"checkbox", "checkbox_group", "multi_select"}:
+                # 勾选组的"选项范围"只读可验证（读选项标签/数量），不存在输入非法值的路径。
+                # rev116：YL「營業時間·支持選擇7組」即此类——数量断言由执行器按 rule/data 里的
+                # "N組/組/项" 解析后与真实选项数比对。
+                checks.append({"type": "choice_options", "field": field,
+                               "allowed": assertion.get("allowed") or [],
+                               "data": str(assertion.get("data") or ""),
+                               "expect": assertion.get("expect", ""),
+                               "rule": assertion.get("rule", ""),
+                               "rule_id": case.get("rule_id") or "",
+                               "case_id": case.get("identifier") or ""})
                 assertion_checks += 1
             elif kind == "enum" and (fields.get(field) or {}).get("kind") == "radio":
                 # 单选组的"选项范围"是**只读可验证**的：读选项标签即可判定，
@@ -1262,24 +2269,135 @@ def build_form_plan(
         loc.get("negative_scenarios")
     )
 
+    # 「列表可见」检查（2026-10-16）：与负路径场景**互相独立**，写请求发生在负路径阶段，
+    # 本类检查在其**之后**于列表页执行（见执行器 runListChecks）。
+    list_checks, list_check_rejects = parse_list_checks(loc.get("list_checks"))
+    for item in list_checks:
+        checks.append({
+            "type": "list_visible",
+            "name": item["name"],
+            "value": item["value"],
+            "expect": item["expect"],
+            "list_url": item["list_url"] or str(loc.get("list_url") or ""),
+            "search_placeholder": item["search_placeholder"],
+            "max_pages": item["max_pages"],
+            "rule": item["rule_ref"],
+            "case_id": item["case_id"],
+            "rule_id": item["rule_id"],
+            # 配置驱动：与 default_selected 同口径，单独归类，避免被读成"本该有归属却没有"
+            "source": "locator_config",
+        })
+
+    # N3（2026-10-18）：跳过项按"作用域"分账。`list` = 列表域（列头/筛选/分页），
+    # `form` = 表单控件。两者修法完全不同（前者缺生成器，后者缺定位器配置），
+    # 合并成一个 skipped_count 会让人按错误的路径去修。
+    skipped_by_scope: dict[str, int] = {}
+    for _item in skipped:
+        _scope = str(_item.get("scope") or "form")
+        skipped_by_scope[_scope] = skipped_by_scope.get(_scope, 0) + 1
+    # A1（rev119，2026-10-20）：**字段级上传**的放行声明。
+    #
+    # 与场景通道的分工（实测缺口，2026-10-19 TR e76befd0 / 787e459a）：
+    #   * 场景通道 ``negative_scenarios[].expect_accept.allow_upload`` 只对**规则级场景**
+    #     生效（店铺真实落库那条已配，pass）；
+    #   * 附件类用例（``file_size`` / ``file_format`` → ``upload_file`` 检查）走**字段级**
+    #     通道，压根没有场景 ⇒ 历史上从来拿不到任何 multipart 放行规则，
+    #     上传请求被写隔离 abort，表现为「附件断言恒 unverified / upload_blocked」。
+    #
+    # 这里给子功能一个显式声明口：``field_locators.upload_allow``（数组），
+    # 结构/校验与场景的 ``allow_upload`` **完全复用** :func:`_parse_allow_upload`
+    # （host 必填且至少两段、path_prefix 必须绝对路径、methods 缺省 POST）。
+    # 默认空 ⇒ 与历史行为**逐字一致**（安全边界不因本改动放宽）。
+    upload_allow_rules, upload_allow_error = _parse_allow_upload(loc.get("upload_allow"))
+    upload_check_count = sum(1 for c in checks if c.get("type") == "upload_file")
+    upload_policy_gap = ""
+    if upload_allow_error:
+        # 配了但写错：必须当场可见，否则会退化成"配了但上传照旧被拦"
+        upload_policy_gap = f"upload_allow 配置非法：{upload_allow_error}"
+    elif upload_check_count and not upload_allow_rules:
+        # 有上传断言却没放行：不阻断编译（历史用例不该因此全红），但把后果写进计划，
+        # 由编译回执与运行期 ``UPLOAD_POLICY`` 共同暴露。
+        upload_policy_gap = (
+            f"{upload_check_count} 条上传断言已生成，但未声明 upload_allow："
+            "multipart 会被写隔离阻断，这些断言将恒为 unverified"
+        )
+
+    # rev137：字段检查**前置动作**。与 negative_scenarios 同为"行为配置"，
+    # 但作用点在**客户端只读层**：某块字段区默认不渲染（如问卷的题目卡片要点了
+    # 「新增题目」才出现），不先点一下，再正确的定位器也只会记 unverified。
+    pre_actions, pre_action_rejects = parse_pre_actions(loc.get("pre_actions"))
+
+    plan_extras = {
+        # rev130（F-3）：把**编译期断言总数**带进运行期计划，让对账不必跨快照取值。
+        # 对账恒等式（见 COVERAGE_RECONCILE）：
+        #   planned = executable + skipped_no_locator + unexplained_plan
+        #   emitted = executable + scenario_executed + unexplained_emitted
+        # 旧实现只在 COMPILED_COVERAGE 里给 assertions、在 SUMMARY 里给 total，
+        # 两个数分别属于不同快照，读者无法判断"计划→执行"是否有丢失（实测 TR-747：7/5/6/2）。
+        "planned_assertions": int(manifest.get("assertion_count") or 0),
+        # rev134：别名真实命中流水（文档字段名 → 定位器键 → 解析次数）。
+        # 空列表 = 没配别名或一条都没命中；配置方据此判断"别名到底起没起作用"。
+        "field_alias_applied": [
+            {"from": src, "to": dst, "resolved": times}
+            for (src, dst), times in sorted(alias_hits.items())
+        ],
+        # rev134：**悬空别名**——别名配了但目标键不在定位器表里（拼错/改名后没同步）。
+        # 这种配置在旧实现里完全静默：既不命中、也不告警，看起来像"配了没用"，
+        # 实际是配错了。列出来才知道该改哪一条。
+        "field_alias_dangling": [
+            {"from": str(src), "to": str(dst)}
+            for src, dst in sorted(aliases.items())
+            if isinstance(dst, str) and dst not in fields
+        ] if isinstance(aliases, dict) else [],
+        "skipped_by_scope": skipped_by_scope,
+        # rev137：前置动作随计划下发（渲染期进 FORM_PLAN.pre_actions，见 payload 白名单）。
+        # ``pre_action_rejects`` 必须一起下发——被拒的动作若不进日志，配置方只会看到
+        # "配了、检查还是 unverified"，又开始怀疑定位器。
+        "pre_actions": pre_actions,
+        "pre_action_rejects": pre_action_rejects,
+        # 列契约：本期仅供诊断/配置校对（没有列表检查执行器），不产生检查。
+        "columns": columns_contract,
+        "column_rejects": column_rejects,
+        # 运行期唯一化（A2 / rev124）：配置里写了 ``{{RUN_TAG}}`` 的字段，运行期换成
+        # 本次运行的唯一值；``run_tag_gap`` 列出"真实落库但值固定"的字段（不可重复跑）。
+        "run_tag": run_tag_usage(negative_scenarios),
+        "run_tag_gap": run_tag_gaps(negative_scenarios),
+        # 字段级上传放行（rev119）：由 render_form_executor 合并进 upload_policy
+        "upload_allow": [rule.to_dict() for rule in upload_allow_rules],
+        "upload_check_count": upload_check_count,
+        #: 非空 ⇒ 本次产物存在「上传会被拦」的已知缺口（空串 = 无缺口）
+        "upload_policy_gap": upload_policy_gap,
+    }
+    # `columns_legacy` 只是**解析用的载体**（把 custom_config 顶层的旧列键带进来），
+    # 不该被注入到脚本的 FORM_PLAN.locators 里——渲染前摘掉，避免产物被配置原文撑大。
+    plan_locators = (
+        {k: v for k, v in loc.items() if k != "columns_legacy"}
+        if "columns_legacy" in loc else loc
+    )
+
     if not checks and not negative_scenarios:
         # 没有可执行检查时**不返回 None**：那样会把 skipped 现场一并丢掉
         #（实测：断言字段名与定位器表差一点 → 全部跳过 → 既没有 [plan-skip] 行，
         #  资产审计里也没有 skipped_assertions，只剩一句"无定位器"无从下手）。
         # 这里返回一个 executable=False 的计划：调用方据此**不注入执行器**（避免为 0 条检查
         # 打开表单、把环境问题变成硬失败），但审计与运行期现场仍然完整。
-        if not skipped and not negative_scenario_rejects:
+        if not skipped and not negative_scenario_rejects and not list_check_rejects:
             return None
-        return {"locators": loc, "checks": [], "skipped": skipped,
+        return {"locators": plan_locators, "checks": [], "skipped": skipped,
                 "check_count": 0, "skipped_count": len(skipped),
                 "assertion_check_count": 0, "executable": False,
-                "negative_scenarios": [], "negative_scenario_rejects": negative_scenario_rejects}
-    return {"locators": loc, "checks": checks, "skipped": skipped,
+                "negative_scenarios": [], "negative_scenario_rejects": negative_scenario_rejects,
+                "list_checks": [], "list_check_rejects": list_check_rejects,
+                **plan_extras}
+    return {"locators": plan_locators, "checks": checks, "skipped": skipped,
             "check_count": len(checks), "skipped_count": len(skipped),
             "assertion_check_count": assertion_checks, "executable": True,
             # 只有场景、没有字段级检查时同样可执行：调用方据此注入执行器（见上面分支口径）
             "negative_scenarios": negative_scenarios,
-            "negative_scenario_rejects": negative_scenario_rejects}
+            "negative_scenario_rejects": negative_scenario_rejects,
+            "list_checks": list_checks,
+            "list_check_rejects": list_check_rejects,
+            **plan_extras}
 
 
 #: 只读表单校验执行器（TS）。占位符 @@FORM_PLAN@@ 由 render_form_executor 替换。
@@ -1287,15 +2405,67 @@ _FORM_EXECUTOR_TS = r"""
   // ===== 编译执行：表单规则断言（客户端层只读；「期望拒绝」未验证项进负路径提交层，2026-09-25 用户确认）=====
   // 编译断言数量随文档规则增长，需放宽单测超时（默认 30s 会中断）
   // rev71：全量批次（CS 96 条）单 test 断言执行实测需要 ~10 分钟，600s 不够
-  //（TR-105 在 Member 定位等待上吃满 600s）。放宽到 20 分钟。
-  test.setTimeout(1800000);
+  //（TR-105 在 Member 定位等待上吃满 600s）。
+  // rev116：预算由执行器下发（WEB_TEST_BUDGET_MS = runner 进程超时 - 30s），
+  // 让 Playwright 自己先超时、能写报告；未注入时回退 30 分钟。
+  test.setTimeout(Number(process.env.WEB_TEST_BUDGET_MS || 0) || 1800000);
+  // 运行期自证：本次预算到底是多少、是执行器下发的还是回退默认值。
+  console.log(`TEST_BUDGET ${JSON.stringify({ ms: Number(process.env.WEB_TEST_BUDGET_MS || 0) || 1800000, injected: !!process.env.WEB_TEST_BUDGET_MS, from: 'form_executor' })}`);
   const FORM_PLAN = @@FORM_PLAN@@;
   const FORM_PHONE = process.env.PR2_STORAGE_ACCOUNT_NO || '@@DEFAULT_PHONE@@';
+  // ===== 运行期唯一化（A2 / rev124）=====
+  // 配置里的 ``{{RUN_TAG}}`` 在**每次运行时**换成新值；FORM_PLAN 是编译期快照，
+  // 若在编译期就替换，重新跑同一份产物会用回同一个编号 → 服务端唯一约束拒绝
+  //（20003 编号已存在），期望受理通道再把它判成「疑似缺陷坐实」= 假缺陷。
+  // 可用 ``WEB_RUN_TAG`` 钉住（复现历史场次时用），否则按本地时间生成。
+  const RUN_TAG_INFO = (() => {
+    const pinned = String((process.env as any).WEB_RUN_TAG || '').trim();
+    if (pinned) return {tag: pinned, source: 'env'};
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    const rnd = Math.random().toString(36).slice(2, 5).toUpperCase().padEnd(3, '0');
+    return {
+      tag: `${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}`
+         + `${p(d.getMinutes())}${p(d.getSeconds())}${rnd}`,
+      source: 'generated',
+    };
+  })();
+  const RUN_TAG = RUN_TAG_INFO.tag;
+  //: 占位符替换：只在明确写入 ``{{RUN_TAG}}`` 的字段上发生，其余值逐字不变。
+  const substRunTag = (v: any) =>
+    String(v == null ? '' : v).split('{{RUN_TAG}}').join(RUN_TAG);
+  //: 用到唯一化的字段逐条落日志 —— 结论要能对回"这次提交的是哪个编号"。
+  const runTagUsed: Array<{field: string; value: string}> = [];
+  const runTagValue = (field: string, raw: any): string => {
+    const original = String(raw == null ? '' : raw);
+    const out = substRunTag(original);
+    if (out !== original) {
+      runTagUsed.push({field, value: out});
+      console.log('RUN_TAG_USED ' + JSON.stringify({field, value: out, tag: RUN_TAG}));
+    }
+    return out;
+  };
+  //: 计划期就发现的缺口（真实落库场景值固定）：先报出来，别等到 20003 再猜。
+  for (const gap of (FORM_PLAN.run_tag_gap || []).slice(0, 12)) {
+    console.log('RUN_TAG_GAP ' + JSON.stringify(gap));
+  }
+  if ((FORM_PLAN.run_tag || {}).enabled || RUN_TAG_INFO.source === 'env') {
+    console.log('RUN_TAG ' + JSON.stringify({
+      tag: RUN_TAG, source: RUN_TAG_INFO.source,
+      fields: (FORM_PLAN.run_tag || {}).fields || [],
+      steps: (FORM_PLAN.run_tag || {}).steps || 0,
+    }));
+  }
   //: 计划期被跳过的断言（例如字段在定位器表里找不到）**同时**输出可机读现场：
   //: 这类断言不会进入执行，运行期不会有 [observation]；没有这一行就只能看到
   //: summary 里的 `skipped_by_reason: {无定位器: 1}`，无法判断该怎么改配置。
   for (const skip of (FORM_PLAN.skipped || []).slice(0, 20)) {
     console.log('[plan-skip] ' + JSON.stringify(skip));
+  }
+  //: 「列表可见」检查被计划期拒绝的条目**运行期可见**（与 [negative-skip] 同口径）：
+  //: 否则"配了但一条都没跑"只能靠人比对配置与日志。
+  for (const rej of (FORM_PLAN.list_check_rejects || []).slice(0, 20)) {
+    console.log('[list-skip] ' + JSON.stringify(rej));
   }
   type CheckOutcome = 'pass' | 'unverified' | 'blocked';
   const formResults: Array<{name: string; outcome: CheckOutcome; observed: string}> = [];
@@ -1401,15 +2571,72 @@ _FORM_EXECUTOR_TS = r"""
   //: 定位落空统一出口：采集现场并输出一行 JSON（供台账/排障直接消费）。
   async function reportLocatorMiss(where: string, check: any, modal: any): Promise<void> {
     const def = (FORM_PLAN.locators.fields || {})[(check && check.field) || ''] || {};
+    // rev138：tried 里必须写出**真正用过**的选择器。旧实现只回显 `placeholder_hint`
+    //（本 SUT 未配该键 ⇒ 恒为 ''），而执行时用的是 `selector_hint`——于是现场行
+    // 看起来像"没配任何 hint"，把排障引去补 hint，而 hint 本来就是对的（TR-754 实测）。
     const tried = [
-      JSON.stringify({ locator: 'placeholder_hint', field: check.field, kind: def.kind || '', hint: def.placeholder_hint || '' }),
+      JSON.stringify({ locator: 'selector_hint', field: check.field, kind: def.kind || '',
+                       hint: def.selector_hint || '' }),
+      JSON.stringify({ locator: 'placeholder_hint', field: check.field, kind: def.kind || '',
+                       hint: def.placeholder_hint || '' }),
       JSON.stringify({ locator: 'form_item_label', field: check.field }),
     ];
     const observation = await collectLocatorObservation(modal, tried);
     console.log('[observation] ' + JSON.stringify({
       where, field: (check && check.field) || '', rule_id: (check && check.rule_id) || '',
-      case_id: (check && check.case_id) || '', ...observation,
+      case_id: (check && check.case_id) || '',
+      // rev138：定位发生在哪一层 —— 'form'（表单容器）还是 'page'（整页）。
+      // 这两个值决定"修选择器"还是"修 scope"，不写出来只能靠猜。
+      scope: String(def.scope || 'form'),
+      ...observation,
     }));
+  }
+  //: 提交窗口的**现场采集**（2026-10-16 补）。
+  //: 动机（实测 TR-402）：规则级场景提交后没拿到目标响应时，旧实现只输出一句
+  //: 「提交后窗口内未捕获到目标接口的请求」——分不清是「客户端校验拦住了」
+  //: 「请求发到了别的地址」还是「按钮没点对」。而这三者的处置完全不同：
+  //: 前两者要改配置/探针，后者是平台定位缺陷。没有现场就只能猜。
+  //: 这里一次采集三类证据：前端校验文案（含 toast）、表单错误项、当前 URL。
+  async function collectSubmitScene(): Promise<{
+    url: string; form_errors: Array<{field: string; error: string}>; toasts: string[];
+  }> {
+    try {
+      const body = anyScope.locator('body').first();
+      if (!(await body.count().catch(() => 0))) {
+        return {url: String(page.url()).slice(0, 140), form_errors: [], toasts: []};
+      }
+      return await body.evaluate(() => {
+        const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+        const formErrors: Array<{field: string; error: string}> = [];
+        document.querySelectorAll('.ant-form-item').forEach((it: any) => {
+          // antd v3 与 v4 的字段错误类名不同（实测 2026-10-16，TR-409/TR-412）：
+          //   v3 = ``.ant-form-explain``（本 SUT 正是 v3，只读 v4 的
+          //        ``.ant-form-item-explain`` 会永远读成"没有表单错误"，
+          //        于是「Please set latitude and longitude」这条真实拦截原因
+          //        被埋掉，Conclusion 被带成"点了没反应"）；
+          //   v4 = ``.ant-form-item-explain``。两者都读，取先命中的。
+          const err = norm((it.querySelector('.ant-form-item-explain, .ant-form-explain') as any)?.innerText || '');
+          const hasErrorCls = /has-error/.test(String(it.className));
+          if (!err && !hasErrorCls) return;
+          formErrors.push({
+            field: norm(it.querySelector('.ant-form-item-label')?.innerText || ''),
+            error: err || '(has-error，错误文案未渲染)',
+          });
+        });
+        const toasts: string[] = [];
+        document.querySelectorAll(
+          '.ant-message-notice-content, .ant-notification-notice-message,'
+          + ' .ant-notification-notice-description, .ant-form-item-explain-error',
+        ).forEach((n: any) => {
+          const t = norm(n.innerText);
+          if (t && toasts.indexOf(t) < 0) toasts.push(t.slice(0, 160));
+        });
+        return {url: String(location.href).slice(0, 140),
+                form_errors: formErrors.slice(0, 15), toasts: toasts.slice(0, 10)};
+      });
+    } catch {
+      return {url: String(page.url()).slice(0, 140), form_errors: [], toasts: []};
+    }
   }
   const anyScope = appScope as any;
 
@@ -1752,6 +2979,38 @@ _FORM_EXECUTOR_TS = r"""
     return modal.locator(`.ant-form-item:has-text("${field}") ${tag}`).first();
   }
 
+  //: rev138：字段级**作用域**声明（``fields.<字段>.scope = "page"``，缺省＝表单容器）。
+  //:
+  //: 动机（实测 2026-10-20 TR-754 + 探针）：问卷的题目卡片渲染在
+  //: ``<form class="ant-form">`` **之外**（`form.contains(card) === false`；
+  //: 同一选择器 全文档命中 1 / 表单内命中 0）。此时选择器再准也恒为 0 ——
+  //: 与 rev137 的 `pre_actions` 是两个不同故障：
+  //:   * `pre_actions` 修的是"区域**根本没渲染**"（要点一下才出现）；
+  //:   * `scope` 修的是"渲染了，但不在表单容器这一层找"。
+  //: 两个都缺时，日志都是同一句"未定位到输入框"，这是它俩长期被混为一谈的原因。
+  //: 为什么不做成"把 modal 放宽到整页"：`modal` 同时是默认值/条件显示/单选
+  //: `:has-text` 的匹配范围，放宽会让这些检查跨区域误命中；作用域必须**按字段**声明。
+  //: 作用域声明只在**第一次真正用到**时打一行自证（避免每字段刷屏）：
+  //: "配了 scope=page" 与 "scope 被静默忽略" 必须能分开（与 alias/run_tag 同一纪律）。
+  const scopeLogged = new Set<string>();
+  function scopeOf(modal: any, def: any) {
+    const scope = String((def || {}).scope || '').trim().toLowerCase();
+    if (!scope || scope === 'form') return modal;
+    if (scope !== 'page') {
+      if (!scopeLogged.has(scope)) {
+        scopeLogged.add(scope);
+        console.log('LOCATE_SCOPE_INVALID ' + JSON.stringify(
+          {scope, accepted: ['form', 'page'], fell_back_to: 'form'}));
+      }
+      return modal;
+    }
+    if (!scopeLogged.has('page')) {
+      scopeLogged.add('page');
+      console.log('LOCATE_SCOPE ' + JSON.stringify({scope: 'page', resolved: 'anyScope'}));
+    }
+    return anyScope;
+  }
+
   //: rev71：定位器表里 9/24 probe 实测的 selector_hint（如 CS New Case 表单的
   //: #memberLabel/#title/#brand）是唯一可信的控件定位——该表单不是标准
   //: .ant-form-item 结构，has-text 匹配永远落空，fill 会等满整个用例预算
@@ -1768,7 +3027,9 @@ _FORM_EXECUTOR_TS = r"""
   }
   function hintLocator(modal: any, def: any) {
     const h = hintSel(def);
-    return h ? modal.locator(h).first() : null;
+    // rev138：hint 是**字段自身**的声明，作用域也必须跟着字段走——
+    // 否则"选择器对了、容器不对"只能靠人肉比对（TR-754 的四条 unverified 正是如此）。
+    return h ? scopeOf(modal, def).locator(h).first() : null;
   }
 
   //: rev71f：hint 元素未必是可输入控件——CS 表单的 Member 字段 hint 是 `#memberLabel`
@@ -1802,14 +3063,16 @@ _FORM_EXECUTOR_TS = r"""
     // hint 命中但可能是容器（标签/包装 div）→ 下钻找真正可输入的控件
     if (byHint) return fillableDeep(byHint) as any;
     const kind = String((def || {}).kind || 'input');
+    // rev138：无 hint 时的 label 兜底同样要按字段声明的作用域找（见 scopeOf 注释）。
+    const sc = scopeOf(modal, def);
     if (kind === 'richtext') {
-      const item = modal.locator(`.ant-form-item:has-text("${field}")`).first();
+      const item = sc.locator(`.ant-form-item:has-text("${field}")`).first();
       const editable = item.locator('[contenteditable="true"], .ql-editor, .public-DraftEditor-content').first();
       if (editable) return editable;
       return item.locator('[contenteditable="true"]').first();
     }
     const tag = kind === 'textarea' ? 'textarea' : 'input';
-    return fieldInput(modal, field, tag);
+    return fieldInput(sc, field, tag);
   }
 
   // 单选组必须在**所属表单项**内定位：整页 :has-text 容易命中其它行。
@@ -1939,6 +3202,37 @@ _FORM_EXECUTOR_TS = r"""
     return false;
   }
 
+  //: rev140：**锚定控件**的错误检测（2026-10-20 问卷探针实测）。
+  //: 旧行 itemHasError 以 `:has-text(字段名)` 匹配标签，有两个实测盲区：
+  //:  ① 卡片内 form-item 的标签是「标题」，规则字段名是「题目标题」→ 恒不匹配；
+  //:  ② `modal` 配置为 `.ant-form`，题目卡片在 `.ant-form` **之外** → 作用域内恒 0。
+  //: 两者叠加 = fieldError 恒 false → settle 轮询永不返回 → late 循环跑满 73s 被看门狗杀。
+  //: 主路改走字段自己的定位路径（hint + scopeOf，与 fill 同源）→ 向上找最近
+  //: `.ant-form-item` → 查 explain / has-error（antd v3 `.ant-form-explain` +
+  //: `.ant-form-item-control.has-error`，v4 `.ant-form-item-explain-error`）。
+  //: 锚定失败再退回旧行（标签匹配，0 等待——等待已在本函数做过）。
+  async function itemHasErrorCtl(pg: any, modal: any, field: string, def: any, waitMs = 600): Promise<boolean> {
+    await pg.waitForTimeout(waitMs);
+    try {
+      const ctl = fieldControl(modal, field, def);
+      if (ctl && (await ctl.count().catch(() => 0))) {
+        // rev141：改**精确 token** 匹配。旧 `contains(@class,"ant-form-item")` 会先命中
+        // 更近的 `div.ant-form-item-control`（类名包含 "ant-form-item"），explain 不一定
+        // 在 control 内部渲染 —— 探针3 实测松匹配落点就是 control。concat 空格包裹
+        // 是标准 class 精确 token 匹配写法。
+        const item = ctl.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " ant-form-item ")][1]');
+        if (await item.count().catch(() => 0)) {
+          if (await item.locator('.ant-form-explain').count().catch(() => 0)) return true;
+          if (await item.locator('.ant-form-item-explain-error').count().catch(() => 0)) return true;
+          const cls = String(await item.getAttribute('class', {timeout: 1000}).catch(() => '') || '');
+          if (cls.includes('has-error')) return true;
+          if (await item.locator('.has-error').count().catch(() => 0)) return true;
+        }
+      }
+    } catch { /* 控件消失/页面迁移 → 走兜底 */ }
+    return await itemHasError(pg, modal, field, 0);
+  }
+
   //: 读取某个单选组当前渲染出来的所有选项标签（只读，用于"选项范围"断言）
   async function optionLabels(modal: any, field: string): Promise<string[]> {
     const item = modal.locator(`.ant-form-item:has-text("${field}")`).first();
@@ -1949,6 +3243,40 @@ _FORM_EXECUTOR_TS = r"""
       out.push(((await wraps.nth(i).innerText({timeout: 5000}).catch(() => '')) || '').trim());
     }
     return out;
+  }
+
+  //: rev116（P1-③）：勾选组选项标签。与 optionLabels 的区别：
+  //:  ① 支持 selector_hint（YL 页面标签是英文 Business Hours，用中文字段名 has-text 必落空）；
+  //:  ② 读 .ant-checkbox-wrapper（单选组结构不适用）。
+  async function choiceOptionLabels(modal: any, field: string, def?: any): Promise<string[]> {
+    const hint = hintSel(def);
+    const candidates = hint ? modal.locator(hint)
+                            : modal.locator(`.ant-form-item:has-text("${field}")`);
+    // rev116b（TR-512/TR-513 实测）：`:has-text("Business Hours")` 会同时命中
+    // 「Business Hours」与「Business Hours Description」，`.first()` 拿到描述项 → 0 个选项。
+    // 多命中时选**真正含勾选框**的那一项；配置侧改用 label[title="..."] 精确匹配。
+    const readTexts = async (item: any): Promise<string[]> => {
+      await item.scrollIntoViewIfNeeded({timeout: 3000}).catch(() => undefined);
+      const raw = await item.evaluate((el: any) => Array.from(el.querySelectorAll('.ant-checkbox-wrapper'))
+        .map((w: any) => String(w.textContent || '').replace(/\s+/g, ' ').trim())).catch(() => [] as string[]);
+      if (raw.length) return (raw as string[]).filter((s: string) => !!s);
+      const wraps = item.locator('.ant-checkbox-wrapper');
+      const out: string[] = [];
+      const n = await wraps.count();
+      for (let i = 0; i < n; i++) {
+        out.push(((await wraps.nth(i).textContent({timeout: 3000}).catch(() => '')) || '').trim());
+      }
+      return out.filter((s) => !!s);
+    };
+    const total = await candidates.count().catch(() => 0);
+    for (let i = 0; i < total; i++) {
+      const item = candidates.nth(i);
+      if ((await item.locator('.ant-checkbox-wrapper').count().catch(() => 0)) > 0) {
+        return await readTexts(item);
+      }
+    }
+    if (total > 0) return await readTexts(candidates.first());
+    return [];
   }
 
   async function runFormChecks() {
@@ -1968,10 +3296,127 @@ _FORM_EXECUTOR_TS = r"""
         + '无 create 语义场景）');
     }
     const fieldDefs: Record<string, any> = (FORM_PLAN.locators || {}).fields || {};
+
+    // ===== rev137：字段检查的**前置动作**（``pre_actions``）=====
+    // 动机（实测 TR-752/753 + 只读探针）：问卷「题目」区的输入框在点「新增题目」之前
+    // **根本不存在**（探针：点击前 `[class*=questionCard]` = 0，页面上只有 #sbjTypeName）。
+    // 定位器本身是对的，缺的是"让这块区域渲染出来"的那一次点击；旧口径下这类用例只能
+    // 记 unverified，与"选择器配错"在日志上**完全一样**，配置方会去反复改正确的定位器。
+    //
+    // 触发口径：**按需**。动作用 ``for_fields`` 声明"我是为哪些字段准备的"，只有在第一条
+    // 作用于这些字段的检查要执行时才点 —— 这样不破坏既有不变式「默认选中必须在任何点击
+    // 之前观测」（先点后测会把默认值测成"我们刚点的那个值"）。没有 ``for_fields`` 的动作
+    // 等价于"首条检查前触发一次"。
+    const preActions: any[] = FORM_PLAN.pre_actions || [];
+    const preActionDone: boolean[] = preActions.map(() => false);
+    //: 前置动作失败 ⇒ 依赖它的字段区**根本没渲染**。这类检查要报"前置动作未完成"，
+    //: 而不是"未定位到输入框"——后者会把排障引向定位器。
+    const preActionBlocked = new Set<string>();
+    let preActionBlockedAll = false;
+    let preActionMissed: string[] = [];
+
+    const preActionScopeFields = (act: any): string[] =>
+      Array.isArray(act && act.for_fields) ? act.for_fields.map((f: any) => String(f)) : [];
+
+    //: 按文本候选点一次，返回命中的文本（'' = 一个都没点成）。
+    //: 作用域优先级：表单容器 ``modal`` → 整页 ``anyScope``。表单外的同名按钮
+    //: （列表工具条、侧边栏菜单）不该被前置动作误点。
+    async function clickPreActionLabel(labels: string[]): Promise<string> {
+      for (const text of labels) {
+        const needle = String(text || '').trim();
+        if (!needle) continue;
+        const rx = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const scopes = [modal, anyScope].filter(Boolean);
+        for (const scope of scopes) {
+          // 先按 role=button（语义最准），再退 button/a/[role=button] 的文本匹配；
+          // 不做"任意可见文本"兜底——那会点到标题/标签上，看起来成功了实际没动作。
+          const candidates = [
+            scope.getByRole('button', {name: rx}).first(),
+            scope.locator(`button:has-text("${needle}"), a:has-text("${needle}"),`
+              + ` [role="button"]:has-text("${needle}")`).first(),
+          ];
+          for (const cand of candidates) {
+            if (!(await cand.count().catch(() => 0))) continue;
+            try {
+              await cand.waitFor({state: 'visible', timeout: 3000});
+              await cand.click({timeout: 5000});
+              return needle;
+            } catch {
+              // 被浮层/侧边栏拦住是常态（本 SUT 左侧 sider 会 intercept pointer events）：
+              // 降级为 DOM 直点。前置动作只负责"让区域渲染"，不承担业务语义。
+              const domHit = await cand.evaluate((el: any) => {
+                try { el.scrollIntoView({block: 'center'}); el.click(); return true; }
+                catch { return false; }
+              }).catch(() => false);
+              if (domHit) return needle;
+            }
+          }
+        }
+      }
+      return '';
+    }
+
+    async function ensurePreActions(check: any): Promise<void> {
+      if (!preActions.length) return;
+      const field = String((check && check.field) || '');
+      for (let i = 0; i < preActions.length; i += 1) {
+        if (preActionDone[i]) continue;
+        const scopeFields = preActionScopeFields(preActions[i]);
+        if (scopeFields.length && !scopeFields.includes(field)) continue;
+        preActionDone[i] = true;
+        const act = preActions[i] || {};
+        const labels: string[] = (Array.isArray(act.labels) ? act.labels : []).map((s: any) => String(s));
+        const times = Math.max(1, Math.min(5, Number(act.times) || 1));
+        // 注意 ``|| 800`` 会把配置里显式写的 0 变成 800：0 是合法值（点完不等），
+        // 必须用 isFinite 判空，否则"我配了 0 却没生效"这种排查半天的问题又会出现。
+        const waitRaw = Number(act.wait_ms);
+        const waitMs = Number.isFinite(waitRaw) ? Math.max(0, Math.min(10000, waitRaw)) : 800;
+        let clicked = 0;
+        for (let n = 0; n < times; n += 1) {
+          const hit = await clickPreActionLabel(labels);
+          if (!hit) break;
+          clicked += 1;
+          await page.waitForTimeout(waitMs);
+        }
+        const ok = clicked === times;
+        // 自证行：配了哪几条、在哪条检查前触发、点成了几次。缺它的话"配了但没触发"
+        // 与"没配"在日志上无法区分（与 RUN_TAG_USED / PRE_ACTION 同一条纪律）。
+        console.log('PRE_ACTION ' + JSON.stringify({
+          index: i, labels, times, clicked, for_fields: scopeFields,
+          at: `${check.type}:${field}`, ok, reason: String(act.reason || '').slice(0, 120),
+        }));
+        if (!ok) {
+          preActionMissed = preActionMissed.concat(labels);
+          if (scopeFields.length) scopeFields.forEach((f) => preActionBlocked.add(f));
+          else preActionBlockedAll = true;
+        }
+      }
+    }
+
+    // 配置回执：本次产物到底带了哪些前置动作（空/被拒都要可见）。
+    if (preActions.length || (FORM_PLAN.pre_action_rejects || []).length) {
+      console.log('PRE_ACTIONS_PLAN ' + JSON.stringify({
+        actions: preActions.map((a: any, i: number) => ({
+          index: i, labels: a.labels || [], for_fields: a.for_fields || [], times: a.times || 1,
+        })),
+        rejects: FORM_PLAN.pre_action_rejects || [],
+      }));
+    }
+
     // 负路径提交队列（rev67）：客户端层拿不到证据的「期望拒绝」断言，进提交层验证。
     // 口径（2026-09-25 用户确认）：只做负路径提交（空必填/非法探针值），正常不会写入合法数据；
     // 被测端若竟然接受 → 记 blocked（疑似缺陷），由末尾硬失败暴露。
     const submitQueue: Array<{check: any; name: string; kind: 'probe' | 'required_empty'; probeValue?: string}> = [];
+    //: rev139：提交层**重发计数**。提交层会对"客户端层拿不到证据"的同一批检查再记一次
+    //: 结果（这是设计——真实提交才算证据），但对账行若把两次都算成"新增覆盖"，
+    //: 就会得出 `unexplained_emitted > 0` 的**假缺口**（TR-755 实测 2：两条
+    //: required_error 客户端记一次、提交层又记一次）。缺口与重发必须分开列，
+    //: 否则"对账行说丢了 2 条"会把人引去查根本没丢的地方。
+    let submitEmitted = 0;
+    const submitRec = (check: any, name: string, outcome: CheckOutcome, observed: string) => {
+      submitEmitted += 1;
+      recAll(check, name, outcome, observed);
+    };
 
     // ===== 网络隔离（放行清单 + 默认拒绝）=====
     // 复核意见指出：按"URL 含 upload/oss/file"做特征匹配既漏（不含关键词的地址照样能收文件）
@@ -1988,31 +3433,59 @@ _FORM_EXECUTOR_TS = r"""
     const policyRules: Array<{host?: string; path_prefix?: string; methods?: string[]}> =
       (FORM_PLAN.upload_policy && FORM_PLAN.upload_policy.allow_rules) || [];
     const legacyHosts: string[] = (FORM_PLAN.upload_policy && FORM_PLAN.upload_policy.allow_hosts) || [];
+    // 上传（multipart）放行规则：**唯一**的 multipart 口子，默认空 ⇒ 一律阻断。
+    // 与 policyRules 分开配置，避免"允许写某接口"被误读成"也允许往那里传文件"。
+    const uploadAllowRules: Array<{host?: string; path_prefix?: string; methods?: string[]}> =
+      (FORM_PLAN.upload_policy && FORM_PLAN.upload_policy.allow_upload_rules) || [];
+    // rev119（A1）：**字段级通道**的上传放行必须自证。历史上「配了但没生效」
+    // 只能靠人比对配置与日志；这里与场景通道的 UPLOAD_ALLOW_RULES 分开打印，
+    // 两条通道不混为一谈（前者对应 upload_file 检查，后者对应 negative_scenario）。
+    console.log('UPLOAD_POLICY ' + JSON.stringify(uploadAllowRules));
+    if (FORM_PLAN.upload_policy_gap) {
+      // 非空 = 本次产物有「上传断言会恒 unverified」的已知缺口（配置没声明 upload_allow）
+      console.log('UPLOAD_POLICY_GAP ' + JSON.stringify({reason: FORM_PLAN.upload_policy_gap}));
+    }
     const pageHost = (() => {
       try { return new URL(page.url()).host; } catch { return ''; }
     })();
     // 本段可被本地测试原样执行：test_web_upload_local_node.py
     // >>> UPLOAD_ISOLATION_POLICY_BEGIN
+    //: 规则匹配（host 后缀 + path 前缀 + 方法白名单）。写放行与上传放行**复用同一判据**——
+    //: 各写一份迟早漂移成"配了但没生效"。
+    function allowRuleMatches(rule: any, host: string, path: string, verb: string): boolean {
+      if (!rule || typeof rule !== 'object') return false;
+      // 兼容 ``host``（既有配置键）与 ``host_suffix``（人工配置更常写）两种写法
+      const hostRule = String(rule.host || rule.host_suffix || '');
+      if (hostRule && !(host && host.endsWith(hostRule))) return false;
+      if (rule.path_prefix && !path.startsWith(String(rule.path_prefix))) return false;
+      const methods = (rule.methods || []).map((m: any) => String(m).toUpperCase());
+      if (methods.length && !methods.includes(verb)) return false;
+      return true;
+    }
     function isolationDecision(method: string, url: string,
                                rules: Array<{host?: string; path_prefix?: string; methods?: string[]}>,
-                               legacyHosts: string[], contentType: string): string {
+                               legacyHosts: string[], contentType: string,
+                               uploadAllowRules?: Array<{host?: string; path_prefix?: string; methods?: string[]}>): string {
       const verb = String(method).toUpperCase();
-      // 1) 文件上传的传输特征：一律阻断（与放行清单无关）
-      if (String(contentType).toLowerCase().includes('multipart/form-data')) return 'abort';
-      // 2) 只读请求放行
-      if (verb === 'GET') return 'continue';
-      // 3) 写请求：必须命中显式规则；legacyHosts 仅作为"该主机 GET 放行"的兼容写法
       let parsed: URL | null = null;
       try { parsed = new URL(url); } catch { parsed = null; }
       const host = parsed ? parsed.host : '';
       const path = parsed ? parsed.pathname : '';
-      const matched = (rules || []).some((rule) => {
-        if (rule.host && !(host && host.endsWith(rule.host))) return false;
-        if (rule.path_prefix && !path.startsWith(rule.path_prefix)) return false;
-        const methods = (rule.methods || []).map((m) => String(m).toUpperCase());
-        if (methods.length && !methods.includes(verb)) return false;
-        return true;
-      });
+      // 1) 文件上传的传输特征：**默认仍然一律阻断**（与写放行清单无关）。
+      //    唯一口子 = 显式声明的上传放行规则（2026-10-16 用户确认新增，rev114）：
+      //    部分业务的必填项本身就是附件（实测美心 YL 店铺主数据 Store Image），
+      //    multipart 全阻会让这类用例在正式通道下永远不可能通过。
+      //    安全口径不变：默认空清单 ⇒ 与历史行为**逐字一致**（零回归，由
+      //    test_web_upload_local_node.py 的默认用例锁死）；放行必须 host + path_prefix
+      //    + methods 三项同时收窄，且由场景/配置**显式声明**，不默认放行同源上传。
+      if (String(contentType).toLowerCase().includes('multipart/form-data')) {
+        const uploadOk = (uploadAllowRules || []).some((rule) => allowRuleMatches(rule, host, path, verb));
+        return uploadOk ? 'continue' : 'abort';
+      }
+      // 2) 只读请求放行
+      if (verb === 'GET') return 'continue';
+      // 3) 写请求：必须命中显式规则；legacyHosts 仅作为"该主机 GET 放行"的兼容写法
+      const matched = (rules || []).some((rule) => allowRuleMatches(rule, host, path, verb));
       if (matched) return 'continue';
       void legacyHosts;                 // 兼容字段：不再用于放行写请求（只放行 GET）
       return 'abort';
@@ -2037,7 +3510,8 @@ _FORM_EXECUTOR_TS = r"""
           const method = request.method().toUpperCase();
           const url = request.url();
           const contentType = String((request.headers() || {})['content-type'] || '');
-          if (isolationDecision(method, url, policyRules, legacyHosts, contentType) === 'continue') {
+          if (isolationDecision(method, url, policyRules, legacyHosts, contentType,
+                                uploadAllowRules) === 'continue') {
             await route.continue();
             return;
           }
@@ -2169,6 +3643,18 @@ _FORM_EXECUTOR_TS = r"""
                                buffer: bytes} : null;
       }
       return null;
+    }
+    //: setup 期 ``upload`` 动作的**内联夹具**：把配置里带过来的 base64 还原成
+    //: Playwright ``setInputFiles`` 需要的 {name, mimeType, buffer}。
+    //: 与 uploadFixture 分开：那个是字段级阶段"构造特定字节数的坏样本"，这个是
+    //: "填一个真实的必填附件"。字节全部来自配置，平台不内置任何业务素材。
+    function inlineFixture(spec: any): {name: string; mimeType: string; buffer: Buffer} | null {
+      const s = spec || {};
+      const b64 = String(s.b64 || '');
+      if (!b64) return null;
+      return {name: String(s.name || 'upload.bin'),
+              mimeType: String(s.mime || 'application/octet-stream'),
+              buffer: Buffer.from(b64, 'base64')};
     }
 
     let checkIndex = 0;
@@ -2405,6 +3891,7 @@ _FORM_EXECUTOR_TS = r"""
     for (const check of FORM_PLAN.checks) {
       checkIndex += 1;
       if (check.type === 'upload_file') continue;   // 由独立阶段处理（见下）
+      if (check.type === 'list_visible') continue;  // 由独立阶段处理（runListChecks，写入之后）
       const name = `${check.type}:${check.field}${check.option ? '=' + check.option : ''}${check.data ? ' [' + check.data + ']' : ''}`;
       currentRuleId = (check as any).rule_id || '';
       currentCaseId = (check as any).case_id || '';
@@ -2414,6 +3901,16 @@ _FORM_EXECUTOR_TS = r"""
       }
 
       try {
+        // rev137：本条检查若要的字段区还没渲染出来，先跑它声明的前置动作。
+        await ensurePreActions(check);
+        if (preActionBlockedAll || preActionBlocked.has(String(check.field || ''))) {
+          // 前置动作没点成 ⇒ 字段区不存在。如实报「前置动作未完成」，
+          // 不报「未定位到输入框」——后者会把排障引向本来就正确的定位器。
+          recAll(check, name, 'unverified',
+                 `前置动作未完成（未找到可点击的「${preActionMissed.join('/')}」）：`
+                 + '依赖它的字段区没有渲染，本项未验证');
+          continue;
+        }
         if (check.type === 'default_selected') {
           const def0 = fieldDefs[check.field] || {};
           if (def0.kind === 'select') {
@@ -2432,6 +3929,10 @@ _FORM_EXECUTOR_TS = r"""
             const root = hintLocator(modal, def0)
               || modal.locator(`.ant-form-item:has-text("${check.field}") .ant-switch`).first();
             if (!(await root.count())) {
+              // 2026-10-16 修复：本分支文案指向的 observation 现场行**从未输出**——
+              // 这里漏调 reportLocatorMiss（输入框类失效点 2578/2643/2879 都有留痕）。
+              // 与项目「失败必须能看到现场」原则对齐：补上落空留痕，使文案不再指向虚空。
+              await reportLocatorMiss('form:default_selected', check, modal);
               recAll(check, name, 'unverified', '未定位到开关控件（定位现场见 [observation] 行）');
               continue;
             }
@@ -2472,6 +3973,12 @@ _FORM_EXECUTOR_TS = r"""
             // rev69 口径：单选组默认选中是被测端防漏填的设计选择（非缺陷）。UI 层负路径
             // 物理上不可构造 → 标注「不适用」并指明服务端空值校验的覆盖路径，避免被当漏测。
             recAll(check, name, 'unverified', `${reason}；UI 层负路径不适用：单选组有默认选中，无法构造空值提交（如需覆盖服务端空值校验，需走 API 层测试）`);
+          } else if (reason.includes('开关') || reason.includes('勾选组')) {
+            // rev116（P1-③）：开关始终有值、勾选组无自由输入——两者都不做真实提交：
+            // 开关提交也造不出空值；勾选组所在多为「新建」表单，真实提交有产生脏数据风险。
+            // 如实记未验证，并指明覆盖路径（API 层或显式开启提交层）。
+            recAll(check, name, 'unverified',
+                   `${reason}；UI 层负路径未启用（如需覆盖服务端空值校验，需走 API 层测试）`);
           } else {
             // 上传控件必填：不带文件点「确定」→ 期望提交时校验拦截并给出该字段提示
             recAll(check, name, 'unverified', `${reason}；进入负路径提交层重试`);
@@ -2505,6 +4012,36 @@ _FORM_EXECUTOR_TS = r"""
           } else {
             recAll(check, name, 'pass', `选项范围齐全：${labels.join('/')}`);
           }
+          continue;
+        }
+        if (check.type === 'choice_options') {
+          // rev116（P1-③）：勾选组（checkbox 群组）的选项范围只读校验。
+          // 取值路径：表单项内 .ant-checkbox-wrapper 的文本（YL「營業時間」= Mon~Sun 7 项）。
+          // 数量断言口径：rule/data 里出现「N組/N组/N项/N項/N个/N個」→ 与真实选项数比对；
+          // 否则按 data 是否为某个选项名做存在性判断。reject 语义在 UI 层不存在（无法选到不存在的项）。
+          const labels = await choiceOptionLabels(modal, check.field, fieldDefs[check.field] || {});
+          const norm = (s: string) => (s || '').replace(/\s+/g, '');
+          if (!labels.length) {
+            recAll(check, name, 'unverified', '未读到勾选选项（可能是单勾选框或结构变更）');
+            continue;
+          }
+          const m = String(check.rule || '').match(/(\d+)\s*[組组項项個个]/);
+          const want = m ? parseInt(m[1], 10) : 0;
+          if (want > 0) {
+            recAll(check, name, labels.length === want ? 'pass' : 'unverified',
+                   labels.length === want
+                     ? `勾选组共 ${labels.length} 个选项（${labels.join('/')}），与文档「${check.rule}」一致`
+                     : `勾选组实际 ${labels.length} 个选项（${labels.join('/')}），文档要求 ${want} 组`);
+            continue;
+          }
+          if (check.data) {
+            const exists = labels.some((l) => norm(l).includes(norm(check.data)));
+            recAll(check, name, exists ? 'pass' : 'unverified',
+                   exists ? `勾选组中存在 ${check.data}（${check.rule}）`
+                          : `勾选组中未观测到 ${check.data}（实际：${labels.join('/')}）`);
+            continue;
+          }
+          recAll(check, name, 'pass', `勾选组选项：${labels.join('/')}`);
           continue;
         }
         if (check.type === 'select_options') {
@@ -2543,32 +4080,107 @@ _FORM_EXECUTOR_TS = r"""
           // rev109：切换源是 switch（YL 店铺 排隊/訂位/外賣）时点开关而不是单选——
           // radioOption 按中文字段名 has-text 找 .ant-radio-wrapper，英文页面上必落空。
           const vdef = fieldDefs[check.field] || {};
-          let toggled = false;
-          if (String(vdef.kind || '') === 'switch') {
-            const sw = hintLocator(modal, vdef)
-              || modal.locator(`.ant-form-item:has-text("${check.field}") .ant-switch`).first();
-            if (await sw.count()) {
-              await sw.first().click({timeout: 8000});
-              toggled = true;
+          const expect: string[] = check.expect_labels || [];
+          const missingNow = async () => {
+            const miss: string[] = [];
+            for (const label of expect) {
+              if (!(await modal.locator(`.ant-form-item:has-text("${label}")`).count())) miss.push(label);
             }
+            return miss;
+          };
+          // 候选切换控件：selector_hint 优先、中文字段名兜底（与旧实现一致），
+          // 但**按效果逐个试**——见下面的实测教训。
+          const cands: any[] = [];
+          const byHint = hintLocator(modal, vdef);
+          if (byHint) cands.push(byHint);
+          if (String(vdef.kind || '') === 'switch') {
+            cands.push(modal.locator(`.ant-form-item:has-text("${check.field}") .ant-switch`).first());
           } else {
             const option = radioOption(modal, check.field, check.option, vdef);
-            if (await option.count()) {
-              await option.click({timeout: 8000});
-              toggled = true;
+            if (option) cands.push(option);
+          }
+          // 2026-10-16 实测（TR-422 → TR-431）：
+          //   旧实现是「点一下 → 固定等 900ms → 采样一次」，把**两种完全不同的情况**
+          //   压成同一句结论 —— YL 店铺 `visibility:排隊=on` 被判
+          //   unverified「切换后未出现：Third-Party Store Code、Priority Ticket Level Type」，
+          //   但在**空表单**上实测：点开 Queue 开关后**500ms 内**这两个字段就出现了
+          //   （可见字段 22 → 25，TR-431 逐点观察 T500/T1000/…/T8000 全部 third=1 tlt=1）。
+          //   ⇒ SUT 渲染是对的，**是我们的观测不可靠**（没点中 / 没等够都长得一样）。
+          //   现在：点 → **轮询等效果（≤5s）** → 没效果就试下一个候选；
+          //   并记录真正生效的候选序号与切换前的 class，便于回溯"到底点了哪个"。
+          let toggled = false;
+          let usedIdx = -1;
+          let usedLoc: any = null;
+          let beforeCls = '';
+          // 2026-10-16（TR-422/TR-447 两次同结果 → TR-448 反证）：
+          //   同一份产物，**空表单**上手工复刻这条路径（同样的候选1定位器 +
+          //   Playwright click）是**成功**的：Queue 唯一命中、class 由
+          //   `ant-switch` 翻成 `ant-switch-checked`、500ms 内两字段出现。
+          //   但正式通道里恒判"未出现"且**没有 via 段**（= usedIdx 停在 -1，
+          //   说明两个候选一个都没点到）。"没点中"与"真没出现"在旧判据下
+            //   长得一模一样 —— 直接违反项目"失败必须能看到现场"的口径。
+          //   故补一行 VISIBILITY_TRACE：逐候选记 count / 点击异常 / 前后 class，
+          //   并带上作用域内 .ant-form-item 总数（用于区分"scope 拿错页面"）。
+          const trace: any[] = [];
+          // 作用域自检：若这里为 0，说明 modal 指向的不是真正承载表单的文档
+          // （YL 店铺表单在 mkt iframe 内），后续所有定位都必然落空。
+          const scopeItems = await modal.locator('.ant-form-item').count().catch(() => -1);
+          for (let i = 0; i < cands.length && !toggled; i += 1) {
+            const c = cands[i];
+            const cz = await c.count().catch(() => -1);
+            if (!c || !cz) { trace.push({ i: i + 1, cnt: cz, act: 'skip' }); continue; }
+            beforeCls = String(await c.getAttribute('class').catch(() => '') || '');
+            let clickErr = '';
+            try {
+              await c.click({timeout: 8000});
+            } catch (e: any) {
+              clickErr = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 140);
+            }
+            let midCls = beforeCls;
+            if (String(vdef.kind || '') === 'switch') {
+              // 开关没翻转 ⇒ 这次点击没生效（被遮挡/点到标签等），换原生 click 再试一次。
+              // 原生 el.click() 是 TR-411/TR-430 实测有效的兜底路径。
+              midCls = String(await c.getAttribute('class').catch(() => '') || '');
+              if (midCls === beforeCls) {
+                await c.evaluate((el: any) => el.click()).catch(() => undefined);
+                midCls = String(await c.getAttribute('class').catch(() => '') || '');
+              }
+            }
+            for (let k = 0; k < 12; k += 1) {
+              await page.waitForTimeout(400);
+              if (!(await missingNow()).length) { toggled = true; usedIdx = i; usedLoc = c; break; }
+            }
+            trace.push({ i: i + 1, cnt: cz, before: beforeCls.slice(0, 30),
+                         after: midCls.slice(0, 40), err: clickErr, land: toggled ? 1 : 0 });
+          }
+          const missing = await missingNow();
+          console.log('VISIBILITY_TRACE ' + JSON.stringify({
+            field: check.field, opt: check.option, n: cands.length,
+            scopeItems, missing, trace,
+          }));
+
+          if (!toggled && !missing.length) { toggled = true; usedIdx = -1; }
+          if (!toggled && usedIdx < 0 && !cands.length) {
+            recAll(check, name, 'unverified', `未找到切换控件 ${check.field}=${check.option}`);
+            continue;
+          }
+          const via = usedIdx >= 0
+            ? `（候选 #${usedIdx + 1} 生效；切换前 class=${beforeCls.slice(0, 48) || '(空)'}）`
+            : '';
+          recAll(check, name, missing.length === 0 ? 'pass' : 'unverified',
+                 missing.length === 0 ? `切换后字段出现：${expect.join('、')}${via}`
+                                      : `切换后未出现：${missing.join('、')}${via}`);
+          // 复位：字段级检查只该"看"，不该把开关留在 ON 上。TR-422 实测残留的
+          // 「外賣=on」让随后的提交阶段多出一条必填错误（Takeout Redirect Link），
+          // 把"未填项"记到了并不属于本次场景的字段上。只对 switch 复位
+          // （radio 无法可靠回到原选项，不强做）。
+          if (usedIdx >= 0 && usedLoc && String(vdef.kind || '') === 'switch') {
+            const afterCls = String(await usedLoc.getAttribute('class').catch(() => '') || '');
+            if (afterCls !== beforeCls) {
+              await usedLoc.click({timeout: 5000}).catch(() => undefined);
+              await page.waitForTimeout(300);
             }
           }
-          if (!toggled) {
-            recAll(check, name, 'unverified', `未找到切换控件 ${check.field}=${check.option}`); continue;
-          }
-          await page.waitForTimeout(900);
-          const missing: string[] = [];
-          for (const label of check.expect_labels || []) {
-            if (!(await modal.locator(`.ant-form-item:has-text("${label}")`).count())) missing.push(label);
-          }
-          recAll(check, name, missing.length === 0 ? 'pass' : 'unverified',
-                 missing.length === 0 ? `切换后字段出现：${(check.expect_labels || []).join('、')}`
-                                      : `切换后未出现：${missing.join('、')}`);
           continue;
         }
         if (check.type === 'required_error') {
@@ -2576,6 +4188,23 @@ _FORM_EXECUTOR_TS = r"""
           await ensureMode(page, modal, check.mode);
           const input = await fieldControl(modal, check.field, def);
           if (!(await input.count())) { await reportLocatorMiss('form:required_error', check, modal); recAll(check, name, 'unverified', '未定位到输入框（定位现场见 [observation] 行）'); continue; }
+          // rev116（2026-10-17，P1-③）：**控件类型守卫**。定位器把它声明成 input，但真实控件是
+          // checkbox/radio/switch 时，fill 会抛 ``Input of type "checkbox" cannot be filled``
+          // 并把整条用例判 blocked（实测 TR-500 營業時間）。这类控件没有自由输入路径，
+          // 如实记 unverified 并转负路径提交层——让"配置类型写错"表现为可诊断的未验证，
+          // 而不是伪装成被测系统缺陷/硬失败。
+          const ctrl = await input.evaluate((el: any) => {
+            const tag = String(el.tagName || '').toLowerCase();
+            const type = tag === 'input' ? String(el.type || '') : '';
+            const sw = !!(el.closest && el.closest('.ant-switch'));
+            return { tag, type, sw };
+          }).catch(() => ({ tag: '', type: '', sw: false } as any));
+          if (ctrl.type === 'checkbox' || ctrl.type === 'radio' || ctrl.sw) {
+            const actual = ctrl.sw ? 'switch' : ctrl.type;
+            recAll(check, name, 'unverified',
+                   `控件实际类型为 ${actual}（定位器声明为 input），无法 fill：必填校验需提交层/API 层覆盖`);
+            continue;
+          }
           // rev92：antd Select 必填——展开下拉后 Esc 取消（无选择变更），再 blur
           // 尝试触发校验；无提示则如实 unverified 并交负路径提交层（真实提交验证）。
           if (String(def.kind || '') === 'select') {
@@ -2586,7 +4215,7 @@ _FORM_EXECUTOR_TS = r"""
             await page.keyboard.press('Escape').catch(() => undefined);
             await page.waitForTimeout(300);
             await modal.locator('.ant-form-item-label, label').first().click({timeout: 5000}).catch(() => undefined);
-            const selErr = await itemHasError(page, modal, check.field);
+            const selErr = await itemHasErrorCtl(page, modal, check.field, def);
             recAll(check, name, selErr ? 'pass' : 'unverified',
                    selErr ? '展开下拉后取消出现必填校验提示'
                           : '展开/取消下拉未触发必填提示（无变更事件，进入负路径提交层重试）');
@@ -2598,7 +4227,7 @@ _FORM_EXECUTOR_TS = r"""
             const diag = await datePickThenClear(page, anyScope, modal, check.field, def);
             if (diag) { recAll(check, name, 'unverified', `日期控件交互失败：${diag}`); continue; }
             await modal.locator('.ant-form-item-label, label').first().click({timeout: 5000}).catch(() => undefined);
-            const dateErr = await itemHasError(page, modal, check.field);
+            const dateErr = await itemHasErrorCtl(page, modal, check.field, def);
             recAll(check, name, dateErr ? 'pass' : 'unverified',
                    dateErr ? '选日期后清除出现必填校验提示' : '选/清日期后未出现必填提示（可能仅提交时校验）');
             if (!dateErr) submitQueue.push({check, name, kind: 'required_empty'});
@@ -2630,7 +4259,8 @@ _FORM_EXECUTOR_TS = r"""
           await page.waitForTimeout(200);
           await input.fill('', {timeout: OP_T});
           await input.blur({timeout: OP_T});
-          const hasError = await itemHasError(page, modal, check.field);
+          // rev140：错误检测锚定控件（题目标题→卡片「标题」这类标签名不同步的盲区，见 itemHasErrorCtl）
+          const hasError = await itemHasErrorCtl(page, modal, check.field, def);
           recAll(check, name, hasError ? 'pass' : 'unverified',
                  hasError ? '填值后清空出现必填校验提示' : '填值后清空仍未出现必填提示（可能仅提交时校验）');
           if (!hasError) submitQueue.push({check, name, kind: 'required_empty'});
@@ -2670,7 +4300,8 @@ _FORM_EXECUTOR_TS = r"""
           const label = probeNote ? `${probeNote}` : `输入 ${probeValue}`;
           await input.fill(probeValue, {timeout: OP_T});
           await input.blur({timeout: OP_T});
-          const invalid = await itemHasError(page, modal, check.field);
+          // rev140：错误检测锚定控件（与 required_error 同源，见 itemHasErrorCtl）
+          const invalid = await itemHasErrorCtl(page, modal, check.field, def);
           const actual = await controlValue(input);
           // rev93（2026-10-07 实测 artifacts/b_limit_period_input.json）：部分控件"先显示后回滚"——
           // antd RangePicker 键入 2026-10-01 时 inputValue 可读到该文本（面板未确认），**失焦后回滚为空**。
@@ -2701,6 +4332,54 @@ _FORM_EXECUTOR_TS = r"""
         console.log(`CS_PAGE_DIAG check=${name} ${await pageDiag(page)}`);
         recAll(check, name, 'blocked', `执行异常：${String(error).slice(0, 300)}`);
       }
+    }
+    // rev144：ERRORED_ITEM + 兜底填充**提升到提交层/场景层共享作用域**——
+    // 负路径提交层（fillEmptyErrored）与规则级场景（提交前 pre-flight）都要用。
+    // v3 形态说明见下方原注释（TR-759 SUBMIT_ERR_DETAIL 实锤）。
+    const ERRORED_ITEM = '.ant-form-item.has-error, .ant-form-item:has(.ant-form-item-explain-error), .ant-form-item:has(.ant-form-explain), .ant-form-item:has(.has-error)';
+    // 把当前可见的 errored 必填项填上（输入框填值；radio/checkbox 真实点击未选中项）。
+    // 返回处理条数。``skipMarked``：跳过带 rev69ut 标记的「目标字段」form-item。
+    async function fillErroredItems(container: any, skipMarked: boolean): Promise<number> {
+      const items = container.locator(ERRORED_ITEM);
+      const n = await items.count();
+      let handled = 0;
+      for (let i = 0; i < n; i++) {
+        const it = items.nth(i);
+        if (skipMarked && await it.evaluate((el: any) => !!(el as any).dataset && (el as any).dataset.rev69ut === '1').catch(() => false)) continue;
+        const label = String(await it.locator('label').first().innerText({timeout: 1000}).catch(() => ''));
+        const fileInput = it.locator('input[type=file]').first();
+        if (await fileInput.count()) {
+          await fileInput.setInputFiles(
+            {name: 'probe.txt', mimeType: 'text/plain', buffer: Buffer.from('rev69 negative-path probe')},
+            {timeout: 2000}).catch(() => undefined);
+          handled += 1;
+          continue;
+        }
+        const rcInput = it.locator('input[type=radio], input[type=checkbox]').first();
+        if (await rcInput.count().catch(() => 0)) {
+          const wrappers = it.locator('.ant-radio-wrapper:visible, .ant-checkbox-wrapper:visible');
+          const wn = await wrappers.count().catch(() => 0);
+          let done = false;
+          for (let wi = 0; wi < wn; wi++) {
+            const w = wrappers.nth(wi);
+            const checked = await w.locator('input').first().isChecked().catch(() => false);
+            if (!checked) { await w.click({timeout: 1500}).catch(() => undefined); done = true; break; }
+          }
+          if (!done && wn) await wrappers.first().click({timeout: 1500}).catch(() => undefined);
+          if (!wn) await rcInput.check({timeout: 1500}).catch(() => undefined);
+          handled += 1;
+          continue;
+        }
+        const input = it.locator('input:visible, textarea:visible').first();
+        if (!(await input.count())) continue;   // 单选类无法程序化填充
+        const val = String(await input.inputValue({timeout: 500}).catch(() => ''));
+        if (val) continue;                       // 已有值（可能是目标探针字段）
+        const v = /手机|电话|phone/i.test(label) ? FORM_PHONE : '1';
+        await input.fill(v, {timeout: 1000}).catch(() => undefined);
+        await input.blur({timeout: 1000}).catch(() => undefined);
+        handled += 1;
+      }
+      return handled;
     }
     // ===== 负路径提交层校验（rev67，2026-09-25 用户确认口径）=====
     // 只对客户端层未验证的「期望拒绝」断言执行真实提交。顺序：先 probe（把非法探针值
@@ -2742,7 +4421,6 @@ _FORM_EXECUTOR_TS = r"""
         }
       };
       // antd v3/v4 兼容的错误项选择器
-      const ERRORED_ITEM = '.ant-form-item.has-error, .ant-form-item:has(.ant-form-item-explain-error)';
       // rev69 网络响应捕获层：页面证据为主、网络证据为辅。收集提交窗口内的写请求响应
       //（状态码 + 响应体摘要），用于给「页面无拒绝证据」的负路径项补上服务端侧确定性结论。
       // tk 令牌隔离每个用例项的收集窗口，防止上一项的迟到响应污染下一项判定。
@@ -2753,13 +4431,20 @@ _FORM_EXECUTOR_TS = r"""
       let netToken = 0;
       // rev69 诊断：request 级捕获（区分「请求从未发出」vs「发出但无响应」）
       const reqLog: Array<{tk: number; m: string; url: string}> = [];
+      // rev130（2026-10-20 F-2）：**提交层的监听器同样要挂应用所在页面**。
+      // rev129 只修了规则级负向场景的监听器（见下方 listenPage），提交层这四处仍是
+      // `page.on(...)`：门户卡片式应用（数盈营销云/交易云）点卡片后新开标签页，
+      // 主 page 是控制台门户 —— 一个请求都收不到，于是服务端已受理却被判 unverified
+      // （与 TR-741/742 完全同源，只是触发条件是 submit_phase 的 probe/required_empty）。
+      // anyScope 是 Page（有 .on）→ 挂它；是 FrameLocator（iframe 应用）→ 回退 page。
+      const submitListenPage = (typeof (anyScope as any).on === 'function') ? anyScope : page;
       const onNetReq = (r: any) => {
         try {
           if (String(r.method()).toUpperCase() === 'GET') return;
           reqLog.push({tk: netToken, m: String(r.method()), url: String(r.url()).slice(0, 90)});
         } catch { /* ignore */ }
       };
-      page.on('request', onNetReq);
+      submitListenPage.on('request', onNetReq);
       // rev69 诊断：JS 报错捕获（提交点击若触发未处理异常会在这里现形）
       const errLog: Array<{tk: number; kind: string; text: string}> = [];
       const onPageErr = (e: any) => {
@@ -2770,8 +4455,8 @@ _FORM_EXECUTOR_TS = r"""
           if (String(m.type()) === 'error') errLog.push({tk: netToken, kind: 'console', text: String(m.text()).slice(0, 150)});
         } catch { /* ignore */ }
       };
-      page.on('pageerror', onPageErr);
-      page.on('console', onConsoleMsg);
+      submitListenPage.on('pageerror', onPageErr);
+      submitListenPage.on('console', onConsoleMsg);
       const onNetResp = (r: any) => {
         try {
           const req = r.request();
@@ -2801,33 +4486,12 @@ _FORM_EXECUTOR_TS = r"""
           });
         } catch { /* 监听失败不致命 */ }
       };
-      page.on('response', onNetResp);
+      submitListenPage.on('response', onNetResp);
       // 把"非目标字段"的空必填用兜底值填上（手机号用默认号码，其余用 '1'），
       // 让非法探针值能穿过客户端校验触达服务端（负路径：服务端应拒绝）。
+      // rev144：逻辑提升到共享的 fillErroredItems（场景层 pre-flight 复用）
       const fillEmptyErrored = async () => {
-        const items = curModal.locator(ERRORED_ITEM);
-        const n = await items.count();
-        for (let i = 0; i < n; i++) {
-          const it = items.nth(i);
-          // rev69：跳过被标记的「目标字段」form-item，保证负路径「仅目标字段违规」成立
-          if (await it.evaluate((el: any) => !!(el as any).dataset && (el as any).dataset.rev69ut === '1').catch(() => false)) continue;
-          const label = String(await it.locator('label').first().innerText({timeout: 1000}).catch(() => ''));
-          // rev69：上传类必填用合成文件填充（Buffer 不落盘），让探针请求能触达服务端
-          const fileInput = it.locator('input[type=file]').first();
-          if (await fileInput.count()) {
-            await fileInput.setInputFiles(
-              {name: 'probe.txt', mimeType: 'text/plain', buffer: Buffer.from('rev69 negative-path probe')},
-              {timeout: 2000}).catch(() => undefined);
-            continue;
-          }
-          const input = it.locator('input:visible, textarea:visible').first();
-          if (!(await input.count())) continue;   // 单选类无法程序化填充
-          const val = String(await input.inputValue({timeout: 500}).catch(() => ''));
-          if (val) continue;                       // 已有值（可能是目标探针字段）
-          const v = /手机|电话|phone/i.test(label) ? FORM_PHONE : '1';
-          await input.fill(v, {timeout: 1000}).catch(() => undefined);
-          await input.blur({timeout: 1000}).catch(() => undefined);
-        }
+        await fillErroredItems(curModal, true);
         await page.waitForTimeout(600);
       };
       const ordered = [...submitQueue].sort(
@@ -2836,29 +4500,53 @@ _FORM_EXECUTOR_TS = r"""
       // 挂起 20+ 分钟撞 runner 上限且 stdout 被杀丢失。预算耗尽后剩余项如实记
       // unverified（归 API 层），绝不让单个提交项拖死整批。
       const submitDeadline = Date.now() + 300000;
+      // rev117（P0-1）：**单项看门狗**。rev90 的整体预算只在「项与项之间」检查，
+      // 单个提交项在内部挂死时预算永远没机会再判——实测商品主数据 TC-238772 卡满
+      // 1710s（撞 runner 上限）、stdout 零输出，连卡在哪一步都看不出来。
+      // 口径：每项最多 SUBMIT_ITEM_MS（默认 90s，可由 WEB_SUBMIT_ITEM_MS 下发）；
+      // 超时即记 unverified 并带上「卡在第几阶段」，剩余项标为页面状态不可信，
+      // 绝不让单项吃掉整批预算。
+      const SUBMIT_ITEM_MS = Number(process.env.WEB_SUBMIT_ITEM_MS || 0) || 90000;
+      let submitAborted = '';
       for (const item of ordered) {
         const check = item.check;
-        if (Date.now() > submitDeadline) {
-          recAll(check, item.name, 'unverified', '提交层整体超时预算（5分钟）耗尽，该项未验证（需 API 层验证）');
+        if (submitAborted) {
+          submitRec(check, item.name, 'unverified', submitAborted);
           continue;
         }
-        try {
+        if (Date.now() > submitDeadline) {
+          submitRec(check, item.name, 'unverified', '提交层整体超时预算（5分钟）耗尽，该项未验证（需 API 层验证）');
+          continue;
+        }
+        // 阶段心跳：卡死时能直接看到停在哪一步（每行压短，平台会截断 stdout）
+        let submitStage = 'init';
+        const submitT0 = Date.now();
+        const markStage = (name: string) => {
+          submitStage = name;
+          console.log(`SUBMIT_STAGE ${JSON.stringify({ item: String(item.name).slice(0, 40), stage: name, elapsed_ms: Date.now() - submitT0 })}`);
+        };
+        // 单项执行体：原循环体原样搬入（continue → return），返回即「该项结束」
+        const runSubmitItem = async (): Promise<void> => {
+          markStage('open_form');
           // 韧性：页面/弹窗中途死亡时降级为 unverified 并跳过，不让整轮挂死
           if (typeof (page as any).isClosed === 'function' && (page as any).isClosed()) {
-            recAll(check, item.name, 'unverified', '提交层：页面已关闭，无法继续验证'); continue;
+            submitRec(check, item.name, 'unverified', '提交层：页面已关闭，无法继续验证'); return;
           }
           if (!(await curModal.isVisible().catch(() => false))) {
             try { curModal = await openForm(); }
-            catch { recAll(check, item.name, 'unverified', '提交层：表单弹窗无法重开，跳过该项'); continue; }
+            catch { submitRec(check, item.name, 'unverified', '提交层：表单弹窗无法重开，跳过该项'); return; }
           }
           const def = fieldDefs[check.field] || {};
           // 1) 复位目标字段状态：required_empty 清空；probe 填非法探针值
           await ensureMode(page, curModal, check.mode);
           const input = await fieldControl(curModal, check.field, def);
+          markStage('field_ready');
           // rev69：给「目标字段」的 form-item 打标记，兜底填充(fillEmptyErrored)跳过它，
           // 保证负路径「仅目标字段违规、其余字段合法」成立（否则空必填兜底会把目标字段也填上）
           const underItem = (await input.count())
-            ? input.locator('xpath=ancestor::div[contains(@class,"ant-form-item")][1]') : null;
+            // rev141：精确 token 匹配（同 itemHasErrorCtl）——松匹配会命中
+            // .ant-form-item-control，标记打错元素 ⇒ 兜底填充会把目标字段填上
+            ? input.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " ant-form-item ")][1]') : null;
           if (underItem && (await underItem.count())) {
             await underItem.evaluate((el: any) => { (el as any).dataset.rev69ut = '1'; }).catch(() => undefined);
           }
@@ -2866,17 +4554,18 @@ _FORM_EXECUTOR_TS = r"""
           if (await input.count()) {
             const roSub = await input.getAttribute('readonly', {timeout: 3000}).catch(() => null);
             if (roSub !== null) {
-              recAll(check, item.name, 'unverified', '提交层：字段为只读选择器（readonly input），无法注入探针/清空触发必填校验');
-              continue;
+              submitRec(check, item.name, 'unverified', '提交层：字段为只读选择器（readonly input），无法注入探针/清空触发必填校验');
+              return;
             }
           }
           // rev79：antd Select 下拉控件在提交层同样无法 fill（组件内部伪 input 会抛异常）→ 如实记 unverified
           if (String(def.kind || '') === 'select') {
-            recAll(check, item.name, 'unverified', '提交层：antd Select 下拉控件无法注入探针值，需下拉交互路径或 API 层验证');
-            continue;
+            submitRec(check, item.name, 'unverified', '提交层：antd Select 下拉控件无法注入探针值，需下拉交互路径或 API 层验证');
+            return;
           }
+          markStage('prepare_value');
           if (item.kind === 'probe') {
-            if (!(await input.count())) { await reportLocatorMiss('submit_phase', item.check || check, modal); recAll(check, item.name, 'unverified', '提交层：未定位到输入框（定位现场见 [observation] 行）'); continue; }
+            if (!(await input.count())) { await reportLocatorMiss('submit_phase', item.check || check, modal); submitRec(check, item.name, 'unverified', '提交层：未定位到输入框（定位现场见 [observation] 行）'); return; }
             await input.fill(String(item.probeValue || check.data || ''), {timeout: OP_T});
             await input.blur({timeout: OP_T});
           } else if (await input.count()) {
@@ -2895,33 +4584,98 @@ _FORM_EXECUTOR_TS = r"""
               await input.blur({timeout: OP_T});
             }
           }
+          // rev144/rev146：block_siblings（fields.<字段>.block_siblings = [{field, value}]）——
+          // 本 SUT 卡片校验**逐字段只报第一个空字段**（toast「题目1：请输入标题」），
+          // 且每个提交项都重开表单 ⇒ 标题恒空 ⇒ 选项1 的 toast 永远轮不到 ⇒ 归因无门
+          //（TR-761 实测：选项1 的 block_toast 只有两条标题）。提交前把声明的兄弟必填
+          // 先填上，让 toast 只剩目标字段自己的那条。
+          // rev146：直接读 fieldDefs——`itemDef` 声明在下方 TOAST 区，此处引用会 TDZ
+          //（TR-762 实测 ReferenceError ⇒ blocked=2 硬失败闸）。
+          const sibOwner = fieldDefs[check.field] || {};
+          for (const sib of (Array.isArray((sibOwner as any).block_siblings) ? (sibOwner as any).block_siblings : [])) {
+            if (sib && sib.field) {
+              const sibDef = fieldDefs[String(sib.field)] || {};
+              const sibCtl = await fieldControl(curModal, String(sib.field), sibDef);
+              if (await sibCtl.count().catch(() => 0)) {
+                await sibCtl.fill(String(sib.value == null ? '1' : sib.value), {timeout: OP_T}).catch(() => undefined);
+                await sibCtl.blur({timeout: OP_T}).catch(() => undefined);
+              }
+            }
+          }
           // 2) 点击提交并**轮询**判定信号（字段提示/错误toast/弹窗关闭任一命中即停）；
           //    probe/required_empty 若被其他空必填拦截 → 兜底填充（跳过目标字段）后重试；
           //    确认层出现 → 点确认放行到服务端。
           const TOAST_SEL = '.ant-message-notice-error, .ant-notification-notice-error, .ant-message .anticon-close-circle';
+          // rev142（2026-10-20 探针4 + 截图实锤）：本 SUT 的必填拦截是**warning 样式
+          // toast**（「题目 11：请输入标题」，橙色叹号）——不在 TOAST_SEL 的 error 类里，
+          // 也不是卡片 explain（卡片校验走 toast，不走 inline）。故按**文本**匹配任意
+          // message/notification 通知，不再依赖样式类。
+          const TOAST_BLOCK_RE = /请输入|请选择|必填|不能为空|请填写/;
+          // rev144：返回**全部**命中文案的拼接——一保存可能弹多条 toast
+          //（「请输入标题」+「请输入选项内容」逐字段各一条），只取第一条会让
+          // 选项1 的归因被标题的 toast 挡掉。
+          const blockToastText = async (): Promise<string> => {
+            const texts = await anyScope.locator('.ant-message-notice, .ant-notification-notice')
+              .allInnerTexts().catch(() => [] as string[]);
+            return (texts || []).map((t) => String(t || '').replace(/\s+/g, ' ').trim())
+              .filter((t) => TOAST_BLOCK_RE.test(t)).join(' | ');
+          };
+          // rev142：归因表——由编译期 ``field_alias_applied``（文档字段名→定位器键）
+          // 反转出「定位器键 → 页面别名」。toast 文案「题目 11：请输入**标题**」含的是
+          // 页面标签「标题」而非规则字段名「题目标题」⇒ 归因必须同时查两者。
+          const ALIAS_SOURCES: Record<string, string[]> = {};
+          for (const a of (FORM_PLAN.field_alias_applied || [])) {
+            if (a && a.from && a.to) (ALIAS_SOURCES[a.to] = ALIAS_SOURCES[a.to] || []).push(a.from);
+          }
+          const attrHit = (field: string, text: string): boolean => {
+            if (!text) return false;
+            if (text.includes(field)) return true;
+            return (ALIAS_SOURCES[field] || []).some((s) => text.includes(s));
+          };
+          // rev140：全页错误元素基线（.ant-form-explain / v4 explain-error / .has-error 控件）——
+          // 用于「无写请求 + 页面错误面扩大 = 前端拦截」的收敛防线（不区分是哪个字段，
+          // 只作为 fieldError 未命中时的第二信号；文案里如实写明判定依据）。
+          const formErrCount = async () => anyScope.locator('.ant-form-explain, .ant-form-item-explain-error').count().catch(() => -1);
+          const formErrBase = await formErrCount();
+          const itemDef = (FORM_PLAN.locators.fields || {})[check.field] || {};
           // rev69 关键修复：confirm 层和 toast 都渲染在应用 iframe 内（appScope=frameLocator），
           // 用 page.locator（主 frame）永远找不到——此前负路径提交被确认层卡死、请求发不出去。
           const confirmClick = async () => {
             const cb = anyScope.locator('.ant-modal-confirm .ant-btn-primary').first();
-            if ((await cb.count()) && (await cb.isVisible().catch(() => false))) {
-              await cb.click({timeout: 4000}).catch(() => undefined);
+            const cn = await cb.count().catch(() => 0);
+            if (cn && (await cb.isVisible().catch(() => false))) {
+              await cb.click({timeout: 1500}).catch(() => undefined);
             }
           };
           const observe = async () => ({
-            fieldError: await itemHasError(page, curModal, check.field, 250),
+            fieldError: await itemHasErrorCtl(page, curModal, check.field, itemDef, 250),
             toastError: await anyScope.locator(TOAST_SEL).count(),
+            blockToast: await blockToastText(),
             stillOpen: await curModal.isVisible().catch(() => false),
           });
           const settleRound = async (rounds: number) => {
+            const t0 = Date.now();
             for (let i = 0; i < rounds; i++) {
               await page.waitForTimeout(400);
-              const s = await observe();
-              if (s.fieldError || s.toastError || !s.stillOpen) return s;
+              // rev143：toast **先**查——存续仅 ~3s，observe 全链（锚定检测+计数）~2.5s
+              // 可能整段错过 toast 窗口；命中就用轻量信号直接返回。
+              const btFast = await blockToastText();
+              const s = btFast
+                ? { fieldError: false, toastError: 0, blockToast: btFast, stillOpen: await curModal.isVisible().catch(() => false) }
+                : await observe();
+              // rev140：SUBMIT_SETTLE 时间线——命中即停的轮次如实打点，
+              // 90s 卡死时能看出 settle 到底观察到了什么（而非只有 stage 名）。
+              if (s.fieldError || s.toastError || s.blockToast || !s.stillOpen) {
+                console.log(`SUBMIT_SETTLE ${JSON.stringify({ item: String(item.name).slice(0, 40), round: i + 1, elapsed_ms: Date.now() - t0, ...s })}`);
+                return s;
+              }
               await confirmClick();
             }
+            console.log(`SUBMIT_SETTLE ${JSON.stringify({ item: String(item.name).slice(0, 40), rounds, elapsed_ms: Date.now() - t0, hit: false })}`);
             return null;
           };
           netToken += 1; netLog.length = 0;           // rev69：本用例项开启新的收集窗口
+          markStage('submit_click');
           const sig = await (async () => {
             const first = await clickSubmit();
             // O1c/rev100：首次点击即失败 = 请求未发出、无可等证据 → 带标记返回，
@@ -2936,7 +4690,14 @@ _FORM_EXECUTOR_TS = r"""
               const cur = String(await input.inputValue({timeout: 500}).catch(() => ''));
               guardOk = cur === String(item.probeValue || check.data || '');
             } else {
-              guardOk = await itemHasError(page, curModal, check.field, 250);
+              // rev144（2026-10-21，TR-760 实锤）：required_empty 到达这里时目标字段**必然
+              // 无错误**（有错误 settleRound 早就命中返回了）⇒ 旧实现 guardOk 恒 false ⇒
+              // `if (!guardOk) return` 恒早退 ⇒ fillEmptyErrored 对 required_empty 是
+              // **死代码**，保存永远被「问卷标题/业务类型/优先级」三条外层必填拦死
+              //（SUBMIT_ERR_DETAIL 实锤），卡片校验永远走不到。required_empty 的兜底填充
+              // 只填**其他** errored 项（目标被 underItem 标记跳过），不污染负路径前提 ⇒
+              // 应当放行。probe 的「值丢失则放弃重试」守卫保持不变。
+              guardOk = true;
             }
             if (!guardOk) return await observe();
             await fillEmptyErrored();                 // 其他空必填拦截 → 兜底填充重试
@@ -2947,31 +4708,63 @@ _FORM_EXECUTOR_TS = r"""
             const s2 = await settleRound(8);          // 第二轮 ~3.2s + 确认层放行
             return s2 || (await observe());
           })();
+          markStage('settle_done');
           // O1c/rev100：首次点击失败 → 无服务端结论可下，如实记 unverified，队列继续
           if (sig && (sig as any).__submitFailed) {
-            recAll(check, item.name, 'unverified',
+            submitRec(check, item.name, 'unverified',
               `提交层：点击提交失败（${(sig as any).__submitFailed}）——未提交，无法取得服务端结论；队列继续`);
-            continue;
+            return;
           }
           // rev69：扩展网络观察窗（~12s）——兜底填充的上传任务可能较慢，业务提交请求可能晚到；
           // 期间网络证据与页面证据任一命中即停，最终用最新页面状态判定。
           const isBizUrl = (u: string) => !/upload|file|oss|media|image|\.png|\.jpg|\.xlsx|\.xls/i.test(u);
           let late: any = null;
           let synthetic = false;
+          let lastState = '';
+          let stableRounds = 0;
+          // rev140：观察窗限界 20s（30×400ms 名义 12s，但 observe/confirmClick 各自的
+          // 定位等待在页面忙碌时会被拉长——TR-756 实测跑满 73s 触发 90s 看门狗）。
+          // 超预算即跳出走判定分支：宁可如实报「无拒绝证据」，不再吃满单项预算。
+          const lateT0 = Date.now();
           for (let i = 0; i < 30; i++) {
             await page.waitForTimeout(400);
             if (netLog.some((n) => n.tk === netToken && isBizUrl(n.url))) break;
+            // rev143：toast 快查同 settle（~3s 窗口优先于 ~2.5s 的全量观察）
+            const btFastL = await blockToastText();
+            if (btFastL) {
+              late = { fieldError: false, toastError: 0, blockToast: btFastL, stillOpen: await curModal.isVisible().catch(() => false) };
+              break;
+            }
             // rev69：~6s 仍无证据 → 用合成点击(el.click)试探一次，排除可信点击被拦截/失联的可能
             if (i === 15 && !synthetic) {
               synthetic = true;
-              await curModal.locator('.ant-modal-footer button').last()
-                .evaluate((el: any) => (el as any).click()).catch(() => undefined);
+              // rev141：先 count 再 evaluate——空定位器上的 .evaluate 会等满 30s 默认超时
+              //（TR-757 选项1 项的 90s 卡死就是它吃掉的：本页无 .ant-modal-footer）
+              if (await curModal.locator('.ant-modal-footer button').last().count().catch(() => 0)) {
+                await curModal.locator('.ant-modal-footer button').last()
+                  .evaluate((el: any) => (el as any).click()).catch(() => undefined);
+              }
             }
             late = await observe();
-            if (late.fieldError || late.toastError || !late.stillOpen) break;
+            if (late.fieldError || late.toastError || late.blockToast || !late.stillOpen) break;
+            // rev140：收敛防线——无业务写请求 + 页面错误面较基线扩大 = 前端拦截（不空等）
+            const nbNow = netLog.filter((n) => n.tk === netToken && isBizUrl(n.url)).length;
+            const feNow = await formErrCount();
+            if (i >= 3 && nbNow === 0 && feNow > formErrBase) {
+              late = { ...(await observe()), formErrDelta: feNow - formErrBase, __frontendBlocked: true };
+              break;
+            }
+            // rev142：稳定无信号早停——连续 5 轮请求面/错误面都无变化且无任何信号，
+            // 再等也不会有新证据（TR-758 选项1 项白跑 66s）。
+            const stateKey = nbNow + ':' + feNow;
+            if (stateKey === lastState) { stableRounds++; } else { stableRounds = 0; }
+            lastState = stateKey;
+            if (i >= 5 && stableRounds >= 5) break;
             await confirmClick();
           }
-          if (late) { sig.fieldError = late.fieldError; sig.toastError = late.toastError; sig.stillOpen = late.stillOpen; }
+          if (late) { sig.fieldError = late.fieldError; sig.toastError = late.toastError; sig.blockToast = late.blockToast; sig.stillOpen = late.stillOpen; }
+          console.log(`SUBMIT_LATE ${JSON.stringify({ item: String(item.name).slice(0, 40), hit: !!(late && (late.fieldError || late.toastError || late.blockToast || !late.stillOpen)), frontend_blocked: !!(late && (late as any).__frontendBlocked), block_toast: (sig.blockToast || '').slice(0, 60), form_err_base: formErrBase, form_err_now: await formErrCount(), elapsed_ms: Date.now() - lateT0 }) }`);
+          markStage('evidence');
           const nb = netLog.filter((n) => n.tk === netToken);
           const nbBiz = nb.filter((n) => isBizUrl(n.url));
           const nbUp = nb.length - nbBiz.length;
@@ -2983,21 +4776,49 @@ _FORM_EXECUTOR_TS = r"""
           const summarize = (n: any) => `HTTP ${n.status} ${n.url.slice(0, 80)} requestId:${n.requestId || '-'} body:${n.body.slice(0, 120)}`;
           const fieldError = sig.fieldError, toastError = sig.toastError, stillOpen = sig.stillOpen;
           if (fieldError) {
-            recAll(check, item.name, 'pass', `提交层验证：提交后该字段出现校验提示（${check.rule}）`);
+            // rev140：前端拦截判定（无业务写请求 + 错误面扩大）在文案里如实写明判定依据
+            const feBlock = !!(late && (late as any).__frontendBlocked);
+            submitRec(check, item.name, 'pass', `提交层验证：提交后该字段出现校验提示${feBlock ? '，且未发出业务写请求（前端拦截）' : ''}（${check.rule}）`);
           } else if (toastError) {
-            recAll(check, item.name, 'pass', `提交层验证：提交被拒绝，页面出现错误提示（${check.rule}）`);
+            submitRec(check, item.name, 'pass', `提交层验证：提交被拒绝，页面出现错误提示（${check.rule}）`);
+          } else if (sig.blockToast) {
+            // rev142：warning/普通样式 toast 的文本命中（本 SUT 必填拦截的真实形态，
+            // 探针4 截图：「题目 11：请输入标题」橙色 toast）。归因到目标字段才 pass：
+            // 文案含字段名或其页面别名（aliases 反查）。
+            if (attrHit(check.field, sig.blockToast)) {
+              submitRec(check, item.name, 'pass', `提交层验证：提交被前端拦截，提示「${sig.blockToast.slice(0, 60)}」命中目标字段（${check.rule}）`);
+            } else {
+              submitRec(check, item.name, 'unverified',
+                     `提交层：提交被前端拦截（提示「${sig.blockToast.slice(0, 60)}」），但未命中目标字段「${check.field}」——可能被其他必填项拦截（${check.rule}）`);
+            }
           } else if (hit4xx) {
-            recAll(check, item.name, 'pass', `提交层验证：服务端拒绝 ${summarize(hit4xx)}（${check.rule}）`);
+            submitRec(check, item.name, 'pass', `提交层验证：服务端拒绝 ${summarize(hit4xx)}（${check.rule}）`);
           } else if (err2xx) {
-            recAll(check, item.name, 'pass', `提交层验证：服务端业务层拒绝 ${summarize(err2xx)}（${check.rule}）`);
+            submitRec(check, item.name, 'pass', `提交层验证：服务端业务层拒绝 ${summarize(err2xx)}（${check.rule}）`);
           } else if (!stillOpen) {
             const acc = ok2xx.length ? ok2xx[ok2xx.length - 1] : null;
             // requestId（P1-3 阶段 A）：坐实缺陷的分支，requestId 是提单必需项，显式列出
             // 而不只藏在 summarize 里，便于日志检索与工单直接引用
             const accRid = acc ? (acc.requestId || '未在响应头暴露') : '';
-            recAll(check, item.name, 'blocked',
+            submitRec(check, item.name, 'blocked',
                    acc ? `疑似缺陷坐实：服务端受理非法请求 ${summarize(acc)}（约束「${check.rule}」未生效）；建议 UAT 数据佐证并登记缺陷。定位凭据：requestId=${accRid}`
                        : `期望拒绝但提交成功（弹窗已关闭，疑似缺陷：约束「${check.rule}」未生效）`);
+          } else if (late && (late as any).__frontendBlocked) {
+            // rev141：前端拦截**归因**。收敛信号（无业务写请求 + 错误面扩大）只证明
+            // 「提交被拦」，不证明「被目标字段的约束拦」——TR-757 实测错误面扩大的 3 条
+            // 全是 radio 组、无一是目标字段。归因 = 锚定检测 + toast 文本（含别名反查）。
+            const targetErr = await itemHasErrorCtl(page, curModal, check.field, itemDef, 300);
+            const bt = sig.blockToast || await blockToastText();
+            if (targetErr || attrHit(check.field, bt)) {
+              submitRec(check, item.name, 'pass', `提交层验证：未发出业务写请求（前端拦截），证据命中目标字段${bt ? `（提示「${bt.slice(0, 60)}」）` : ''}（${check.rule}）`);
+            } else {
+              // rev142：归因失败时留地面真相（explain 归属 + toast 全文），别让下一轮再猜
+              const detail = await anyScope.locator('.ant-form-explain, .ant-form-item-explain-error')
+                .allInnerTexts().catch(() => [] as string[]);
+              console.log(`SUBMIT_ERR_DETAIL ${JSON.stringify({ item: String(item.name).slice(0, 40), field: check.field, explains: (detail || []).map((t) => String(t).trim()).filter(Boolean).slice(0, 8), block_toast: bt.slice(0, 80) }) }`);
+              submitRec(check, item.name, 'unverified',
+                     `提交层：提交被前端拦截（页面出现校验提示），但均不属于目标字段「${check.field}」——可能被其他必填项拦截（兜底填充未能清空全部拦截项）（${check.rule}）`);
+            }
           } else {
             const remaining = await curModal.locator(ERRORED_ITEM).count().catch(() => -1);
             // rev69 调试：零捕获时输出地面真相——提交按钮状态（是否 disabled）、
@@ -3084,7 +4905,7 @@ _FORM_EXECUTOR_TS = r"""
               }).catch(() => 'audit_err'),
             }));
             await page.screenshot({path: `submit_debug_${item.kind}_${Date.now()}.png`, fullPage: false}).catch(() => undefined);
-            recAll(check, item.name, 'unverified',
+            submitRec(check, item.name, 'unverified',
                    nbBiz.length
                      ? `提交层：页面无拒绝证据，捕获到 ${nbBiz.length} 条业务写请求但均无拒绝语义（${check.rule}）`
                      : (nbUp > 0
@@ -3097,10 +4918,31 @@ _FORM_EXECUTOR_TS = r"""
           if (underItem) await underItem.evaluate((el: any) => { delete (el as any).dataset.rev69ut; }).catch(() => undefined);
           // 4) 提交成功会关掉表单弹窗 → 重开以继续后续检查
           if (!stillOpen) curModal = await openForm();
+        };
+        let wdTimer: any = null;
+        const watchdog = new Promise<never>((_, reject) => {
+          wdTimer = setTimeout(
+            () => reject(new Error(`__submit_item_timeout__ ${submitStage}`)),
+            SUBMIT_ITEM_MS);
+        });
+        try {
+          await Promise.race([runSubmitItem(), watchdog]);
         } catch (error) {
           const msg = String(error);
-          recAll(check, item.name, 'blocked', `提交层校验执行异常：${msg.slice(0, 120)}`);
-          if (msg.includes('has been closed') || msg.includes('Target closed')) break;  // 页面已死，后续项无意义
+          if (msg.includes('__submit_item_timeout__')) {
+            const stuck = msg.split('__submit_item_timeout__')[1].trim();
+            console.log(`SUBMIT_TIMEOUT ${JSON.stringify({ item: String(item.name).slice(0, 40), stage: stuck, budget_ms: SUBMIT_ITEM_MS, elapsed_ms: Date.now() - submitT0 })}`);
+            submitRec(check, item.name, 'unverified',
+                   `提交层：单项超时（卡在 ${stuck} 阶段 > ${Math.max(1, Math.round(SUBMIT_ITEM_MS / 1000))}s）——该项未验证，需简化该步骤或改走 API 层`);
+            submitAborted = `提交层：前一项（${String(item.name).slice(0, 30)}）在「${stuck}」阶段超时，页面状态不可信，本项未验证`;
+          } else {
+            submitRec(check, item.name, 'blocked', `提交层校验执行异常：${msg.slice(0, 120)}`);
+            if (msg.includes('has been closed') || msg.includes('Target closed')) {
+              submitAborted = '提交层：页面已关闭，后续项未验证';
+            }
+          }
+        } finally {
+          if (wdTimer) clearTimeout(wdTimer);
         }
       }
       page.off('response', onNetResp);            // rev69：提交层结束，卸载网络监听
@@ -3121,6 +4963,9 @@ _FORM_EXECUTOR_TS = r"""
     // 只读阶段不产生写请求；本阶段是**唯一**会真实写库的段，因此写隔离必须收窄到
     // 场景自己声明的那个接口（见 negRules），并把"装不上隔离"处理成 fail-closed。
     const negativeStat = {configured: 0, executed: 0, pass: 0, blocked: 0, unverified: 0};
+    //: 「列表可见」阶段计数（2026-10-16）：与 submit_phase / negative_scenario_phase **分开计数**——
+    //: 它验证的是"写入后记录是否可检索"，既不是字段级校验，也不是服务端受理判定。
+    const listStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
     async function runNegativeScenarios(): Promise<void> {
       const scenarios: any[] = Array.isArray(FORM_PLAN.negative_scenarios)
         ? FORM_PLAN.negative_scenarios : [];
@@ -3159,7 +5004,26 @@ _FORM_EXECUTOR_TS = r"""
             if (!(await candidate.count().catch(() => 0))) continue;
             try {
               await candidate.waitFor({state: 'visible', timeout: 2500});
+              // rev144：radio/checkbox 幂等守卫——点「已选中」的选项会把可见状态**切换掉**
+              //（TR-761 实锤：场景 setup 点「外卖」，默认视觉选中 ⇒ 点完反而不选 ⇒
+              // 保存被「请选择业务类型」拦住，负向场景从 pass 翻车成 unverified）。
+              // 命中的元素自身是 input、或其祖先 wrapper 内的 input 已选中时跳过点击。
+              const rcSelf = candidate.locator('xpath=self::input[@type="radio" or @type="checkbox"]').first();
+              const rcWrap = candidate.locator('xpath=ancestor::*[contains(@class,"ant-radio-wrapper") or contains(@class,"ant-checkbox-wrapper")][1]//input[@type="radio" or @type="checkbox"]').first();
+              const rcSelfN = await rcSelf.count().catch(() => 0);
+              const rcWrapN = await rcWrap.count().catch(() => 0);
+              if (rcSelfN && await rcSelf.isChecked().catch(() => false)) return true;
+              if (!rcSelfN && rcWrapN && await rcWrap.isChecked().catch(() => false)) return true;
               await candidate.click({timeout: 5000});
+              // rev144：radio/checkbox 点击后**验证**——label 文本点击在 antd 结构上未必
+              // 触发 onChange（TR-761：外卖点击未生效 ⇒ 保存被「请选择业务类型」拦住）；
+              // 未选中则对 input 合成 click 兜底。
+              if (rcSelfN || rcWrapN) {
+                const rcV = rcSelfN ? rcSelf : rcWrap;
+                if (!(await rcV.isChecked().catch(() => false))) {
+                  await rcV.evaluate((el: any) => (el as any).click()).catch(() => undefined);
+                }
+              }
               return true;
             } catch { /* 该候选不可点，试下一个 */ }
           }
@@ -3240,8 +5104,22 @@ _FORM_EXECUTOR_TS = r"""
             const setupDefs = ((FORM_PLAN.locators || {}).fields) || {};
             const input = await fieldControl(anyScope, field, setupDefs[field] || {});
             if (!(await input.count().catch(() => 0))) return `${where}：未定位到字段「${field}」`;
-            await input.fill(String(step.value || ''), {timeout: OP_T});
+            // rev124（A2）：唯一化占位符在**运行期**展开，值里没有占位符则逐字不变。
+            const effective = runTagValue(field, step.value);
+            await input.fill(effective, {timeout: OP_T});
             await input.blur({timeout: OP_T}).catch(() => undefined);
+            // rev126：唯一化"填进去的到底是不是那个值"必须自证。
+            // 控件若有 maxLength，长编号会被**静默截断**——截断掉的可能正是区分两次
+            // 运行的尾段，那就等于没唯一化，而日志里仍写着"已唯一化"（假绿）。
+            if (runTagUsed.length && runTagUsed[runTagUsed.length - 1].field === field) {
+              // rev134：回读统一走 controlValue()。旧实现直连 `input.inputValue`（无兜底），
+              // 对 contenteditable（富文本）字段会读到长度错乱的字符串 ⇒ 唯一化自证
+              // 会误报 truncated=true（或反过来把截断当正常），而控件其实是好的。
+              const actual = String(await controlValue(input));
+              console.log('RUN_TAG_APPLIED ' + JSON.stringify({
+                field, intended: effective, actual, truncated: actual !== effective,
+              }));
+            }
             continue;
           }
           if (action === 'click_selector') {
@@ -3253,6 +5131,134 @@ _FORM_EXECUTOR_TS = r"""
             if (!(await elCs.count())) return `${where}：未定位到 ${selCs}`;
             await elCs.click({timeout: 8000});
             await page.waitForTimeout(Math.max(300, Number(step.ms) || 800));
+            continue;
+          }
+          if (action === 'type') {
+            // rev115：键盘逐字输入原语（autocomplete / 受控组件专用）。
+            // 与 fill 的唯一区别：**不 blur**。fill = value+blur，实测（TR-468/469）
+            // 会把 Google autocomplete 的 .pac-container 候选面板随失焦收起，
+            // 且重新聚焦（无新 input 事件）不会重开 ⇒ 候选永远点不到。
+            // type = click 定位 → page.keyboard.type 逐字输入（每键触发 input 事件，
+            // 候选面板保持展开），随后可 click_selector 点 .pac-item 候选。
+            const selTy = String(step.selector || '').trim();
+            if (!selTy) return `${where}：type 缺少 selector`;
+            const elTy = anyScope.locator(selTy).first();
+            if (!(await elTy.count())) return `${where}：未定位到 ${selTy}`;
+            // rev124（A2）：先一次性展开占位符，避免下面两个分支各自调用导致重复记日志。
+            const typed = runTagValue(String(step.field || ''), step.value);
+            if (String(step.clear || '') ) {
+              // 三击全选已有文本（如弹窗搜索框预填了表单地址），随后键入即整体替换；
+              // 不做清空会导致 keyboard.type 追加、查询串翻倍而无候选（TR-471 实测）。
+              await elTy.click({clickCount: 3, timeout: 8000});
+            } else {
+              await elTy.click({timeout: 8000});
+            }
+            if (String(step.mode || '') === 'set') {
+              // mode=set：程序化赋值（Playwright fill 语义，**不 blur**）。
+              // A/B 实测（TR-473 探针，2026-10-17）：Select Address 弹窗的 Google
+              // autocomplete 对 keyboard.type 的 CJK 逐键输入不吐候选（pac-container
+              // 0 项），对程序化 fill+input 事件则正常出候选（1 项）——且不 blur
+              // 面板保持展开；平台 fill 因自带 blur 永远点不到 .pac-item。
+              await elTy.fill(typed, {timeout: 8000});
+            } else {
+              await page.keyboard.type(typed, {delay: 80});
+            }
+            await page.waitForTimeout(Math.max(300, Number(step.ms) || 800));
+            continue;
+          }
+          if (action === 'clear_select') {
+            // rev113：antd Select「确保为空」原语（幂等）。
+            // 实测（2026-10-16）：商品新增页的 Brand 在**干净载入**时本就为空、连清除
+            // 图标都不渲染（TR-390：.ant-select-clear 计数 0，提交体不含 brandId，
+            // 服务端受理）；但同一页面也出现过「默认预选品牌列表第一项」的情形
+            // （TR-381/382：未选品牌却提交 brandId=1451454576981397597，全被服务端
+            // 拒 10007）。两种状态都会出现 ⇒ 硬清（click_selector 点不到就报错，
+            // TR-387）与硬选后清（TR-389：clear 图标只在有值时才渲染，且默认
+            // display/opacity 隐藏，普通 click 等不到可操作状态而超时）都会失败。
+            // 本原语的口径：**有值就清、没值就放过**，绝不因此让场景 unverified。
+            // 清除图标在 antd 中隐藏到 hover 才显现 —— 沿用本仓既有样板
+            // datePickThenClear 的「先 hover 父节点、再点图标」写法。
+            const selClr = String(step.selector || '').trim();
+            if (!selClr) return `${where}：clear_select 缺少 selector（下拉根 CSS）`;
+            const rootClr = anyScope.locator(selClr).first();
+            if (!(await rootClr.count())) return `${where}：未定位到下拉根 ${selClr}`;
+            const iconClr = rootClr.locator('.ant-select-clear, .ant-select-selection__clear').first();
+            if (!(await iconClr.count())) {
+              // 本来就为空：无清除图标可点，直接视为已达成目标
+              await page.waitForTimeout(Math.max(200, Number(step.ms) || 300));
+              continue;
+            }
+            await rootClr.hover({timeout: 5000}).catch(() => undefined);
+            await page.waitForTimeout(200);
+            const hitClr = await iconClr.click({timeout: 3000})
+              .then(() => true).catch(() => false);
+            if (!hitClr) {
+              // 图标存在但不可操作（被隐藏/被覆盖）：退化为程序化点击，
+              // 仍走真实 DOM click 事件，antd 的 onClear 照常触发。
+              await iconClr.click({force: true, timeout: 3000}).catch(() => undefined);
+            }
+            await page.waitForTimeout(Math.max(300, Number(step.ms) || 500));
+            continue;
+          }
+          if (action === 'upload') {
+            // rev114：把内联夹具写进 file input —— **唯一**会主动产生 multipart 请求的 setup 动作。
+            // 实测（TR-398/399/401，美心 YL 店铺 Store Image）：
+            //   1) 入口是表单里的按钮（如「Upload Image」），点了才渲染 .ant-modal-wrap
+            //      及其中 input[type=file]（accept=.jpeg,.jpg,.png,.gif）；
+            //   2) 选完文件**不会自动确认**，还需点弹窗的 OK/Confirm；
+            //   3) 上传请求是 multipart POST 打到静态域（static.uat.eatizen.com.hk/）
+            //      ⇒ 场景必须声明 ``allow_upload`` 放行规则，否则写隔离会 abort。
+            // 本动作在任何一步失败都**照实报错**（记 unverified），不静默通过——
+            // 否则"必填附件没填上"会被下游误读成"被测系统拒绝了提交"。
+            const fix = inlineFixture(step.fixture);
+            if (!fix) {
+              console.log('UPLOAD_STEP ' + JSON.stringify(
+                {field: String(step.field || ''), ok: false, why: 'fixture.b64 缺失'}));
+              return `${where}：upload 缺少 fixture.b64`;
+            }
+            const openLabels = Array.isArray(step.open_labels)
+              ? step.open_labels.map((s: any) => String(s)) : [];
+            if (openLabels.length) {
+              if (!(await clickByLabels(openLabels))) {
+                return `${where}：未找到上传入口 ${JSON.stringify(openLabels)}`;
+              }
+              await page.waitForTimeout(Math.max(400, Number(step.open_ms) || 1500));
+            }
+            const selUp = String(step.selector || 'input[type=file]').trim();
+            const fileInput = anyScope.locator(selUp).first();
+            let upFound = 0;
+            try { upFound = await fileInput.count(); } catch { upFound = 0; }
+            if (!upFound) {
+              console.log('UPLOAD_STEP ' + JSON.stringify(
+                {field: String(step.field || ''), ok: false, why: 'file input 未定位',
+                 open_labels: openLabels, selector: selUp}));
+              return `${where}：未定位到文件输入 ${selUp}`;
+            }
+            await fileInput.setInputFiles(fix,
+              {timeout: Math.max(5000, Number(step.upload_ms) || 15000)});
+            // 等图片真正传完（实测 TR-399：setInputFiles 后立刻点确认会拿到空值）
+            await page.waitForTimeout(Math.max(800, Number(step.after_ms) || 2500));
+            const confirmLabels = Array.isArray(step.confirm_labels)
+              ? step.confirm_labels.map((s: any) => String(s)) : [];
+            let upConfirmed = '';
+            for (const cl of confirmLabels) {
+              const btn = anyScope.locator(
+                `.ant-modal-wrap:visible button:has-text("${cl}"),`
+                + ` .ant-modal-root:visible button:has-text("${cl}")`,
+              ).first();
+              if (!(await btn.count().catch(() => 0))) continue;
+              await btn.click({timeout: 5000}).catch(() => undefined);
+              upConfirmed = cl;
+              break;
+            }
+            await page.waitForTimeout(Math.max(300, Number(step.ms) || 1500));
+            // 成功也要留痕：否则"配了 upload 但没执行/执行了没生效"在日志里看不出来
+            // （本项目反复踩的坑：配置层与执行层的差异只能靠现场说话）。
+            console.log('UPLOAD_STEP ' + JSON.stringify(
+              {field: String(step.field || ''), ok: true, open_labels: openLabels,
+               selector: selUp, file_inputs: upFound, set_input: true,
+               confirm_clicked: upConfirmed || null,
+               fixture: {name: fix.name, mime: fix.mimeType, bytes: fix.buffer.length}}));
             continue;
           }
           if (action === 'select_option') {
@@ -3309,15 +5315,48 @@ _FORM_EXECUTOR_TS = r"""
             ? allowMethods.map((m: any) => String(m).toUpperCase())
             : ['POST', 'PUT', 'PATCH'],
         });
+        // rev115：场景显式声明的附加放行（如 Google Maps JS 内部 RPC——被隔离 abort
+        // 会导致地图服务初始化失败、autocomplete 不出候选，TR-476 实测）。
+        for (const rX of (Array.isArray(expectX.allow_extra) ? expectX.allow_extra : [])) {
+          if (!rX || typeof rX !== 'object') continue;
+          negRules.push({
+            host: String(rX.host || rX.host_suffix || ''),
+            path_prefix: String(rX.path_prefix || '/'),
+            methods: (Array.isArray(rX.methods) ? rX.methods : ['POST'])
+              .map((m: any) => String(m).toUpperCase()),
+          });
+        }
       }
       const negBlocked: Array<{method: string; url: string; kind: string}> = [];
+      // 上传（multipart）放行规则：同样**只来自场景的显式声明**（``allow_upload`` 数组），
+      // 无声明 ⇒ 上传照旧 abort。由场景声明而非全局配置的理由与写放行一致：
+      // 隔离的口径是"收窄到本次场景声明的目标"，上传放行同样不该跨场景泄漏。
+      const negUploadRules: Array<{host?: string; path_prefix?: string; methods?: string[]}> = [];
+      for (const sc of scenarios) {
+        for (const pol of [sc.expect_accept || {}, sc.expect_reject || {}]) {
+          const listU = Array.isArray(pol.allow_upload) ? pol.allow_upload : [];
+          for (const rU of listU) {
+            if (!rU || typeof rU !== 'object') continue;
+            negUploadRules.push({
+              host: String(rU.host || rU.host_suffix || ''),
+              path_prefix: String(rU.path_prefix || '/'),
+              methods: (Array.isArray(rU.methods) ? rU.methods : [])
+                .map((m: any) => String(m).toUpperCase()),
+            });
+          }
+        }
+      }
+      // 上报生效的上传放行规则：配置期"声明了但没到执行期"是历史上反复踩的坑，
+      // 让运行日志自带这条事实（空数组同样输出，便于区分"没声明"与"没生效"）。
+      console.log('UPLOAD_ALLOW_RULES ' + JSON.stringify(negUploadRules));
       const onNegRoute = async (route: any) => {
         try {
           const request = route.request();
           const method = String(request.method()).toUpperCase();
           const url = String(request.url());
           const contentType = String((request.headers() || {})['content-type'] || '');
-          if (isolationDecision(method, url, negRules, [], contentType) === 'continue') {
+          if (isolationDecision(method, url, negRules, [], contentType,
+                                negUploadRules) === 'continue') {
             await route.continue();
             return;
           }
@@ -3404,6 +5443,8 @@ _FORM_EXECUTOR_TS = r"""
             // 提交窗口取证：request 级（区分"请求没发出"）+ response 级（服务端结论）
             const hits: Array<{url: string; status: number; requestId: string; body: string; method: string}> = [];
             const reqHits: Array<{url: string; method: string; body: string}> = [];
+            // 窗口内**全部**非 GET 请求（不限目标接口）：用于区分"没发出"与"发到别处"。
+            const winWrites: Array<{method: string; url: string}> = [];
             const blockedBefore = negBlocked.length;
             const onResp = (resp: any) => {
               try {
@@ -3423,13 +5464,47 @@ _FORM_EXECUTOR_TS = r"""
               try {
                 const rurl = String(req.url());
                 const method = String(req.method()).toUpperCase();
-                if (!rurl.includes(hint) || method === 'GET') return;
+                if (method === 'GET') return;
+                if (winWrites.length < 40) winWrites.push({method, url: rurl.slice(0, 170)});
+                if (!rurl.includes(hint)) return;
                 reqHits.push({url: rurl.slice(0, 160), method,
                               body: String(req.postData() || '').slice(0, 300)});
               } catch { /* 同上 */ }
             };
-            page.on('response', onResp);
-            page.on('request', onReq);
+            // ★ 提交窗口内的**现场轮询**（2026-10-16，实测 TR-405）：前端校验提示只存续
+            //   数秒，旧实现在窗口**末尾单点采样**，于是 t≈0.5s 弹出的
+            //   「Business hours group …: please select at least one day」早已消失，
+            //   现场只剩写隔离自身触发的 "Network Error"，把"必填项未满足"误读成
+            //   "网络异常"——排查方向再次被带偏（与用户长期口径一致：toast 类提示
+            //   必须人工/程序在存续期内取到，否则等于没有证据）。
+            //   改为窗口内每秒轮询并累计去重，同时记录首次出现时刻，供归因使用。
+            const seenToasts: Array<{t: number; txt: string}> = [];
+            const seenErrors: Array<{t: number; field: string; error: string}> = [];
+            let lastScene: {url: string; form_errors: any[]; toasts: string[]} =
+              {url: '', form_errors: [], toasts: []};
+            let tSubmit = Date.now();
+            const pollScene = async () => {
+              const s0 = await collectSubmitScene();
+              const dt = Date.now() - tSubmit;
+              for (const tt of s0.toasts) {
+                if (!seenToasts.some((x) => x.txt === tt)) seenToasts.push({t: dt, txt: tt});
+              }
+              for (const fe of s0.form_errors) {
+                if (!seenErrors.some((x) => x.field === fe.field && x.error === fe.error)) {
+                  seenErrors.push({t: dt, field: fe.field, error: fe.error});
+                }
+              }
+              lastScene = {url: s0.url, form_errors: s0.form_errors, toasts: s0.toasts};
+              return s0;
+            };
+            // rev129（小杨生煎问卷实测 TR-742）：监听器必须挂在**应用所在页面**。
+            // 门户卡片式应用（数盈营销云/交易云）点卡片后**新开标签页**，anyScope 是
+            // 那个新 Page；挂到主 `page`（console 门户）会**一个请求都收不到**，
+            // 服务端已受理（库里已落数据）却判 unverified —— 判定层假阴性。
+            // anyScope 是 Page（有 .on）→ 挂它；是 FrameLocator（iframe 应用）→ 回退 page。
+            const listenPage = (typeof (anyScope as any).on === 'function') ? anyScope : page;
+            listenPage.on('response', onResp);
+            listenPage.on('request', onReq);
             try {
               const labels = (Array.isArray(sc.submit_label) && sc.submit_label.length)
                 ? sc.submit_label.map((s: any) => String(s))
@@ -3439,22 +5514,78 @@ _FORM_EXECUTOR_TS = r"""
                   `规则级负路径：未找到提交按钮 ${JSON.stringify(labels)}（${label}）`);
                 continue;
               }
-              // 提交窗口：给服务端往返 + 响应体落地留时间（手写脚本实测 8s 足够）
-              await page.waitForTimeout(8000);
+              // 提交窗口：给服务端往返 + 响应体落地留时间（手写脚本实测 8s 足够）。
+              // 每秒轮询一次现场，累计提示/校验错（提示只存续数秒，单点必漏）。
+              tSubmit = Date.now();
+              await pollScene();
+              for (let k = 0; k < 8; k += 1) {
+                await page.waitForTimeout(1000);
+                await pollScene();
+              }
             } finally {
-              page.off('response', onResp);
-              page.off('request', onReq);
+              listenPage.off('response', onResp);
+              listenPage.off('request', onReq);
             }
-            const blockedNow = negBlocked.length - blockedBefore;
             const hit = hits.length ? hits[hits.length - 1] : null;
             if (!hit) {
-              const why = blockedNow
-                ? `该场景的写请求被写隔离策略阻断（${blockedNow} 条未到达服务端）`
-                : (reqHits.length
-                    ? `请求已发出（${reqHits[0].method} ${reqHits[0].url}）但在窗口内未收到响应`
-                    : '提交后窗口内未捕获到目标接口的请求');
+              const winBlocked = negBlocked.slice(blockedBefore);
+              // ★ 归因修正（2026-10-16，实测 TR-402）：只有**命中本场景目标接口**的拦截
+              //   才算"本场景的写请求被写隔离阻断"。旧实现直接拿窗口内拦截总条数，
+              //   于是控制台自身的写请求（实测：`PUT .../message/inMail/status`，与提交无关）
+              //   被算进来，把真实原因——**目标请求压根没发出**——掩盖成"被写隔离阻断"，
+              //   排查方向被整体带偏（一度以为还要再放宽策略）。
+              // ★ 归因修正（2026-10-16，实测 TR-402 + 契约用例 NEG-BLOCKED 双约束）：
+              //   ① 命中场景声明的目标接口（hint）⇒ 明确是"本场景的写请求被阻断"；
+              //   ② 否则，只有**落在声明接口同一资源集合**里的拦截才算本场景提交触发的。
+              //      真实成因：页面提交到了同集合的兄弟接口，而该接口没被声明
+              //      （契约用例 `.../purchaseLimit/not-declared` vs 实际提交的 `.../delete`）。
+              //   ③ 落在**别的集合**的写（实测 `.../message/inMail/status`，应用自身的
+              //      后台轮询，与提交无关）是噪声：只作为附注，绝不写进结论。
+              //   旧实现直接拿"窗口内拦截总条数"，于是噪声把真实原因——**目标请求压根
+              //   没发出**——掩盖成"被写隔离阻断"，排查方向被整体带偏。
+              const ownAllow = ((sc.expect_accept && sc.expect_accept.allow)
+                || (sc.expect_reject && sc.expect_reject.allow) || {}) as any;
+              const ownPrefix = String(ownAllow.path_prefix || hint || '');
+              const ownDir = ownPrefix.replace(/[^/]*$/, '');   // 去掉末段 → 资源集合目录
+              const dirUsable = ownDir.split('/').filter(Boolean).length >= 2;
+              const blockedTarget = hint
+                ? winBlocked.filter((b) => b.url.includes(hint)).length : 0;
+              const blockedFamily = dirUsable
+                ? winBlocked.filter((b) => b.url.includes(ownDir)).length : 0;
+              const blockedInScope = blockedTarget + (blockedTarget ? 0 : blockedFamily);
+              const blockedOther = winBlocked.length - blockedInScope;
+              const why = blockedTarget
+                ? `该场景的写请求被写隔离策略阻断（${blockedTarget} 条未到达服务端）`
+                : (blockedFamily
+                    ? `该场景提交触发的写请求被写隔离策略阻断（${blockedFamily} 条未到达服务端，`
+                      + '接口不在场景声明的放行范围内）'
+                    : (reqHits.length
+                        ? `请求已发出（${reqHits[0].method} ${reqHits[0].url}）但在窗口内未收到响应`
+                        : '提交后窗口内未捕获到目标接口的请求'));
+              const scene = lastScene;
+              console.log('NEG_NO_HIT ' + JSON.stringify({
+                scenario_id: sc.scenario_id, hint,
+                blocked_target: blockedTarget, blocked_family: blockedFamily,
+                blocked_other: blockedOther,
+                blocked: winBlocked.slice(0, 10),
+                writes: winWrites.slice(0, 30),
+                form_errors: seenErrors.slice(0, 8),
+                toasts: seenToasts.slice(0, 10),
+                url: scene.url,
+              }));
+              // 归因措辞按"最先出现的证据"排序：前端校验错 > 前端提示 > 无关拦截。
+              // 实测 TR-405 的教训：把无关拦截写进结论，会让真实原因（必填未满足）
+              // 被读成"网络/隔离问题"。
+              const firstToast = seenToasts.length ? seenToasts[0].txt : '';
+              const hintText = seenErrors.length
+                ? `；前端仍报校验错 ${seenErrors.length} 项，首项「${seenErrors[0].error}」（现场见 NEG_NO_HIT 行）`
+                : (firstToast
+                    ? `；提交后前端提示「${firstToast}」（现场见 NEG_NO_HIT 行）`
+                    : (blockedOther
+                        ? `；另有 ${blockedOther} 条与本接口无关的写请求被隔离阻断（不构成本场景结论）`
+                        : ''));
               record(sc, 'unverified',
-                `规则级负路径：未能取得服务端结论 —— ${why}；期望规则「${sc.rule_ref || sc.scenario_id}」未被验证（${label}）`);
+                `规则级负路径：未能取得服务端结论 —— ${why}；期望规则「${sc.rule_ref || sc.scenario_id}」未被验证（${label}）${hintText}`);
               continue;
             }
             // [O9-NEG-JUDGE-BEGIN] 负路径判定（契约测试逐字抽取此区间；勿删标记）
@@ -3475,6 +5606,18 @@ _FORM_EXECUTOR_TS = r"""
             const msgHit = msgs.find((m) => m && hit.body.includes(m)) || '';
             const evidence = `HTTP ${hit.status} ${hit.url} requestId:${hit.requestId || '-'}`
               + ` body:${String(hit.body || '').slice(0, 160)}`;
+            // ★ rev124（A2）：**数据重复 ≠ 功能缺陷**。
+            //   真实落库场景的可重复性靠运行期唯一化（``{{RUN_TAG}}``）。若仍被
+            //   「编号/名称已存在」拒绝，说明提交值和历史数据撞了——要么配置是固定值，
+            //   要么唯一化没生效。这种拒绝既证明不了「规则未生效」（真缺陷），也不是
+            //   pass，只能如实记 unverified，并把"这次提交的是哪个值"写进结论。
+            //   旧实现一律走 blocked「疑似缺陷坐实」⇒ 给开发提**假单**（本项目实测）。
+            const dupLikely = /已存在|已使用|重複|重复|duplicate|already exist|unique constraint|唯一约|唯一約/i.test(bodyMsg)
+              || ['20003', '10002'].includes(String(bodyCode === null ? '' : bodyCode));
+            const tagNote = runTagUsed.length
+              ? `本次已唯一化（RUN_TAG=${RUN_TAG}，字段 `
+                + `${runTagUsed.map((x) => `${x.field}=${x.value}`).join(' / ')}）`
+              : '本场景未使用 {{RUN_TAG}}：提交值是固定值，重复运行必然撞唯一约束';
             if ((sc.expect_accept || {}).api_path_hint) {
               // [rev99] 期望受理极性（与期望拒绝互斥，计划期强制）：
               //   5xx ⇒ 疑似服务端缺陷（与拒绝极性同判——期望受理的请求也崩了，同样是缺陷）；
@@ -3491,11 +5634,20 @@ _FORM_EXECUTOR_TS = r"""
               } else if (httpOk && bodyCode !== null && bodyCode === expectCode) {
                 record(sc, 'pass',
                   `服务端按期望受理（配置 expect_accept，resultCode=${bodyCode}）；${evidence}（${label}）`);
+              } else if (dupLikely) {
+                record(sc, 'unverified',
+                  `数据冲突（非功能缺陷，需复核）：服务端以「${bodyMsg.slice(0, 60) || '数据重复'}」`
+                  + `拒绝了应受理的请求 —— 提交值撞了服务端唯一约束，`
+                  + `不能据此判「规则未生效」；${tagNote}；${evidence}（${label}）`);
               } else if (httpOk) {
                 record(sc, 'blocked',
                   `疑似缺陷坐实：服务端拒绝了应受理的请求 —— 规则「${sc.rule_ref || sc.scenario_id}」未生效`
                   + `（实际 resultCode=${bodyCode === null ? '无（响应无业务信封）' : bodyCode}，期望 ${expectCode}）；`
                   + `${evidence}；定位凭据：requestId=${hit.requestId || '未在响应头暴露'}`);
+              } else if (dupLikely) {
+                record(sc, 'unverified',
+                  `数据冲突（非功能缺陷，需复核）：服务端以 HTTP ${statusNum}「${bodyMsg.slice(0, 60) || '数据重复'}」`
+                  + `拒绝了应受理的请求 —— 提交值撞了服务端唯一约束；${tagNote}；${evidence}（${label}）`);
               } else {
                 record(sc, 'blocked',
                   `疑似缺陷坐实：服务端以 HTTP ${statusNum} 拒绝了应受理的请求 —— 规则「${sc.rule_ref || sc.scenario_id}」未生效；`
@@ -3556,12 +5708,151 @@ _FORM_EXECUTOR_TS = r"""
         try { await (context as any).unroute('**/*', onNegRoute); } catch { /* 忽略 */ }
         console.log('NEGATIVE_PHASE ' + JSON.stringify(
           {...negativeStat, blocked_requests: negBlocked.length,
+           // rev124（A2）：本次唯一化用的标记与实际填入值，结论可回溯到具体编号
+           run_tag: RUN_TAG, run_tag_source: RUN_TAG_INFO.source,
+           run_tag_used: runTagUsed.slice(0, 8),
            isolation_kinds: {
              upload_blocked: negBlocked.filter((b) => b.kind === 'upload_blocked').length,
              non_upload_api_blocked: negBlocked.filter((b) => b.kind === 'non_upload_api_blocked').length,
              unknown_request_blocked: negBlocked.filter((b) => b.kind === 'unknown_request_blocked').length,
            }}));
       }
+    }
+    // ===== 「列表可见」阶段（2026-10-16）=====
+    // 三条「新建-必填全填-真实落库**并在列表可见**」用例的【预期结果】都写了"列表中可查询到"，
+    // 但此前只机检了服务端 resultCode=0，列表可见性靠人工探针补验、不在回归里。
+    // 本阶段：写请求（负路径阶段）之后回列表页，按配置的 value 检索并确认记录可见。
+    // 口径：**任何环境/定位问题一律记 unverified（不记 blocked）**——
+    //       list 阶段位于整批末尾，记 blocked 会把无关用例一起拖成硬失败；
+    //       而"没检索到"是**负证据**，同样如实记 unverified 并输出 LIST_VISIBLE_TRACE，
+    //       由人复核是"真不可见"还是"查询条件/分页限制"。
+    async function runListChecks(): Promise<void> {
+      const items: any[] = (FORM_PLAN.checks || []).filter((c: any) => c.type === 'list_visible');
+      listStat.configured = items.length;
+      for (const rej of (FORM_PLAN.list_check_rejects || []).slice(0, 20)) {
+        console.log('[list-skip] ' + JSON.stringify(rej));
+      }
+      if (!items.length) return;
+      for (const check of items) {
+        const nm = String(check.name || ('list_visible:' + check.value));
+        const val = String(check.value || '');
+        listStat.executed += 1;
+        try {
+          const url = String(check.list_url || '');
+          if (!url) {
+            listStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '未配置列表页 URL（list_checks[].list_url 或 locators.list_url）');
+            continue;
+          }
+          await page.goto(url, {timeout: 30000, waitUntil: 'domcontentloaded'}).catch(() => undefined);
+          await page.waitForTimeout(5000);
+          const pickRoot = async (): Promise<any> => {
+            let best: any = null, bn = -1;
+            const cands: any[] = [page, ...page.frames()];
+            for (const f of cands) {
+              try {
+                const n = Number(await f.evaluate(
+                  () => document.querySelectorAll('.ant-table-row, .ant-table-tbody tr').length));
+                if (n > bn) { bn = n; best = f; }
+              } catch { /* 跨域 */ }
+            }
+            return best;
+          };
+          let root: any = await pickRoot();
+          let rowCount = root ? Number(await root.evaluate(
+            () => document.querySelectorAll('.ant-table-row, .ant-table-tbody tr').length).catch(() => 0)) : 0;
+          if (!rowCount) {
+            await page.waitForTimeout(4000);
+            root = await pickRoot();
+            rowCount = root ? Number(await root.evaluate(
+              () => document.querySelectorAll('.ant-table-row, .ant-table-tbody tr').length).catch(() => 0)) : 0;
+          }
+          const phs: string[] = Array.isArray(check.search_placeholder)
+            ? check.search_placeholder.map((s: any) => String(s)).filter(Boolean) : [];
+          let searched = false;
+          let searchNote = phs.length ? 'no_search_box' : 'no_search_config';
+          if (root && phs.length && rowCount) {
+            const filled: any = await root.evaluate(({src, value}: any) => {
+              const rx = new RegExp(src, 'i');
+              const ins = Array.from(document.querySelectorAll('input')) as any[];
+              const t = ins.find((i: any) => rx.test(String(i.placeholder || '')) && String(i.type) !== 'hidden');
+              if (!t) {
+                return {ok: false, phs: ins.map((i: any) => String(i.placeholder || '')).filter(Boolean).slice(0, 12)};
+              }
+              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+              t.focus(); setter.call(t, value);
+              t.dispatchEvent(new Event('input', {bubbles: true}));
+              t.dispatchEvent(new Event('change', {bubbles: true}));
+              return {ok: true, ph: String(t.placeholder || '')};
+            }, {src: phs.join('|'), value: val}).catch((e: any) => ({ok: false, err: String(e).slice(0, 80)}));
+            searchNote = JSON.stringify(filled).slice(0, 170);
+            if (filled && filled.ok) {
+              const btn = root.locator('button')
+                .filter({hasText: /搜\s*索|查\s*詢|查\s*询|Search/i}).first();
+              if (await btn.count().catch(() => 0)) {
+                await btn.click({timeout: 8000}).catch(() => undefined);
+              }
+              await page.waitForTimeout(3000);
+              searched = true;
+            }
+          }
+          const scan = async (): Promise<any> => (root ? await root.evaluate((v: string) => {
+            const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+            const rows = Array.from(document.querySelectorAll('.ant-table-row, .ant-table-tbody tr'));
+            const hits = rows.filter((r: any) => norm(r.innerText).indexOf(v) >= 0);
+            return {rows: rows.length, hits: hits.length,
+                    sample: hits.length ? norm((hits[0] as any).innerText).slice(0, 110) : ''};
+          }, val).catch((e: any) => ({rows: -1, hits: -1, err: String(e).slice(0, 80)}))
+            : {rows: 0, hits: 0});
+          let res: any = await scan();
+          const maxPages = Math.max(1, Number(check.max_pages) || 3);
+          let pages = 1;
+          while (res && res.hits === 0 && pages < maxPages) {
+            let advanced = false;
+            try {
+              const next = root.locator('li.ant-pagination-next').first();
+              const disabled = await next.evaluate((el: any) =>
+                /ant-pagination-disabled/.test(String(el.className))).catch(() => true);
+              if (!disabled) { await next.click({timeout: 5000}); advanced = true; }
+            } catch { advanced = false; }
+            if (!advanced) break;
+            await page.waitForTimeout(2500);
+            pages += 1;
+            res = await scan();
+          }
+          const found = !!(res && res.hits > 0);
+          console.log('LIST_VISIBLE_TRACE ' + JSON.stringify({
+            value: val, url: url.slice(0, 90), rows: res ? res.rows : -1, pages,
+            searched, search: searchNote, expect: String(check.expect || 'found'),
+            found, sample: (res && res.sample) || '',
+          }));
+          if (String(check.expect || 'found') === 'found') {
+            if (found) {
+              listStat.pass += 1;
+              recAll(check, nm, 'pass',
+                     `列表可见：${res.rows} 行中命中 ${res.hits} 行（search=${searched ? 'on' : 'off'}，翻 ${pages} 页）`);
+            } else {
+              listStat.unverified += 1;
+              recAll(check, nm, 'unverified',
+                     `未在列表中检索到「${val}」（前 ${pages} 页共 ${res ? res.rows : 0} 行，`
+                     + `search=${searched ? 'on' : 'off'}${searched ? '' : '：未命中搜索框，仅翻页扫描'}）`
+                     + `——现场见 LIST_VISIBLE_TRACE`);
+            }
+          } else if (!found) {
+            listStat.pass += 1;
+            recAll(check, nm, 'pass', `列表按期望不可见：「${val}」未命中`);
+          } else {
+            listStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `期望不可见但检索到了「${val}」——现场见 LIST_VISIBLE_TRACE`);
+          }
+        } catch (error) {
+          listStat.unverified += 1;
+          recAll(check, nm, 'unverified', `列表检查异常：${String(error).slice(0, 200)}`);
+        }
+      }
+      console.log('LIST_PHASE ' + JSON.stringify(listStat));
     }
     await runNegativeScenarios();
 
@@ -3594,6 +5885,11 @@ _FORM_EXECUTOR_TS = r"""
       console.log('UPLOAD_CONTEXT ' + JSON.stringify({label: isoLabel, reason: isoReason}));
     }
 
+    // ===== 「列表可见」阶段：排在最后（写阶段全部结束后才回列表页检索）=====
+    // 位置理由：它会 `page.goto` 到列表页，放在任何还需要"表单/弹窗现场"的阶段之前
+    // 会把那些阶段的现场破坏掉；放在最后则只影响 summary 输出之外的收尾动作（无）。
+    await runListChecks();
+
     const summary = {
       total: formResults.length,
       pass: formResults.filter((r) => r.outcome === 'pass').length,
@@ -3601,6 +5897,8 @@ _FORM_EXECUTOR_TS = r"""
       blocked: formResults.filter((r) => r.outcome === 'blocked').length,
       submit_phase: {
         queued: submitQueue.length,
+        // rev139：本层**实际写出**多少条结果（超时/中断也会各写一条，故不能拿 queued 代）
+        emitted: submitEmitted,
         pass: formResults.filter((r) => String(r.observed).startsWith('提交层验证') && r.outcome === 'pass').length,
         suspected_defect: formResults.filter(
           (r) => r.outcome === 'blocked' && String(r.observed).includes('疑似缺陷')).length,
@@ -3610,6 +5908,11 @@ _FORM_EXECUTOR_TS = r"""
       negative_scenario_phase: {
         ...negativeStat,
         rejected_at_plan: (FORM_PLAN.negative_scenario_rejects || []).length,
+      },
+      // 「列表可见」阶段（2026-10-16）：写入后记录是否可检索。与上面两个阶段分开计数。
+      list_phase: {
+        ...listStat,
+        rejected_at_plan: (FORM_PLAN.list_check_rejects || []).length,
       },
       skipped_no_locator: FORM_PLAN.skipped_count,
       // 只有一个数字无法复核："跳过 9 条"到底是哪几类原因
@@ -3641,6 +5944,44 @@ _FORM_EXECUTOR_TS = r"""
       },
     };
     console.log('COMPILED_ASSERTION_SUMMARY ' + JSON.stringify(summary));
+    // rev130（F-3）：**覆盖对账行**——「这次到底验了几条」只留一个答案。
+    // 旧产物的三个数分属编译期（COMPILED_COVERAGE.assertions）与运行期（SUMMARY.total），
+    // 实测 TR-747 报 7 / 5 / 6 / 跳过 2，读者无法判断差额是「跳过」还是「丢了」。
+    // 恒等式：
+    //   planned   = (executable - config_only) + skipped_no_locator + unexplained_plan
+    //   emitted   = executable + scenario_executed + submit_resubmitted + unexplained_emitted
+    // rev139：把 `submit_resubmitted` 显式列出来。提交层对同一批检查会再写一条结果
+    //（真实提交才算证据），旧公式把它算成"多发"，于是 balanced 恒为 false——
+    // 实测 TR-755：emitted=9 / executable=6 / scenario=1 ⇒ unexplained_emitted=2，
+    // 那 2 条不是丢失，是 required_error 在提交层的重发。缺口与重发混为一谈，
+    // 等于把"没丢"报成"丢了 2 条"。
+    const __plannedA = FORM_PLAN.planned_assertions || 0;
+    const __execA = summary.plan_checks;
+    const __skipA = summary.skipped_no_locator;
+    const __configA = summary.config_only_checks || 0;
+    const __scenarioA = summary.negative_scenario_phase.executed;
+    const __submitA = summary.submit_phase.emitted || 0;
+    const __unexplainedPlan = __plannedA - ((__execA - __configA) + __skipA);
+    const __unexplainedEmitted = summary.total - (__execA + __scenarioA + __submitA);
+    // rev136：**减去 config_only**。配置驱动的检查（`defaults` 的默认选中、条件显示）
+    // 不是文档断言翻译来的，把它们算进 executable 会让 plan 侧恒等式恒为负——
+    // 实测 TR-752：planned=4（3 条用例共 4 条断言）、executable=6（多出 2 条
+    // 默认值观测）、unexplained_plan=-2、balanced=false。那 -2 不是缺口，
+    // 是"2 条配置检查被误当成断言"；对账行自己制造了假缺口，比不报更糟。
+    console.log('COVERAGE_RECONCILE ' + JSON.stringify({
+      planned: __plannedA,
+      executable: __execA,
+      config_only: __configA,
+      skipped_no_locator: __skipA,
+      scenario_configured: (FORM_PLAN.negative_scenarios || []).length,
+      scenario_executed: __scenarioA,
+      submit_resubmitted: __submitA,
+      emitted: summary.total,
+      unexplained_plan: __unexplainedPlan,
+      unexplained_emitted: __unexplainedEmitted,
+      balanced: __unexplainedPlan === 0 && __unexplainedEmitted === 0,
+      skipped_by_reason: summary.skipped_by_reason,
+    }));
     // 结构性失败（blocked）视为硬失败：定位器失效必须暴露，而不是静默通过
     expect(summary.blocked, `编译断言执行受阻：${summary.blocked} 项`).toBe(0);
   }
@@ -3652,27 +5993,90 @@ _FORM_EXECUTOR_TS = r"""
 
 def render_form_executor(plan: dict[str, Any], *, default_phone: str = "18320101265",
                          upload_allow_hosts: list[str] | None = None,
-                         upload_allow_rules: list[dict[str, Any]] | None = None) -> str:
+                         upload_allow_rules: list[dict[str, Any]] | None = None,
+                         upload_allow_upload_rules: list[dict[str, Any]] | None = None) -> str:
     """渲染表单校验执行器（TS 片段）：客户端层只读 + 「期望拒绝」项负路径提交层。
 
     上传隔离策略（安全边界）：
-    - ``multipart/form-data`` 一律阻断；
+    - ``multipart/form-data`` **默认一律阻断**；唯一口子 = ``allow_upload_rules``
+      （host + path_prefix + methods 三项收窄，且必须**显式声明**）；
     - GET 放行；
     - 其他写请求**必须命中** ``upload_allow_rules``（host / path_prefix / methods），
       默认空 → 所有写请求都阻断（不默认放行同源写，避免产生未知业务写副作用）。
     - ``upload_allow_hosts`` 仅作兼容：表示"这些主机的 GET 放行"，不再放行写请求。
+
+    ``upload_allow_rules``（multipart 口子）的来源（2026-10-16 rev114）：
+    默认**从场景的 ``allow_upload`` 声明推导** —— 单一真相在场景上。写隔离的口径本来就
+    是"收窄到本次场景声明的目标"，上传放行不该跨场景泄漏；配置方只写一处，也避免
+    "场景声明了上传、字段级阶段却仍被拦"的漂移。kwarg 仅作补充（无场景却需上传的计划）。
     """
+    #: multipart 放行规则：先场景推导，再并入显式 kwarg（去重，保序）。
+    derived_upload_rules: list[dict[str, Any]] = []
+    seen_upload: set[str] = set()
+    for sc in (plan.get("negative_scenarios") or []):
+        policies = ((sc or {}).get("expect_accept") or {}, (sc or {}).get("expect_reject") or {})
+        for pol in policies:
+            for rule in (pol.get("allow_upload") or []):
+                if not isinstance(rule, dict):
+                    continue
+                key = json.dumps(rule, sort_keys=True, ensure_ascii=False)
+                if key in seen_upload:
+                    continue
+                seen_upload.add(key)
+                derived_upload_rules.append(rule)
+    # 字段级通道（rev119 / A1）：子功能级 ``field_locators.upload_allow`` 声明。
+    # build_form_plan 已用同一套 ``_parse_allow_upload`` 校验过，这里只做去重合并。
+    # 为什么必须有这一路：附件类用例（file_size / file_format）**没有场景**，
+    # 只靠下面那个场景循环永远拿不到规则 ⇒ 上传恒被 abort。
+    for rule in (plan.get("upload_allow") or []):
+        if not isinstance(rule, dict):
+            continue
+        key = json.dumps(rule, sort_keys=True, ensure_ascii=False)
+        if key in seen_upload:
+            continue
+        seen_upload.add(key)
+        derived_upload_rules.append(rule)
+    for rule in (upload_allow_upload_rules or []):
+        if not isinstance(rule, dict):
+            continue
+        key = json.dumps(rule, sort_keys=True, ensure_ascii=False)
+        if key in seen_upload:
+            continue
+        seen_upload.add(key)
+        derived_upload_rules.append(rule)
+
     payload = json.dumps(
         {"locators": plan.get("locators"), "checks": plan.get("checks"),
          "skipped": plan.get("skipped"), "skipped_count": plan.get("skipped_count", 0),
+         # rev131（F-3 修正）：对账用的**计划断言数**必须随计划下发。
+         # 这里是一个白名单字典——漏这个键的后果实测过：TR-748 的
+         # COVERAGE_RECONCILE 打出 planned=0 / unexplained_plan=-3（明明有 3 条断言），
+         # 对账行反而制造了新的误导。凡运行期要读的计划字段都必须在此登记。
+         "planned_assertions": plan.get("planned_assertions") or 0,
          # P1-3 阶段 B：规则级负路径场景随计划下发给执行器。
          # ``negative_scenario_rejects`` 一并下发——配置期被拒的场景必须在运行期可见，
          # 否则"配了但没跑"只能靠人去比对配置与日志。
          "negative_scenarios": plan.get("negative_scenarios") or [],
          "negative_scenario_rejects": plan.get("negative_scenario_rejects") or [],
+         # rev124（A2）：运行期唯一化。``run_tag`` 声明"哪些字段会唯一化"，
+         # ``run_tag_gap`` 是"该唯一化却没有"的缺口（真实落库场景里值固定）。
+         "run_tag": plan.get("run_tag") or {},
+         "run_tag_gap": plan.get("run_tag_gap") or [],
+         # rev137：字段检查前置动作（rev131 的教训：凡运行期要读的计划字段
+         # 都必须在这个白名单里显式登记，否则执行器读到 undefined 且毫无提示）。
+         "pre_actions": plan.get("pre_actions") or [],
+         "pre_action_rejects": plan.get("pre_action_rejects") or [],
+         # rev142：提交层 toast 归因要用「定位器键 → 页面别名」反查
+         #（toast「题目 11：请输入标题」含页面标签「标题」而非字段名「题目标题」）。
+         "field_alias_applied": plan.get("field_alias_applied") or [],
+         # rev119：字段级上传放行的**已知缺口**（空串 = 无缺口）。运行期原样打印，
+         # 让「配了但上传会被拦」在日志里可见，而不是只体现为断言 unverified。
+         "upload_policy_gap": plan.get("upload_policy_gap") or "",
          "upload_policy": {
              "allow_rules": list(upload_allow_rules or []),
              "allow_hosts": list(upload_allow_hosts or []),
+             # multipart 唯一口子：默认空 ⇒ 一律阻断（与历史行为逐字一致）
+             "allow_upload_rules": derived_upload_rules,
          },
          "upload_fixtures": {
              "workbook_parts": xlsx_parts_base64(),

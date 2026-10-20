@@ -65,13 +65,11 @@ composite_backend = CompositeBackend(
 
 skills_middleware = SkillsMiddleware(
     backend=composite_backend,
-    sources=[
-        "/skills/midscene-android-orchestrator/",
-        "/skills/midscene-android-env-setup/",
-        "/skills/midscene-android-test-case-design/",
-        "/skills/midscene-android-script-generation/",
-        "/skills/midscene-android-report/",
-    ]
+    # 统一约定：skills_root=.claude/skills，source=/skills/<agent目录>/
+    # 即 .claude/skills/android/<skill>/SKILL.md。
+    # 原写法 root=.claude/skills/android + 逐个列出 /skills/midscene-android-*/，
+    # 效果等价但与其他 agent 不一致，且新增 skill 需同步改代码。
+    sources=["/skills/android/"]
 )
 
 

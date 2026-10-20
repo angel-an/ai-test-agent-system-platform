@@ -58,6 +58,92 @@ from .scenario_tools import (
     execute_scenario,
 )
 
+from .coverage_review_tools import (
+    review_api_coverage,
+)
+
+from typing import List
+
+from langchain_core.tools import BaseTool
+
+# ---------------------------------------------------------------------------
+# 按业务域分类的工具列表
+#
+# 说明：本段原先只存在于遗留副本 app/agents/tools/api/__init__.py 中。
+# 该副本已确认为纯水印差异的重复实现并删除，聚合导出统一收敛到本文件。
+# 供 app/agents/tools/__init__.py 这类聚合入口复用。
+# ---------------------------------------------------------------------------
+
+OPENAPI_TOOLS = [
+    list_api_endpoints,
+    get_endpoint_details,
+    get_multiple_endpoints_details,
+    get_folder_structure,
+]
+
+ARTIFACT_TOOLS = [
+    save_test_plan,
+    save_test_cases,
+    save_test_script,
+    get_endpoint_artifacts,
+    get_artifact_content,
+]
+
+SCRIPT_TOOLS = [
+    get_api_script_info,
+    download_api_script,
+    delete_api_script,
+]
+
+EXECUTION_TOOLS = [
+    execute_api_script,
+    get_test_execution_status,
+]
+
+RUNNER_TOOLS = [
+    run_tests,
+    run_test_suite,
+    parse_test_results,
+]
+
+BATCH_TOOLS = [
+    batch_generate_tests,
+    batch_run_tests,
+]
+
+SCENARIO_TOOLS = [
+    create_test_scenario,
+    update_test_scenario,
+    add_scenario_step,
+    update_scenario_step,
+    add_data_mapping,
+    add_step_extractor,
+    add_step_assertion,
+    get_scenario_details,
+    list_test_scenarios,
+    execute_scenario,
+]
+
+COVERAGE_TOOLS = [
+    review_api_coverage,
+]
+
+ALL_API_TOOLS = (
+    OPENAPI_TOOLS
+    + ARTIFACT_TOOLS
+    + SCRIPT_TOOLS
+    + EXECUTION_TOOLS
+    + RUNNER_TOOLS
+    + BATCH_TOOLS
+    + SCENARIO_TOOLS
+    + COVERAGE_TOOLS
+)
+
+
+def get_local_tools() -> List[BaseTool]:
+    """获取所有 API 本地工具列表（MCP 工具在 agent.py 中异步加载）。"""
+    return list(ALL_API_TOOLS)
+
 __all__ = [
     # OpenAPI 文档管理工具
     "list_api_endpoints",
@@ -101,4 +187,19 @@ __all__ = [
     "get_scenario_details",
     "list_test_scenarios",
     "execute_scenario",
+
+    # 覆盖度评审工具
+    "review_api_coverage",
+
+    # 分类列表与聚合（承接原 app/agents/tools/api/__init__.py 的导出）
+    "OPENAPI_TOOLS",
+    "ARTIFACT_TOOLS",
+    "SCRIPT_TOOLS",
+    "EXECUTION_TOOLS",
+    "RUNNER_TOOLS",
+    "BATCH_TOOLS",
+    "SCENARIO_TOOLS",
+    "COVERAGE_TOOLS",
+    "ALL_API_TOOLS",
+    "get_local_tools",
 ]

@@ -245,6 +245,24 @@ export function getBundleVariables(
   );
 }
 
+/** 手动追加/更新变量（仅接受 env: 引用格式） */
+export function updateBundleVariables(
+  projectIdentifier: string,
+  bundleId: string,
+  variables: Array<{
+    name: string;
+    value_ref: string;
+    is_secret?: boolean;
+    enabled?: boolean;
+    environment?: string | null;
+  }>
+) {
+  return apiClient.put<SuccessResponse<BundleVariable[]>>(
+    `${base(projectIdentifier)}/${bundleId}/variables`,
+    { variables }
+  );
+}
+
 /** 确认 / 豁免冲突（解除导入门禁） */
 export function confirmBundleConflicts(
   projectIdentifier: string,

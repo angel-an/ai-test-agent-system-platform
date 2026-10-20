@@ -29,14 +29,18 @@ NON_MEMBER_NO = os.getenv("PR2_NON_MEMBER_NO", "19900000001")
 # 门控开关：优先使用平台标准命名 LIVE_API，兼容旧命名 PR2_LIVE_API
 LIVE = _env_gate("LIVE_API")
 REQUEST_TIMEOUT_MS = int(os.getenv("PR2_REQUEST_TIMEOUT_MS", "60000"))
-ACCESS_TOKEN = os.getenv("PR2_ACCESS_TOKEN", "").strip()
-COOKIE_HEADER = os.getenv("PR2_COOKIE_HEADER", "").strip()
+ACCESS_TOKEN = os.getenv("PR2_RUNTIME_ACCESS_TOKEN", os.getenv("PR2_ACCESS_TOKEN", "")).strip()
+COOKIE_HEADER = os.getenv("PR2_RUNTIME_COOKIE_HEADER", os.getenv("PR2_COOKIE_HEADER", "")).strip()
+FORCE_BROWSER_LOGIN = os.getenv("PR2_FORCE_BROWSER_LOGIN", "0") == "1"
 REFERER_URL = os.getenv(
+    "PR2_RUNTIME_REFERER_URL",
+    os.getenv(
     "PR2_REFERER_URL",
     "https://imarketing-uat.xysjg.com/front/saas-imarketing-web-pc/?userName=andan",
+    )
 ).strip()
-_USER = os.getenv("PR2_API_USER", "andan")
-_PWD = os.getenv("PR2_API_PASSWORD", "andan123")
+_USER = os.getenv("PR2_API_USER", "lianqiao")
+_PWD = os.getenv("PR2_API_PASSWORD", "lianqiao123")
 _LOGIN = os.getenv("PR2_CONSOLE_LOGIN_URL",
                    "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/login")
 
@@ -147,7 +151,11 @@ def pr2_project_id() -> str:
 
 
 @pytest.fixture(scope="session")
-def storage_account_no() -> str:
+def storage_account_no(request) -> str:
+    if os.getenv("PYTEST_XDIST_WORKER"):
+        pytest.fail("ACCOUNT_ISOLATION: PR2 shared-account writes require serial execution (-n0)")
+    if not os.getenv("PR2_BALANCE_FIELD"):
+        pytest.fail("Configure PR2_BALANCE_FIELD before any account mutation")
     return STORAGE_ACCOUNT_NO
 
 
@@ -219,15 +227,12 @@ def marketing_client() -> Iterator[PlaywrightApiClient]:
     """浏览器会话内 API 客户端（UAT 网关要求浏览器会话 + referer 识别实例）。"""
     if not LIVE:
         pytest.skip("LIVE_API / PR2_LIVE_API != 1")
-    if ACCESS_TOKEN and COOKIE_HEADER:
+    if ACCESS_TOKEN and not FORCE_BROWSER_LOGIN:
         client = DirectHttpApiClient(ACCESS_TOKEN, COOKIE_HEADER, REFERER_URL)
         yield client
         client.close()
         return
-    if ACCESS_TOKEN:
-        p, browser, ctx, url, tok = _browser_login_with_token(ACCESS_TOKEN)
-    else:
-        p, browser, ctx, url, tok = _browser_login()
+    p, browser, ctx, url, tok = _browser_login()
     if not tok:
         browser.close()
         p.stop()

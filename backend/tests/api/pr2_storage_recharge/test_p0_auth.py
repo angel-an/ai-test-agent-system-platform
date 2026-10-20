@@ -5,6 +5,9 @@ import uuid
 
 import pytest
 
+# _env_gate 定义在同目录 conftest.py；conftest 中的函数不会注入测试模块命名空间，必须显式导入
+from conftest import _env_gate
+
 pytestmark = pytest.mark.skipif(
     _env_gate("LIVE_API") is False,
     reason="PR-2 API 骨架：需 LIVE_API=1（或兼容 PR2_LIVE_API=1）（并配置 access-token 或账号/验证码）才执行",
@@ -28,7 +31,7 @@ def test_p0_bad_password_rejected():
 
     from endpoints import CONSOLE_GW, LOGIN_PATH, login_payload
 
-    user = os.getenv("PR2_API_USER", "andan")
+    user = os.getenv("PR2_API_USER", "lianqiao")
     with httpx.Client(base_url=CONSOLE_GW, timeout=60.0) as c:
         r = c.post(LOGIN_PATH, json=login_payload(user, "wrong-pass-xyz", "1234", "image" + str(uuid.uuid4()), "user"))
         body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}

@@ -83,6 +83,34 @@ def _build_chart_spec(chart_type: str, data: list, title: str, x_field: str, y_f
     return base_spec
 
 
+def _normalize_chart_spec(chart_spec: dict) -> dict:
+    """
+    规范化 G2 图表规格，确保与当前 G2 v5 兼容。
+
+    历史报告/外部来源可能带有 G2 v4 或不支持的语法（如 composition.*），
+    统一转换为 G2 v5 可识别的简单几何标记（interval/line/pie 等）。
+    """
+    spec = dict(chart_spec)
+    chart_type = spec.get("type", "interval")
+
+    # 组合图语法（composition.*）→ 降级为分组 interval
+    if str(chart_type).startswith("composition."):
+        spec["type"] = "interval"
+        # 尽量从 children 里还原 encode，否则保持原样让 G2 自行推断
+        children = spec.get("children")
+        if isinstance(children, list) and children:
+            first = children[0] or {}
+            if isinstance(first, dict) and first.get("encode"):
+                spec.setdefault("encode", first["encode"])
+        spec.pop("children", None)
+
+    # G2 v4 的 'bar' 在 v5 对应 'interval'
+    if chart_type == "bar":
+        spec["type"] = "interval"
+
+    return spec
+
+
 def _generate_chart_html(chart_spec: dict, title: str) -> str:
     """
     生成包含 AntV G2 图表的 HTML 页面
@@ -94,34 +122,71 @@ def _generate_chart_html(chart_spec: dict, title: str) -> str:
     Returns:
         HTML 字符串
     """
-    spec_json = json.dumps(chart_spec, ensure_ascii=False, indent=2)
+    spec_json = json.dumps(_normalize_chart_spec(chart_spec), ensure_ascii=False, indent=2)
+    data_json = json.dumps(chart_spec.get("data", []), ensure_ascii=False, indent=2)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{title}</title>
-  <script src="https://unpkg.com/@antv/g2@5/dist/g2.min.js"></script>
+  <script src="https://unpkg.com/@antv/g2@5.1.21/dist/g2.min.js"></script>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 20px; background: #f5f5f5; }}
     .chart-container {{ background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; }}
     h1 {{ color: #333; font-size: 20px; margin-bottom: 16px; }}
     #chart {{ width: 100%; }}
+    .fallback-table {{ width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; }}
+    .fallback-table th, .fallback-table td {{ border: 1px solid #e1e4e8; padding: 8px 12px; text-align: left; }}
+    .fallback-table th {{ background: #f6f8fa; font-weight: 600; }}
+    .fallback-table tr:nth-child(even) {{ background: #fafbfc; }}
+    .error-banner {{ background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; border-radius: 6px; padding: 12px; margin-bottom: 16px; font-size: 14px; }}
   </style>
 </head>
 <body>
   <div class="chart-container">
     <h1>{title}</h1>
     <div id="chart"></div>
+    <div id="fallback" style="display:none;">
+      <div class="error-banner">图表渲染失败，已降级为数据表格展示。</div>
+      <table class="fallback-table" id="fallbackTable"></table>
+    </div>
   </div>
   <script>
     const spec = {spec_json};
-    const chart = new G2.Chart({{
-      container: 'chart',
-      ...spec,
-    }});
-    chart.options(spec);
-    chart.render();
+    const rawData = {data_json};
+
+    function renderFallbackTable(data) {{
+      if (!Array.isArray(data) || data.length === 0) return;
+      const keys = Object.keys(data[0]);
+      let html = '<thead><tr>' + keys.map(k => '<th>' + k + '</th>').join('') + '</tr></thead>';
+      html += '<tbody>' + data.map(row =>
+        '<tr>' + keys.map(k => '<td>' + (row[k] !== null && row[k] !== undefined ? row[k] : '-') + '</td>').join('') + '</tr>'
+      ).join('') + '</tbody>';
+      document.getElementById('fallbackTable').innerHTML = html;
+      document.getElementById('fallback').style.display = 'block';
+    }}
+
+    function renderChart() {{
+      try {{
+        const chart = new G2.Chart({{
+          container: 'chart',
+          ...spec,
+        }});
+        chart.options(spec);
+        chart.render();
+      }} catch (e) {{
+        console.error('[Chart] G2 渲染失败，降级为表格:', e);
+        document.getElementById('chart').style.display = 'none';
+        renderFallbackTable(rawData);
+      }}
+    }}
+
+    if (document.readyState === 'loading') {{
+      document.addEventListener('DOMContentLoaded', renderChart);
+    }} else {{
+      renderChart();
+    }}
   </script>
 </body>
 </html>"""

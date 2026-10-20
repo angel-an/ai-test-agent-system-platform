@@ -56,7 +56,12 @@ composite_backend = CompositeBackend(
 
 skills_middleware = SkillsMiddleware(
     backend=composite_backend,
-    sources=["/skills/testcase/", "/skills/rag/"]
+    # 统一约定：skills_root=.claude/skills，source=/skills/<agent目录>/
+    # 即 .claude/skills/testcase/<skill>/SKILL.md（唯一维护目录，见 settings.py 顶部说明）。
+    # 原值 ["/skills/testcase/", "/skills/rag/"] 配 root=backend/workspace/testcase，
+    # 会被拼成 <root>/testcase/、<root>/rag/ 两处均不存在 → 加载 0 个 skill；
+    # 且本仓库不存在 rag skill（检索能力由 KB 工具 query_knowledge_base_tool 提供）。
+    sources=["/skills/testcase/"]
 )
 
 # ============================================================================
@@ -117,6 +122,8 @@ create_test_case_tool(
     ...
 )
 ```
+
+**补规则转自动（需人工执行 → 可自动执行）：** 用户要求给某条用例补充规则/断言时，调用 `supplement_case_rule_tool(project_identifier, test_case_identifier, requirement_rule 或 rule_field/rule_range, assertions=[...], create_test_run=False)`——一条指令完成写入规则体与断言、撤销「需人工执行」标记、触发重编译。断言值必须来自需求文档真实约束，禁止编造判定标准。
 ---
 """
 
@@ -258,7 +265,9 @@ SYSTEM_PROMPT = """
 你**必须严格按照以下六步顺序执行**，每一步输出对应标题后，才能进入下一步：
 
 ## Step 1: 需求理解（Requirement Understanding）
-**激活 Skill**: `rag-query` → `requirement-analysis`
+**激活 Skill**: `requirement-analysis`
+**检索辅助**：需要历史需求/知识库佐证时用 KB 工具（`get_knowledge_spaces_tool` → `query_knowledge_base_tool`），
+本框架**不存在** `rag-query` skill，不要尝试激活它。
 
 ⚠️ **分阶段执行（禁止一次性读完直接输出）**：必须严格按 Step 1a → 1b → 1c → 1d → 1e → 1.5 顺序执行，**禁止跳过任何一步**。
 

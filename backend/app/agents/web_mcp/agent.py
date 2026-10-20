@@ -362,7 +362,7 @@ create_web_function(
 | 💾 保存 | `save_web_test_script` | 保存测试脚本 |
 | 📁 成果物 | `get_web_sub_function_artifacts` | 获取所有成果物 |
 | ⬇️ 脚本 | `download_web_script` | 下载脚本到本地 |
-| ▶️ 执行 | `execute_web_script` | 执行测试脚本 |
+| ▶️ 执行 | `execute_web_script` | 执行测试脚本（`run_id` 可选，不传时自动生成） |
 | 🗑️ 清理 | `delete_web_script` | 删除临时脚本 |
 | ⛔ 禁止 | `planner_setup_page` | 会卡死，禁止使用 |
 | ⛔ 禁止 | `generator_setup_page` | 会卡死，禁止使用 |

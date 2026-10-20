@@ -10,7 +10,10 @@ import pytest
 from openpyxl import Workbook
 
 from endpoints import BATCH_IMPORT_PATH, OSS_POLICY_PATH, is_ok
-from helpers import delta_within, get_balance
+from helpers import delta_within, get_balance, wait_balance
+
+# _env_gate 定义在同目录 conftest.py；conftest 中的函数不会注入测试模块命名空间，必须显式导入
+from conftest import _env_gate
 
 pytestmark = pytest.mark.skipif(
     _env_gate("LIVE_API") is False,
@@ -51,6 +54,5 @@ def test_p1_batch_import_recharge(marketing_client, storage_account_no):
     body = resp.json()
     assert is_ok(body), body.get("resultMsg")
     print("BATCH_RESPONSE:", body)
-    time.sleep(4)
-    after = get_balance(marketing_client, storage_account_no)
+    after = wait_balance(marketing_client, storage_account_no, before, 0.01)
     assert delta_within(after - before, 0.01), f"批量导入后余额增量异常: {after-before}"

@@ -16,6 +16,7 @@ from typing import Any
 _SENSITIVE_ENV_NAMES = {
     "API_TEST_AUTHORIZATION",
     "API_TEST_DATA_JSON",
+    "API_TEST_EXTRA_HEADERS",
     "API_BASE_URL",
     "ALLOW_MUTATING_API_TESTS",
 }
@@ -49,8 +50,9 @@ def resolve_api_runtime_config(
     """Build a local config and inject values selected by ``data_profile``.
 
     For example, profile ``XYSJG_UAT_READONLY`` resolves
-    ``API_TEST_XYSJG_UAT_READONLY_BASE_URL``, ``..._AUTHORIZATION`` and
-    ``..._DATA_JSON`` only for the child Playwright process.
+    ``API_TEST_XYSJG_UAT_READONLY_BASE_URL``, ``..._AUTHORIZATION``,
+    ``..._AUTH_HEADER``, ``..._DATA_JSON`` and ``..._EXTRA_HEADERS``
+    (额外请求头 JSON，如网关实例识别所需的 referer) only for the child Playwright process.
     """
     persisted_config = sanitize_api_execution_config(execution_config)
     asset_config = dict(test_config or {})
@@ -70,6 +72,9 @@ def resolve_api_runtime_config(
             "AUTHORIZATION": "API_TEST_AUTHORIZATION",
             "AUTH_HEADER": "API_TEST_AUTH_HEADER",
             "DATA_JSON": "API_TEST_DATA_JSON",
+            # 额外请求头（JSON）：网关按 referer 识别实例的 SUT 缺了它会报
+            # "应用识别失败"，看着像接口问题、实为平台没带够头（真实 UAT 实测）。
+            "EXTRA_HEADERS": "API_TEST_EXTRA_HEADERS",
         }.items():
             value = source_env.get(f"{prefix}{suffix}")
             if value:

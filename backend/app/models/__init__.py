@@ -38,6 +38,7 @@ from .web_function import WebFunction, WebSubFunction
 from .security_test import SecurityTest, SecurityVulnerability, SecurityReport
 from .android_app import AndroidApp, AndroidSubFunction
 from .ios_app import IOSApp, IOSSubFunction
+from .web_form_template import WebFormTemplate
 from .test_scenario import (
     TestScenario,
     ScenarioStep,
@@ -110,6 +111,7 @@ __all__ = [
     "AndroidSubFunction",
     "IOSApp",
     "IOSSubFunction",
+    "WebFormTemplate",
     "TestScenario",
     "ScenarioStep",
     "StepDataMapping",

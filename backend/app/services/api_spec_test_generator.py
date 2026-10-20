@@ -148,7 +148,37 @@ def generate_test_plan(spec: dict[str, Any]) -> dict[str, Any]:
                 "basis": {"type": "field_enum", "value": ev, "source": src(f)},
             })
 
-    # 5. 鉴权用例：签名错误应拒绝
+    # 5. 业务分支用例：从响应字段的示例/差异推导（如 Existed 的 MX1/null）
+    for f in resp_fields:
+        diff = (f.get("diff") or "") + " " + (f.get("description") or "")
+        example = f.get("example") or ""
+        if "MX1" in diff or "MX1" in example:
+            # 已存在分支
+            cases.append({
+                "category": "business",
+                "title": f"业务分支：{f['name']} == 'MX1'（资源已存在）",
+                "data": normal_data,
+                "data_needs": ["existing_mobile"],
+                "assertions": [
+                    {"target": f["name"], "expect": "MX1", "note": f"已存在手机号应返回 {f['name']}=MX1"},
+                    {"target": "Code", "expect": "0", "note": "成功返回码为 0"},
+                ],
+                "basis": {"type": "business_branch", "field": f["name"], "value": "MX1", "source": src(f)},
+            })
+            # 不存在分支
+            cases.append({
+                "category": "business",
+                "title": f"业务分支：{f['name']} is null（资源不存在）",
+                "data": normal_data,
+                "data_needs": ["not_existing_mobile"],
+                "assertions": [
+                    {"target": f["name"], "expect": "null", "note": f"不存在手机号应返回 {f['name']}=null（JSON null）"},
+                    {"target": "Code", "expect": "0", "note": "成功返回码为 0"},
+                ],
+                "basis": {"type": "business_branch", "field": f["name"], "value": "null", "source": src(f)},
+            })
+
+    # 6. 鉴权用例：签名错误应拒绝
     if (spec.get("auth") or {}).get("type") == "mx_md5":
         cases.append({
             "category": "auth",
@@ -194,13 +224,24 @@ def _default_value(f: dict) -> Any:
 
 
 def _extract_enums(f: dict) -> list[str]:
-    """从描述里提取单字符/短枚举值（如 M/W、TC/EN、MX1/ARO/CAKE）。"""
+    """从描述里提取枚举值（如 M/W、TC/EN、MX1/ARO/CAKE）。
+
+    支持两种格式：
+    1. "X – desc" 或 "X - desc"（行首枚举）
+    2. "XXX" if ...（引号包裹的枚举值）
+    """
     import re
     text = f.get("description") or ""
     enums = set()
-    # "X – desc" 或 "X - desc" 或 "X –desc" 形式
+    # 格式1: "X – desc" 或 "X - desc" 或 "X –desc" 形式（行首）
     for m in re.finditer(r"^\s*([A-Za-z0-9]{1,5})\s*[–—-]\s", text, re.MULTILINE):
         enums.add(m.group(1))
+    # 格式2: "XXX" if ... 或 "XXX" when ...（引号包裹的枚举值）
+    for m in re.finditer(r"[\"“']([A-Z0-9]{1,5})[\"”']", text):
+        val = m.group(1)
+        # 过滤掉非枚举的词（如 API、JSON 等）
+        if val not in ("API", "JSON", "HTTP", "URL", "APP"):
+            enums.add(val)
     return sorted(enums)
 
 
@@ -252,47 +293,98 @@ def generate_playwright_script(spec: dict[str, Any], env_config: dict[str, Any])
     lines.append(f"const APPSECRET = process.env.{secret_env};")
     lines.append(f"const REQUIRED_FIELDS = {json_dumps(required_names)};")
     lines.append("")
+    # 入参/出参留证：执行器注入 PW_LOG_REQUESTS=1 时开启（脚本可独立运行，默认关闭）。
+    # 通过 testInfo.attach 把实际请求/响应写进 Playwright 报告，平台侧离线解析后展示；
+    # 敏感字段（密钥/签名/口令/token）一律脱敏，避免报告泄露。
+    lines.append("const LOG_IO = process.env.PW_LOG_REQUESTS === '1';")
+    lines.append("const SENSITIVE_KEYS = ['appid', 'appsecret', 'sign', 'password', 'token', 'authorization', 'cookie', 'sessionkey', 'sessionid'];")
+    lines.append("function redact(value) {")
+    lines.append("  if (Array.isArray(value)) return value.map(redact);")
+    lines.append("  if (value && typeof value === 'object') {")
+    lines.append("    const out = {};")
+    lines.append("    for (const [key, item] of Object.entries(value)) {")
+    lines.append("      out[key] = SENSITIVE_KEYS.includes(key.toLowerCase()) ? '***' : redact(item);")
+    lines.append("    }")
+    lines.append("    return out;")
+    lines.append("  }")
+    lines.append("  return value;")
+    lines.append("}")
+    lines.append("function safeJson(text) {")
+    lines.append("  try { return redact(JSON.parse(text)); } catch (e) { return String(text).slice(0, 2000); }")
+    lines.append("}")
+    lines.append("async function attachIo(testInfo, requestIo, responseIo) {")
+    lines.append("  if (!LOG_IO || !testInfo) return;")
+    lines.append("  await testInfo.attach('api-request', { contentType: 'application/json', body: JSON.stringify(requestIo, null, 2) });")
+    lines.append("  await testInfo.attach('api-response', { contentType: 'application/json', body: JSON.stringify(responseIo, null, 2) });")
+    lines.append("}")
+    lines.append("")
     lines.append("function buildBody(overrides = {}) {")
     lines.append(f"  return Object.assign({json_dumps(body)}, overrides);")
     lines.append("}")
     lines.append("")
-    lines.append("async function callApi(request, body, { tamperSign = false } = {}) {")
+    lines.append("async function callApi(request, body, testInfo, { tamperSign = false } = {}) {")
     lines.append("  if (!APPID || !APPSECRET) test.skip(true, '缺 MX_APPID/MX_APPSECRET 环境变量');")
     lines.append("  const ts = mxTimestamp(new Date());")
     lines.append("  const msg = canonicalMsg(body);")
     lines.append("  let sign = mxMd5Sign(APPID, APPSECRET, ts, msg);")
     lines.append("  if (tamperSign) sign = sign.split('').reverse().join('');")
-    lines.append("  return request.post(BASE_URL, {")
-    lines.append("    headers: {")
-    lines.append("      'Content-Type': 'application/json',")
-    lines.append("      appid: APPID, ts, sign,")
-    lines.append("    },")
-    lines.append("    data: msg,  // 与签名 msg 完全一致的字符串")
-    lines.append("  });")
+    lines.append("  const headers = {")
+    lines.append("    'Content-Type': 'application/json',")
+    lines.append("    appid: APPID, ts, sign,")
+    lines.append("  };")
+    lines.append("  const requestIo = { method: 'POST', url: BASE_URL, headers: redact(headers), body: safeJson(msg) };")
+    lines.append("  let res;")
+    lines.append("  try {")
+    lines.append("    res = await request.post(BASE_URL, {")
+    lines.append("      headers,")
+    lines.append("      data: msg,")
+    lines.append("    });")
+    lines.append("  } catch (e) {")
+    lines.append("    await attachIo(testInfo, requestIo, { error: String((e && e.message) || e) });")
+    lines.append("    throw e;")
+    lines.append("  }")
+    lines.append("  await attachIo(testInfo, requestIo, { status: res.status(), body: safeJson(await res.text()) });")
+    lines.append("  return res;")
     lines.append("}")
     lines.append("")
 
     # 为每个用例生成 test
     for i, c in enumerate(plan["cases"], 1):
         title = f"[{c['category']}] {c['title']}"
-        lines.append(f"test({json_dumps(f'{i:02d} {title}')}, async ({{ request }}) => {{")
+        lines.append(f"test({json_dumps(f'{i:02d} {title}')}, async ({{ request }}, testInfo) => {{")
         if c["category"] == "required" and c.get("missing"):
             lines.append(f"  const body = buildBody(); delete body[{json_dumps(c['missing'])}];")
-            lines.append("  const res = await callApi(request, body);")
+            lines.append("  const res = await callApi(request, body, testInfo);")
             lines.append("  expect(res.status()).toBeGreaterThanOrEqual(200);")
         elif c["category"] == "auth":
             lines.append("  const body = buildBody();")
-            lines.append("  const res = await callApi(request, body, { tamperSign: true });")
+            lines.append("  const res = await callApi(request, body, testInfo, { tamperSign: true });")
             lines.append("  // 验签失败应非 2xx 或返回非 0 错误码（具体错误码待确认）")
             lines.append("  expect([401, 403, 400]).toContain(res.status());")
         elif c["category"] == "boundary":
             lines.append(f"  const body = buildBody({json_dumps({k: v for k, v in c['data'].items() if k in body or k == c['title'].split()[1]})});")
-            lines.append("  const res = await callApi(request, body);")
+            lines.append("  const res = await callApi(request, body, testInfo);")
             lines.append("  expect(res.status()).toBeGreaterThanOrEqual(200);")
+        elif c["category"] == "business":
+            # 业务分支用例：使用 existing_mobile / not_existing_mobile
+            if "已存在" in c["title"]:
+                lines.append("  const mobile = process.env.EXISTING_MOBILE || buildBody().MobilePhone;")
+                lines.append("  const body = buildBody({ MobilePhone: mobile });")
+                lines.append("  const res = await callApi(request, body, testInfo);")
+                lines.append("  expect(res.status()).toBeGreaterThanOrEqual(200);")
+                lines.append("  const json = await res.json().catch(() => null);")
+                lines.append("  if (json && 'Existed' in json) expect(json.Existed).toBe('MX1');")
+            else:
+                lines.append("  const mobile = process.env.NOT_EXISTING_MOBILE || buildBody().MobilePhone;")
+                lines.append("  const body = buildBody({ MobilePhone: mobile });")
+                lines.append("  const res = await callApi(request, body, testInfo);")
+                lines.append("  expect(res.status()).toBeGreaterThanOrEqual(200);")
+                lines.append("  const json = await res.json().catch(() => null);")
+                lines.append("  if (json && 'Existed' in json) expect(json.Existed).toBeNull();")
         else:
             overrides = {k: v for k, v in c.get("data", {}).items() if k in body}
             lines.append(f"  const body = buildBody({json_dumps(overrides)});")
-            lines.append("  const res = await callApi(request, body);")
+            lines.append("  const res = await callApi(request, body, testInfo);")
             lines.append("  expect(res.status()).toBeGreaterThanOrEqual(200);")
             lines.append("  const json = await res.json().catch(() => null);")
             lines.append("  if (json && 'Code' in json) expect(String(json.Code)).toBe('0');")

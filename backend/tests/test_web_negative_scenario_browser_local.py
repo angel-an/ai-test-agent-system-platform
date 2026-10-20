@@ -445,10 +445,15 @@ class TestNegativeScenarioBrowser:
         assert "无权限操作" in row["observed"]
 
     def test_undeclared_endpoint_never_reaches_the_server(self, negative_run):
-        """④ 写隔离收窄：未被任何场景声明的接口，服务端**一个请求都收不到**。"""
+        """④ 写隔离收窄：未被任何场景声明的接口，服务端**一个请求都收不到**。
+
+        归因必须落到"本场景提交触发的写请求被阻断"这一句上：页面提交的同集合兄弟
+        接口（`.../purchaseLimit/delete`）确实被拦下了，结论不能误报成"请求没发出"。
+        """
         row = _by_scenario(negative_run["rows"])["NEG-BLOCKED"]
         assert row["outcome"] == "unverified", row
         assert "写隔离策略阻断" in row["observed"]
+        assert "接口不在场景声明的放行范围内" in row["observed"]
         paths = [p for _m, p in negative_run["received"] if not p.startswith("/form")]
         assert not [p for p in paths if p.endswith("/delete")], \
             "未声明的写请求竟然到达了服务端：%s" % negative_run["received"]

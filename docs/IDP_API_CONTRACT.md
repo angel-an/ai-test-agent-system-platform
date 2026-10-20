@@ -2,6 +2,8 @@
 
 > 本文档基于 2026-08-26 真实联调结果整理
 > 所有敏感信息已脱敏
+> **2026-10-15 更新**：新增第 9 章「服务端能力边界与已知限制」——均为项目 17 真实实测结论，
+> 是**提单能力的硬约束**（设计前必读，不要"接口存在即认为有权限"）。
 
 ---
 
@@ -333,3 +335,93 @@ export IDP_AUTO_CREATE_ENABLED="false"
 - [x] 密码和 Token 不进入代码、日志和 Git
 - [ ] 报告能回写 IDP 编号和链接（待冒烟确认）
 - [ ] 重复执行关联原缺陷而不是重复创建（待冒烟确认）
+
+---
+
+## 9. 服务端能力边界与已知限制（2026-10-15 实测）
+
+> 实测环境：`https://idp-api.dtyunxi.cn`，项目 **17（美心-HK）**，普通测试账号 Token。
+> 所有结论均为**真实请求返回**，不是推测。这些是**框架提单能力的硬约束**：
+> 设计自动提单/改单能力前必读，**不要「接口存在就认为有权限」**。
+
+### 9.1 无程序化附图通道（403）
+
+以下端点对该 Token **全部 403 PERMISSION_MISMATCH**：
+
+| 端点 | 结果 |
+|------|------|
+| `GET/POST /agile/v1/projects/{p}/issues/{id}/attachments` | 403 |
+| `GET /agile/v1/projects/{p}/issue_images` | 403 |
+| `GET /agile/v1/projects/{p}/upload_images` | 403 |
+
+**结论**：框架**不得设计"自动附图"能力**，截图只能由人工拖入工单。
+
+**唯一可能的程序化内嵌路径**：`description` 的 Delta 支持图片 op —
+`{"insert":{"image":"<公网可读 URL>"}}`。已在同事单 `dmcloud-saas-67196` 描述中观察到实例
+（`https://idp-minio.dtyunxi.cn/agile-service-2024/image/.../xxx_blob.png`，该 URL 公网 GET 可读，HTTP 206）。
+**前提是截图必须先有公网可读地址**；本地路径、内网地址一律无效。
+
+### 9.2 需求 / 元数据类端点不可用（403）
+
+| 端点 | 结果 |
+|------|------|
+| `/agile/v1/projects/{p}/requirements` | 403 |
+| `/agile/v1/projects/{p}/backlog` | 403 |
+| `/agile/v1/projects/{p}/issues?typeCode=feature` | 403 |
+| `/agile/v1/projects/{p}/schemes/query_issue_types` | 403 |
+
+**结论**：**需求名称、问题类型清单等元数据无法程序化获取**，只能来自本地配置
+（`idp_projects.yaml`）或人工给定。框架里任何"自动识别需求名称"的设计都不可行。
+
+### 9.3 号段 ≠ issueId（静默返回无关单，最危险）
+
+- 问题号 `dmcloud-saas-67196` 与 issueId `927934` **是两个不同的值**。
+- 把问题号数字当 issueId 直接查（`GET /issues/67196`）会 **HTTP 200 返回另一张无关单** ——
+  不报错、静默错误，极易把回读校验做成假通过。
+- 且列表类端点对该 Token 403 ⇒ **无法按编号反查**，只能用**已知 issueId 锚点做区间内插扫描**定位目标单。
+
+### 9.4 详情接口返回扁平 JSON（无 `data` 包装）
+
+`GET /agile/v1/projects/{p}/issues/{id}?organizationId=1` **直接返回 issue 对象**，没有 `{"data": ...}`。
+
+```python
+payload = resp.json()
+issue = payload.get("data") or payload   # 正确
+# issue = (payload or {}).get("data") or {}   # 错误：得到空值，误判"标题/描述丢了"
+```
+
+### 9.5 更新接口契约与成功判据
+
+`PUT /agile/v1/projects/{p}/issues`，请求体至少含：
+`issueId` + `objectVersionNumber` + 目标字段（`summary` / `description`）。
+
+**成功判据（三者同时满足才算成功）**：
+1. HTTP **201**（不是 200）；
+2. 回读 `objectVersionNumber` = 原值 **+1**；
+3. 目标字段与预期内容**逐字**一致。
+
+⚠️ 只查关键词（例如"描述里出现 requestId 字样"）会把 `HTTP 201` 的成功写入**误判成失败**。
+⚠️ 回滚/对比场景要**按版本另存快照**（`*_original_ver2.json` / `*_v{N}.json` / `*_after.json`），
+因为再次 GET 会覆盖 before 快照。
+
+### 9.6 标题口径是双轨的，不可互相套用
+
+| 场景 | 口径 | 示例 |
+|------|------|------|
+| 框架**自动**提单（`idp_defect_service._generate_title`） | `【自动化测试】【类型】【业务模块】现象` | `【自动化测试】【API】【会员卡】分页参数 pageNum=9999 返回 500` |
+| **人工 / 半自动**提单（测试执行人） | `【美心-HK】_UAT_<需求名称>，<对象>，<现象>` | `【美心-HK】_UAT_YL主数据管理，店铺主数据-导入门店，导入报"Required String parameter 'excelFileUrl' is not present"，导入功能不可用` |
+
+- 人工口径里 `_UAT_` 之后跟的是**需求名称**（如 `YL主数据管理`），**不是固定段**；
+- 同事单 `dmcloud-saas-67316 / 67317 / 67324` 写成 `_UAT_CS，CS Case，`，是因为**那批的需求名称恰好叫 CS**——
+  **CS 只是参照实例，不是模板**，换需求时只替换需求名称段，其余结构沿用；
+- 自动口径与人工口径**并存但不得混用**：人工单不要带 `【自动化测试】` 前缀，自动单不要套 `_UAT_` 段。
+
+### 9.7 复现锚点（供复核）
+
+- 本次实测项目：17（美心-HK）；涉及单：`dmcloud-saas-67349`（issueId 930361）、`67350`（issueId 930362）；
+  参照单：`67196`（issueId 927934）。
+- 权限类结论统一返回体形态：
+  ```xml
+  <oauth><status>PERMISSION_MISMATCH</status><code>error.permission.mismatch</code>
+  <message>This request mismatch any permission</message></oauth>
+  ```

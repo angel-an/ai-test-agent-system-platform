@@ -18,6 +18,7 @@ from app.agents.tools.web.process_guard import (
     resume_suspended_main_thread,
     run_with_job,
 )
+from app.agents.tools.web import process_guard as pg
 
 WINDOWS = os.name == "nt"
 PY = f'"{sys.executable}"'
@@ -128,13 +129,53 @@ class TestJobObject:
         assert b"42" in result.stdout
 
     def test_run_with_job_timeout_terminates_tree(self):
-        with pytest.raises(subprocess.TimeoutExpired):
+        with pytest.raises(subprocess.TimeoutExpired) as ei:
             run_with_job(
                 f"{PY} -c \"import time; time.sleep(60)\"",
                 timeout=2,
                 shell=True,
             )
-        # 超时路径调用 TerminateJobObject（其杀树语义由 test_terminate_kills_process_tree 验证）
+        # rev96：不再用 TerminateJobObject 收尾（会连坐宿主），改为 taskkill 只杀本次进程树；
+        # 终止方式必须如实上报，上层据此判断现场可信度。
+        assert ei.value.pg_terminate_mode == "tree"
+        assert ei.value.pg_terminate_rc == 0
+
+    def test_run_with_job_writes_exec_log(self, tmp_path):
+        """rev95：传 stdout_path/stderr_path 时输出实时落盘，返回值语义不变。"""
+        log = tmp_path / "exec.log"
+        result = run_with_job(
+            f"{PY} -c \"print(42)\"", timeout=30, shell=True,
+            stdout_path=str(log), stderr_path=str(log),
+        )
+        assert result.returncode == 0
+        assert b"42" in result.stdout
+        assert "42" in log.read_text(encoding="utf-8")
+
+    def test_run_with_job_timeout_keeps_partial_output(self, tmp_path):
+        """rev95：超时被杀后仍能拿到现场（附在 TimeoutExpired 上并留在日志文件）。
+
+        这是 10-12 rev94 行为级验证的教训：602s 超时却拿不到一行输出，
+        导致挂死点无法定位。
+        """
+        script = tmp_path / "sleep.py"
+        script.write_text(
+            "import time\nprint('BEFORE_TIMEOUT', flush=True)\ntime.sleep(60)\n",
+            encoding="utf-8",
+        )
+        log = tmp_path / "exec.log"
+        with pytest.raises(subprocess.TimeoutExpired) as ei:
+            run_with_job(
+                [sys.executable, str(script)], cwd=str(tmp_path), timeout=3,
+                shell=False, stdout_path=str(log), stderr_path=str(log),
+            )
+        assert b"BEFORE_TIMEOUT" in (ei.value.stdout or b"")
+        assert "BEFORE_TIMEOUT" in log.read_text(encoding="utf-8")
+
+    def test_pipe_mode_default_unchanged(self):
+        """反向锁：不传路径 = 完全原 PIPE 行为（默认零影响）。"""
+        result = run_with_job(f"{PY} -c \"print(7)\"", timeout=30, shell=True)
+        assert result.returncode == 0
+        assert b"7" in result.stdout
 
     def test_env_disable_falls_back(self, monkeypatch):
         monkeypatch.setenv("EXEC_JOB_ENABLED", "0")
@@ -237,3 +278,103 @@ class TestJobObject:
 def test_posix_fallback():
     result = run_with_job("echo hi", timeout=30)
     assert result.returncode == 0
+
+
+# ============ rev96：超时终止路径（返回码检查 / 不回退作业终止 / 日志如实） ============
+
+class TestTerminateProcessTree:
+    """``_terminate_process_tree`` 的返回码语义：不能把失败当成功。"""
+
+    def _fake_run(self, monkeypatch, *, rc=None, exc=None, stdout=b"", stderr=b""):
+        calls = []
+
+        def fake(cmd, **kwargs):
+            calls.append(cmd)
+
+            class _R:
+                returncode = rc
+                stdout = self_stdout
+                stderr = self_stderr
+
+            if exc is not None:
+                raise exc
+            return _R()
+
+        self_stdout, self_stderr = stdout, stderr
+        monkeypatch.setattr(pg.subprocess, "run", fake)
+        return calls
+
+    def test_rc0_is_success(self, monkeypatch):
+        if not WINDOWS:
+            pytest.skip("taskkill 仅 Windows")
+        self._fake_run(monkeypatch, rc=0)
+        ok, rc, detail = pg._terminate_process_tree(1234)
+        assert (ok, rc) == (True, 0)
+        assert "已终止进程树" in detail
+
+    def test_rc128_means_already_gone(self, monkeypatch):
+        """128 = 目标进程已不存在，属达成目标而非失败。"""
+        if not WINDOWS:
+            pytest.skip("taskkill 仅 Windows")
+        self._fake_run(monkeypatch, rc=128)
+        ok, rc, detail = pg._terminate_process_tree(1234)
+        assert (ok, rc) == (True, 128)
+        assert "已不存在" in detail
+
+    def test_nonzero_rc_is_failure(self, monkeypatch):
+        """旧实现只要不抛异常就记成功 —— 这里必须判失败并带出返回码。"""
+        if not WINDOWS:
+            pytest.skip("taskkill 仅 Windows")
+        self._fake_run(monkeypatch, rc=5, stderr="拒绝访问".encode("cp936", errors="replace"))
+        ok, rc, detail = pg._terminate_process_tree(1234)
+        assert ok is False
+        assert rc == 5
+        assert "rc=5" in detail
+
+    def test_exception_is_failure(self, monkeypatch):
+        if not WINDOWS:
+            pytest.skip("taskkill 仅 Windows")
+        self._fake_run(monkeypatch, exc=OSError("boom"))
+        ok, rc, detail = pg._terminate_process_tree(1234)
+        assert ok is False and rc is None
+        assert "调用异常" in detail
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Job Object 仅 Windows")
+class TestTimeoutTerminationPolicy:
+    """超时后：只杀本次进程树，**不回退 TerminateJobObject**（会连坐宿主）。"""
+
+    def _run_sleep(self, monkeypatch, tree_result):
+        monkeypatch.setattr(pg, "_terminate_process_tree", lambda pid: tree_result)
+        terminate_calls = []
+        monkeypatch.setattr(
+            pg.JobObject, "terminate",
+            lambda self, exit_code=1: terminate_calls.append(exit_code),
+        )
+        with pytest.raises(subprocess.TimeoutExpired) as ei:
+            run_with_job(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                timeout=1, shell=False,
+            )
+        return ei.value, terminate_calls
+
+    def test_taskkill_failure_does_not_fall_back_to_job_terminate(self, monkeypatch):
+        exc, terminate_calls = self._run_sleep(monkeypatch, (False, 5, "taskkill 失败 rc=5"))
+        assert terminate_calls == [], "失败时不得回退 TerminateJobObject（会杀死宿主）"
+        assert exc.pg_terminate_mode == "kill_only"
+        assert exc.pg_terminate_rc == 5
+        assert "降级为仅杀主进程" in exc.pg_terminate_detail
+
+    def test_success_reports_tree_mode(self, monkeypatch):
+        exc, terminate_calls = self._run_sleep(monkeypatch, (True, 0, "taskkill 已终止进程树"))
+        assert terminate_calls == []
+        assert exc.pg_terminate_mode == "tree"
+        assert exc.pg_terminate_rc == 0
+
+    def test_log_reflects_actual_mode(self, monkeypatch, caplog):
+        """日志必须说实际做了什么，不能再固定写"已终止 Job Object 进程树"。"""
+        with caplog.at_level("WARNING"):
+            self._run_sleep(monkeypatch, (False, 1, "taskkill 失败 rc=1"))
+        text = caplog.text
+        assert "终止方式=kill_only" in text
+        assert "Job Object 进程树" not in text

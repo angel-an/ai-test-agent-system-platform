@@ -7,6 +7,7 @@ OpenAPI Schema 解析服务
 import json
 from typing import Any
 from uuid import UUID
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_endpoint import APIEndpoint
@@ -14,6 +15,7 @@ from app.models.attachment import Attachment
 from app.models.folder import Folder
 from app.models.project import Project
 from app.models.folder_type import FolderType
+from app.services.api_bundle_service import normalize_import_path
 
 class OpenAPIParser:
     """OpenAPI Schema 解析器"""
@@ -51,8 +53,13 @@ class OpenAPIParser:
         # 提取所有路径
         paths = openapi_spec.get("paths", {})
 
+        # 提取根级 security（OpenAPI 全局声明），供端点级回退合并使用。
+        # 契约把鉴权声明在全局/path 级时，端点自身没有 security 字段；
+        # 若不回退合并，会落成 None 并被判定为"无鉴权"。
+        global_security = openapi_spec.get("security")
+
         # 按标签分组端点
-        endpoints_by_tag = self._group_endpoints_by_tag(paths)
+        endpoints_by_tag = self._group_endpoints_by_tag(paths, global_security)
 
         # 创建文件夹结构
         result = {
@@ -111,28 +118,77 @@ class OpenAPIParser:
 
         return result
 
-    def _group_endpoints_by_tag(self, paths: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    @staticmethod
+    def _resolve_security(
+        method_security: Any,
+        path_security: Any,
+        global_security: Any,
+    ) -> tuple[Any, str]:
+        """按 OpenAPI 语义合并 method / path / 全局三级 security。
+
+        优先级：method 级 > path 级 > 根级（全局）。
+
+        语义要点：``security: []``（空数组）是**显式声明无需鉴权**，
+        必须与"未声明（None / 键缺失）"区分开，不能被上层声明覆盖。
+
+        Returns:
+            (security, security_source)：
+            - security_source ∈ {"method", "path", "global", "none"}
+              "none" 表示三级都未声明鉴权（按契约语义即无需鉴权）。
+        """
+        if method_security is not None:
+            return method_security, "method"
+        if path_security is not None:
+            return path_security, "path"
+        if global_security is not None:
+            return global_security, "global"
+        return None, "none"
+
+    def _group_endpoints_by_tag(
+        self,
+        paths: dict[str, Any],
+        global_security: Any = None,
+    ) -> dict[str, list[dict[str, Any]]]:
         """
         按标签分组端点
 
         Args:
             paths: OpenAPI paths 对象
+            global_security: OpenAPI 根级 security（全局声明）；端点与 path 均未声明时回退到此值
 
         Returns:
             {tag_name: [endpoint_data, ...]}
+
+        说明：
+            OpenAPI 的 security 可在三处声明，生效优先级为
+            method 级 > path 级 > 根级（全局）。原实现只读 method 级，
+            导致"全局声明鉴权"的契约落库后 security 为 None，
+            被下游误判为公开接口（鉴权覆盖维度会算错）。
         """
         endpoints_by_tag: dict[str, list[dict[str, Any]]] = {}
 
         for path, path_item in paths.items():
+            if not isinstance(path_item, dict):
+                continue
+            path_security = path_item.get("security")
+
             # 遍历该路径的所有 HTTP 方法
             for method, method_spec in path_item.items():
                 if method.lower() not in ["get", "post", "put", "delete", "patch", "options", "head", "trace"]:
+                    continue
+                if not isinstance(method_spec, dict):
                     continue
 
                 # 提取标签（如果没有标签，则使用 "Other"）
                 tags = method_spec.get("tags", ["Other"])
                 primary_tag = tags[0] if tags else "Other"
 # pylint: disable  MS80OmFIVnBZMlhscm9ua3VMazZja2hsVGc9PTowZDMxZGU5MA==
+
+                # security 三级回退合并（保留"显式声明为空数组"的语义：
+                # security: [] 表示显式声明无需鉴权，不应被全局声明覆盖）
+                security, security_source = self._resolve_security(
+                    method_spec.get("security"), path_security, global_security
+                )
 
                 # 构建端点数据
                 endpoint_data = {
@@ -143,7 +199,8 @@ class OpenAPIParser:
                     "parameters": method_spec.get("parameters", []),
                     "request_body": method_spec.get("requestBody"),
                     "responses": method_spec.get("responses", {}),
-                    "security": method_spec.get("security"),
+                    "security": security,
+                    "security_source": security_source,
                     "tags": tags,
                     "deprecated": method_spec.get("deprecated", False),
                     "operation_id": method_spec.get("operationId")
@@ -194,6 +251,30 @@ class OpenAPIParser:
 
         return folder
 
+    async def _find_existing_endpoint(
+        self,
+        project_id: UUID,
+        method: str,
+        path: str,
+    ) -> APIEndpoint | None:
+        """按幂等键 (project_id, method, normalized_path) 查找既有端点。
+
+        统一导入（swagger/apifox 在线/离线）历史上每次都会新建端点行，
+        端点 UUID 一变，已挂在其下的成果物（计划/用例/脚本/报告）即成孤儿——
+        端点面板按当前端点 id 查询，孤儿成果物在 UI 上完全不可见。
+        与契约导入（ApiBundleService.confirm）对齐：命中幂等键即复用既有端点，
+        不重复创建，从根上杜绝重导入制造孤儿成果物。
+        """
+        normalized = normalize_import_path(path)
+        if not normalized:
+            return None
+        stmt = select(APIEndpoint).where(
+            APIEndpoint.project_id == project_id,
+            APIEndpoint.method == method.upper(),
+            APIEndpoint.normalized_path == normalized,
+        )
+        return (await self.db.execute(stmt)).scalars().first()
+
     async def _create_endpoint_folder(
         self,
         project_id: UUID,
@@ -217,6 +298,13 @@ class OpenAPIParser:
         """
         path = endpoint_data["path"]
         method = endpoint_data["method"]
+
+        # 幂等：同项目同 method+normalized_path 的端点已存在则直接复用，
+        # 不新建文件夹/端点行。否则端点每被重新导入一次就换一个 UUID，
+        # 已挂在其下的成果物（entity_id 指向旧端点）全部孤儿化、在 UI 不可见。
+        existing = await self._find_existing_endpoint(project_id, method, path)
+        if existing is not None:
+            return existing
 
         # 提取路径的最后一部分作为资源名称
         # 例如：/api/v1/Activities -> Activities
@@ -249,6 +337,7 @@ class OpenAPIParser:
             display_name=display_name,
             path=path,
             method=method,
+            normalized_path=normalize_import_path(path),
             summary=endpoint_data.get("summary"),
             description=endpoint_data.get("description"),
             schema_file_id=schema_file_id,
@@ -262,7 +351,10 @@ class OpenAPIParser:
                 "deprecated": endpoint_data.get("deprecated", False),
                 "operation_id": endpoint_data.get("operation_id"),
                 "resource_name": resource_name,
-                "folder_name": folder_name
+                "folder_name": folder_name,
+                # 鉴权声明的来源层级（method/path/global/none），
+                # 供覆盖度评审区分"契约确实未声明鉴权"与"契约未提供该信息"
+                "security_source": endpoint_data.get("security_source", "none"),
             },
             sort_order=self._get_method_sort_order(method)
         )

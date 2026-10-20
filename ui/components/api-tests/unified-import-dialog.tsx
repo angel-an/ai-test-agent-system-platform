@@ -451,12 +451,31 @@ export function UnifiedImportDialog({
                 <h4 className="text-sm font-medium">变量（仅引用）</h4>
                 <div className="mt-1 flex flex-wrap gap-1">
                   {variables.map((v) => (
-                    <Badge key={v.id} variant="outline" className="font-mono text-xs">
+                    <Badge
+                      key={v.id}
+                      variant="outline"
+                      className={`font-mono text-xs ${
+                        v.source_type === "postman_collection"
+                          ? "border-blue-300 bg-blue-50 text-blue-700"
+                          : v.source_type === "manual"
+                            ? "border-purple-300 bg-purple-50 text-purple-700"
+                            : ""
+                      }`}
+                    >
                       {v.name}: {isSafeVariableRef(v.value_ref) ? v.value_ref : "（非引用，已隐藏）"}
                       {v.is_secret ? " 🔒" : ""}
+                      {v.source_type === "postman_collection" && (
+                        <span className="ml-1 text-[10px] opacity-60">Collection</span>
+                      )}
+                      {v.source_type === "manual" && (
+                        <span className="ml-1 text-[10px] opacity-60">手动</span>
+                      )}
                     </Badge>
                   ))}
                 </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  蓝色 = Collection 自动识别 · 紫色 = 手动添加 · 默认 = Environment 导入
+                </p>
               </div>
             )}
           </div>

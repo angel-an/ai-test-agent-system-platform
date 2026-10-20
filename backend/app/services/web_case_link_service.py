@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.minio_client import MinIOClient
@@ -27,7 +27,9 @@ from app.models.web_test import WebTest
 from app.repositories.test_case_repo import TestCaseRepository
 from app.repositories.test_run_repo import TestRunRepository
 from app.services.web_case_compiler import (
+    COMPILER_REV,
     build_form_plan,
+    compiler_source_digest,
     build_form_plan_for_template,
     compile_cases,
     merge_registered_locators,
@@ -36,6 +38,7 @@ from app.services.web_case_compiler import (
     render_manifest_block,
     resolve_form_locators,
 )
+from app.services.web_test_compile_manifest import apply_compile_manifest
 from app.schemas.enums import (
     AutomationStatus,
     ExecutionMode,
@@ -87,7 +90,21 @@ _WEB_TEMPLATE_LABELS: dict[str, str] = {
     "storage_writeoff": "B端储值免单活动",
     "purchase_limit": "B端会员限购商品管理",
     "yl_masterdata": "YL主数据管理",
+    "survey_operation": "调查问卷管理",
 }
+
+#: 模板标签 → 模板键（反查）。2026-10-20 F-1：子功能 `display_name` 与标签
+#: **归一化后完全相等**时，视为「显式绑定」——这是"配置了却不生效"的最小修复：
+#: 平台已有 100+ 子功能（`WSF-SURVEY-01` 的 display_name 就是「调查问卷管理」），
+#: 让它们无需改库即可路由，而不是逼用户改用例名去凑关键词。
+_TEMPLATE_LABEL_TO_KEY: dict[str, str] = {v: k for k, v in _WEB_TEMPLATE_LABELS.items()}
+
+#: 「调查问卷管理」（营销云-系统）业务的**正向**识别词。
+#: 取问卷业务专有复合词（问卷标题/问卷题目/问卷编码/调查问卷/参与次数），
+#: 不取裸「问卷」，避免误伤未来含「问卷」二字的其他业务文案。
+_SURVEY_KEYWORDS = (
+    "调查问卷", "问卷标题", "问卷题目", "问卷编码", "参与次数",
+)
 
 #: 「储值免单活动」业务的**正向**识别词（仅用于确认该业务，不再作为通用兜底）。
 _STORAGE_WRITEOFF_KEYWORDS = ("储值免单", "免单活动")
@@ -232,6 +249,254 @@ def render_required_click() -> str:
     """渲染 ``requiredClick``（4 个模板语义等价，统一为带 timeoutMs 的版本）。"""
     return _REQUIRED_CLICK_TEMPLATE
 
+
+#: N5（2026-10-18）：取帧/菜单失败现场的诊断块。
+#:
+#: 历史问题（逐字来自 TR-517 日志）：只有 `[nav] clicked: CRM` + `YL_MENU_DUMP []`，
+#: **没有任何 pages/frames 清单** —— 无法判断到底是"抓错了 frame"（取帧缺陷）、
+#: 还是"菜单懒加载未完成 / 语言不符 / 权限未开"（环境/数据缺陷）。
+#: 三种原因的修法完全不同，没有现场就只能猜。
+#:
+#: 这里用**纯字符串常量**（非 f-string）：插进模板时直接替换 ``{frame_diag_js}``，
+#: 不需要把 JS 的花括号写成双份——模板里手写 JS 时最容易被花括号转义坑到。
+_FRAME_DIAG_TEMPLATE = """// ---- 取帧诊断（N5）：失败现场必须能自证 ----------------------------------
+// 输出形如：
+//   FRAME_DIAG scope=menu-expand ; page#0 https://... ; frame#0 name= url=https://... bodyLen=812 menu=["Customer Service"] ; iframes=1 src=["..."]
+// 判读口径：
+//   · 某个 frame 的 menu 里**有**目标菜单 → 取错 frame（改 pickAppFrame 的遍历顺序）
+//   · 所有 frame 的 menu 都为空 / bodyLen 很小 → 页面没加载完或权限/语言问题
+//   · iframes=0 → 该页面根本不嵌 iframe（作用域应留在 page）
+async function frameDiag(appPage: Page, scopeLabel: string): Promise<string> {
+  const parts: string[] = [`scope=${scopeLabel}`];
+  try {
+    const pages = appPage.context().pages();
+    for (let i = 0; i < pages.length; i += 1) {
+      const p = pages[i];
+      let closed = false;
+      try { closed = p.isClosed(); } catch { /* ignore */ }
+      parts.push(`page#${i} ${String(p.url()).slice(0, 120)}${closed ? ' [closed]' : ''}`);
+    }
+  } catch (err) {
+    parts.push(`pages-failed:${String(err).slice(0, 60)}`);
+  }
+  try {
+    const frames = appPage.frames();
+    for (let i = 0; i < frames.length; i += 1) {
+      const f = frames[i];
+      let menu: string[] = [];
+      try { menu = await visibleMenuTexts(f as unknown as ClickScope); } catch { /* ignore */ }
+      let bodyLen = -1;
+      try { bodyLen = (await f.locator('body').innerText()).length; } catch { /* ignore */ }
+      parts.push(
+        `frame#${i} name=${JSON.stringify(f.name() || '')} url=${String(f.url()).slice(0, 120)}`
+        + ` bodyLen=${bodyLen} menu=${JSON.stringify(menu.slice(0, 12))}`,
+      );
+    }
+  } catch (err) {
+    parts.push(`frames-failed:${String(err).slice(0, 60)}`);
+  }
+  try {
+    const iframes = appPage.locator('iframe');
+    const total = await iframes.count();
+    const srcs: string[] = [];
+    for (let i = 0; i < total; i += 1) {
+      srcs.push(String((await iframes.nth(i).getAttribute('src')) || '').slice(0, 120));
+    }
+    parts.push(`iframes=${total} src=${JSON.stringify(srcs)}`);
+  } catch (err) {
+    parts.push(`iframes-failed:${String(err).slice(0, 60)}`);
+  }
+  return parts.join(' ;; ');
+}
+
+async function frameCount(appPage: Page): Promise<number> {
+  return await appPage.locator('iframe').count().catch(() => 0);
+}
+
+// ---- 取帧失败重取（rev116 / rev116-fix）-------------------------------------
+// 为什么需要：getCrmScope 只在入口调用**一次**。若那一刻 iframe 还没插入 DOM
+// （openCrm 的等待是 60s 上限 + 3s 缓冲，但网络慢时仍可能没到），
+// 就会以 iframes=0 选中 page，之后所有菜单探测都在 page 上白找 ——
+// 20s 探测 + 15s 列表轮询全打在错的 scope 上，日志看起来像"菜单不存在"。
+//
+// rev116-fix（2026-10-19 复核）：旧签名是 (appPage, prevFrames, reason)，
+// 而 prevFrames 由调用方**再读一次** frameCount 得到 —— 两次读 DOM 之间 iframe 可能插入，
+// 于是 scope=page 而 prevFrames=1，本函数判 changed=false 直接放弃，
+// 「重取」在竞态下完全失效（实测 probe 序列 ["page","page"]：页面上有 iframe 却全程打在 page）。
+//
+// 现在改为**由 currentScope 反推**，不再二次读 DOM：
+//   · 是否等待 = 「当前是不是 page」（page 才值得等 iframe 出现）；
+//   · 是否切换 = 「当前 scope 的类型」与「刷新后应有类型」是否不一致（stale）——
+//     page→有帧 要换（哪怕帧数一直是 1）；iframe→无帧（已脱离）也要换；类型一致就不白等。
+//   · 日志里的 adopt 恒等于 stale，也就是调用方**实际会不会换**，
+//     不会出现"日志写着 chosen=iframe#0、实际仍停在 page"的自证失真。
+async function refreshCrmScope(
+  appPage: Page, currentScope: ClickScope, reason: string, waitMs = 6000,
+): Promise<{ scope: ClickScope; frames: number; stale: boolean }> {
+  const onPage = currentScope === appPage;
+  let frames = await frameCount(appPage);
+  if (onPage) {
+    const deadline = Date.now() + waitMs;
+    while (frames === 0 && Date.now() < deadline) {
+      await appPage.waitForTimeout(400);
+      frames = await frameCount(appPage);
+    }
+  }
+  const stale = onPage !== (frames === 0);
+  const chosen = frames > 0 ? 'iframe#0' : 'page';
+  console.log(`SCOPE_REFRESH ${JSON.stringify({
+    reason,
+    prevScope: onPage ? 'page' : 'iframe#0',
+    iframes: frames,
+    stale,
+    chosen,
+    adopt: stale,
+  })}`);
+  return { scope: frames > 0 ? appPage.frameLocator('iframe').first() : appPage, frames, stale };
+}
+"""
+
+
+def render_frame_diag() -> str:
+    """渲染取帧诊断块（N5）。逐字插入模板，无占位符。"""
+    return _FRAME_DIAG_TEMPLATE
+
+
+#: 列头**只读**比对块（N3 第 2 步，2026-10-18）。
+#:
+#: 为什么先做这个、而不是直接做"列检查执行器"：
+#:   · 148 个子功能里只有 1 个配了列清单，没有真实列头就无法判断配置对不对；
+#:   · 列头是**读**出来的（innerText），不点击、不提交、不造数据，对被测系统零副作用；
+#:   · 配置与真实列头尚未对齐（实测 `columns_22` 声明 22 列、实际 23 项含勾选列），
+#:     所以默认只报 `COLUMN_DIFF`、**不判失败**，否则会把配置漂移变成整批假失败。
+#:     需要硬门禁时在列契约里写 `"assert_on_mismatch": true`。
+#: 与 FRAME_DIAG 同理，用纯字符串常量 + 占位符替换，避免 f-string 的花括号转义坑。
+_COLUMN_DIAG_TEMPLATE = r"""// ---- 列头只读比对（N3 第 2 步）：读 DOM，不点击、不提交、不造数据 --------------
+// 输出两行（都可机读）：
+//   COLUMN_HEADERS {"label":"yl-list","selector":".ant-table-thead > tr:first-child > th",
+//                   "count":22,"headers":["Case No.","Status",...]}
+//   COLUMN_DIFF    {"label":"yl-list","verdict":"match|mismatch|no_contract|no_header",
+//                   "configured":22,"page_count":23,"matched":21,
+//                   "missing_in_page":[...],"extra_in_page":[...],"order_monotonic":true}
+// 判读口径：
+//   · missing_in_page 非空 → 配置要求的列页面上没有（需求未实现／列被隐藏／权限裁剪）
+//   · extra_in_page 非空  → 页面多出配置外的列（需求变更未同步到定位器配置）
+//   · verdict=no_contract → 该子功能还没有列配置（当前 148 个子功能里 147 个如此，
+//     这一行同时也是**采集真实列头**的入口，可用于反向补配置）
+type ColumnContractItem = { key?: string; header_text?: string; aliases?: string[] };
+type ColumnContract = {
+  items?: ColumnContractItem[];
+  source?: string;
+  //: 编译期 `parse_columns` 产出的其余字段（原样带过来，供日志判读配置来源与漂移）
+  table_scope?: string;
+  column_count?: number;
+  notes?: string[];
+  //: 仅当配置显式要求时才因列头不一致判失败（默认关闭，见文件头注释）
+  assert_on_mismatch?: boolean;
+} | null;
+const COLUMN_CONTRACT: ColumnContract = @@COLUMNS_JSON@@;
+
+function normColText(value: unknown): string {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+//: 读表头：只取**第一行**（antd 可能有分组表头，第二行是子列，不能算进列数），
+//: 并剔除固定列的滚动条占位格（它没有文本，会把列数恒定 +1）。
+//: 每个候选先**限定在第一张表内**（root）：列表页上方常带统计小表/弹窗内有子表，
+//: 不限定时会把多张表的表头拼成一条，列数直接翻倍。
+async function readColumnHeaders(scope: ClickScope): Promise<{ headers: string[]; selector: string }> {
+  const plans = [
+    { root: '.ant-table', inner: '.ant-table-thead > tr:first-child > th' },
+    { root: '', inner: 'thead > tr:first-child > th' },
+    { root: '', inner: '[role="columnheader"]' },
+  ];
+  for (const plan of plans) {
+    try {
+      const base: any = plan.root ? scope.locator(plan.root).first() : scope;
+      const cells = base.locator(plan.inner);
+      const total = await cells.count();
+      if (!total) continue;
+      const headers: string[] = [];
+      for (let i = 0; i < total; i += 1) {
+        const cell = cells.nth(i);
+        const cls = String((await cell.getAttribute('class')) || '');
+        if (cls.indexOf('ant-table-cell-scrollbar') >= 0) continue;
+        let text = '';
+        try { text = await cell.innerText(); } catch { text = ''; }
+        headers.push(String(text || '').replace(/\s+/g, ' ').trim().slice(0, 40));
+      }
+      if (headers.length) return { headers, selector: plan.root ? plan.root + ' ' + plan.inner : plan.inner };
+    } catch {
+      // 该选择器不适用于当前作用域，换下一个候选
+    }
+  }
+  return { headers: [], selector: '' };
+}
+
+async function columnDiag(scope: ClickScope, label: string): Promise<void> {
+  const picked = await readColumnHeaders(scope);
+  console.log('COLUMN_HEADERS ' + JSON.stringify({
+    label, selector: picked.selector, count: picked.headers.length, headers: picked.headers.slice(0, 40),
+  }));
+  const items = (COLUMN_CONTRACT && Array.isArray(COLUMN_CONTRACT.items)) ? COLUMN_CONTRACT.items : [];
+  if (!items.length) {
+    console.log('COLUMN_DIFF ' + JSON.stringify({ label, verdict: 'no_contract', page_count: picked.headers.length }));
+    return;
+  }
+  if (!picked.headers.length) {
+    // 列表渲染断言已过、却读不到表头：可能是非表格形态（卡片列表）或表头选择器不适用
+    console.log('COLUMN_DIFF ' + JSON.stringify({ label, verdict: 'no_header', configured: items.length }));
+    return;
+  }
+  const pageNorm = picked.headers.map(normColText);
+  const used: boolean[] = pageNorm.map(() => false);
+  const matched: string[] = [];
+  const missing: string[] = [];
+  const hitIndex: number[] = [];
+  for (const item of items) {
+    const name = String((item && (item.key || item.header_text)) || '');
+    const rawCands = [item && item.header_text, item && item.key].concat(
+      (item && Array.isArray(item.aliases)) ? item.aliases : [],
+    );
+    const cands: string[] = [];
+    for (const c of rawCands) {
+      const n = normColText(c);
+      if (n && cands.indexOf(n) < 0) cands.push(n);
+    }
+    let hit = -1;
+    for (const cand of cands) {
+      for (let i = 0; i < pageNorm.length; i += 1) {
+        if (!used[i] && pageNorm[i] === cand) { hit = i; break; }
+      }
+      if (hit >= 0) break;
+    }
+    if (hit >= 0) { used[hit] = true; matched.push(name); hitIndex.push(hit); }
+    else missing.push(name);
+  }
+  const extra = picked.headers.filter((_h, i) => !used[i]);
+  // 顺序：命中列在页面上的下标必须严格递增，否则"列都在、顺序被调过"
+  let orderMonotonic = true;
+  for (let i = 1; i < hitIndex.length; i += 1) {
+    if (hitIndex[i] <= hitIndex[i - 1]) { orderMonotonic = false; break; }
+  }
+  const verdict = (missing.length || extra.length || !orderMonotonic) ? 'mismatch' : 'match';
+  console.log('COLUMN_DIFF ' + JSON.stringify({
+    label, verdict, source: (COLUMN_CONTRACT && COLUMN_CONTRACT.source) || '',
+    configured: items.length, page_count: picked.headers.length, matched: matched.length,
+    missing_in_page: missing.slice(0, 20), extra_in_page: extra.slice(0, 20),
+    order_monotonic: orderMonotonic,
+  }));
+  if (verdict !== 'match' && COLUMN_CONTRACT && COLUMN_CONTRACT.assert_on_mismatch === true) {
+    expect(verdict, `列头与配置不一致：缺失=${missing.join('/') || '无'}；多出=${extra.join('/') || '无'}`).toBe('match');
+  }
+}
+// ---- 列头比对结束（此标记供测试切出本块做行为验证，勿删）-------------------
+"""
+
+
+def render_column_diag(columns_json: str = "null") -> str:
+    """渲染列头只读比对块。``columns_json`` 由编译期列契约序列化而来（可为 null）。"""
+    return _COLUMN_DIAG_TEMPLATE.replace("@@COLUMNS_JSON@@", columns_json or "null")
 
 
 def _case_sort_key(case: TestCase) -> tuple[str, str]:
@@ -442,6 +707,10 @@ class WebCaseLinkService:
         self._last_sub_function_audit: dict[str, Any] = {}
         #: 最近一次**主用例**选择的策略/候选/决策（同样落库审计，替代原业务关键词打分）
         self._last_case_selection_audit: dict[str, Any] = {}
+        #: 最近一次**模板键解析**的来源审计（2026-10-20 F-1）：
+        #: 记为 `explicit:* / sub_function_name / keyword / none`，写入
+        #: `web_tests.generation_params.template_routing`——回答"这条用例为什么用了这个模板"。
+        self._last_template_key_audit: dict[str, Any] = {}
 
     async def create_minimal_loop(
         self,
@@ -522,6 +791,18 @@ class WebCaseLinkService:
             custom = getattr(sub_function, "custom_config", None) or {}
             if isinstance(custom, dict):
                 locator_override = custom.get("field_locators")
+                # N3（2026-10-18）：CS 侧的列配置（columns_22 / requirement_fields_16 /
+                # sortable_columns）挂在 custom_config **顶层**，不在 field_locators 里，
+                # 编译器读不到 → 列契约永远是 0 列，看起来像"根本没配"。这里把这三个键
+                # 以 `columns_legacy` 带进定位器视图（**只读、不改库、不改变执行能力**）。
+                if isinstance(locator_override, dict):
+                    legacy_columns = {
+                        k: custom[k] for k in ("columns_22", "requirement_fields_16",
+                                               "sortable_columns", "locators")
+                        if k in custom and k not in locator_override
+                    }
+                    if legacy_columns:
+                        locator_override = {**locator_override, "columns_legacy": legacy_columns}
                 # 上传隔离的放行清单：默认空 → 上传校验期间**所有写请求**都被阻断（GET 放行）
                 raw_hosts = custom.get("upload_allow_hosts") or []
                 if isinstance(raw_hosts, list):
@@ -534,7 +815,12 @@ class WebCaseLinkService:
         # 去操作目标页面根本没有的控件。实测（2026-09-24 CS、2026-09-29 限购）同一根因。
         # 这里只用「子功能配置的表」或「本模板自带的表」；都没有就不生成表单检查
         # （断言如实留在 pending_locator，不冒充通过、也不判 blocked 硬失败）。
-        web_template_key = self._resolve_web_template_key(test_case)
+        # rev130（F-1）：**显式绑定优先**——子功能配了 template_key（或 display_name
+        # 与模板标签完全一致）就直接用，不再让关键词把"配了却不生效"埋成误报。
+        web_template_key = self._resolve_web_template_key(test_case, sub_function)
+        path_config["template_routing"] = dict(
+            getattr(self, "_last_template_key_audit", None) or {}
+        )
         registered_locators = await self._load_registered_form_locators(project.id, web_template_key)
         form_plan, locator_source = build_form_plan_for_template(
             web_template_key, manifest, locator_override, registered_locators,
@@ -844,12 +1130,24 @@ class WebCaseLinkService:
         }
         if form_plan:
             summary["form_executable_checks"] = form_plan.get("check_count", 0)
+            # rev134：别名生效流水。跳过项里的 suggestions 只是"猜"，这里才是"实际改了名"。
+            summary["field_alias_applied"] = list(
+                form_plan.get("field_alias_applied") or [])
+            summary["field_alias_dangling"] = list(
+                form_plan.get("field_alias_dangling") or [])
             summary["form_skipped_no_locator"] = form_plan.get("skipped_count", 0)
+            # N3（2026-10-18）：跳过项分账（list=列表域缺生成器 / form=表单缺定位器）。
+            # 合成一个数会误导修法：列表域配 fields 一条都救不回来。
+            summary["form_skipped_by_scope"] = dict(form_plan.get("skipped_by_scope") or {})
+            summary["list_columns_declared"] = int(
+                (form_plan.get("columns") or {}).get("column_count") or 0
+            )
             # 未执行的断言必须可追溯（例如 .xls 无有效样本）：报告要单独列出，不能算通过
             skipped = list(form_plan.get("skipped") or [])
             summary["skipped_assertions"] = [
                 {"field": s.get("field"), "kind": ",".join(s.get("kinds") or []) or (s.get("kind") or ""),
                  "format": s.get("format") or "", "reason": s.get("reason"),
+                 "scope": s.get("scope") or "form",
                  "case_id": s.get("case_id") or "", "rule_id": s.get("rule_id") or "",
                  "suggestions": list(s.get("suggestions") or [])}
                 for s in skipped[:20]
@@ -931,6 +1229,15 @@ class WebCaseLinkService:
                 "但 allow_upload_checks=false（默认）：这些断言被整条丢弃（也可能因此退化为零检查）。"
                 "如确需验证，请显式传 allow_upload_checks=true。"
             )
+        # rev134：悬空别名必须显式告警。旧实现里"别名配错"与"别名没配"在回执上完全一样
+        # （都是无定位器跳过），配置方会去改定位器，而真正要改的是别名目标键。
+        dangling_aliases = list(plan.get("field_alias_dangling") or [])
+        if dangling_aliases:
+            warnings.append(
+                "[field_alias_dangling] 别名目标不在定位器表里（配了也不会生效）："
+                + "、".join("%s→%s" % (d.get("from"), d.get("to"))
+                           for d in dangling_aliases[:6])
+            )
         return {
             "form_locator_source": locator_source,
             "executable": bool(checks) or bool(scenarios),
@@ -938,8 +1245,16 @@ class WebCaseLinkService:
             "negative_scenario_count": len(scenarios),
             "assertion_check_count": plan.get("assertion_check_count", 0),
             "skipped_assertion_count": len(skipped),
+            # rev134：别名真实命中（配了但没命中会在这里显示为空列表，便于当场发现拼错）
+            "field_alias_applied": list(plan.get("field_alias_applied") or []),
+            "field_alias_dangling": dangling_aliases,
+            # N3（2026-10-18）：跳过项按作用域分账。`list` 的修法是"补列表检查生成器"，
+            # `form` 的修法是"配 field_locators.fields"——合成一个数会让人按错方向修。
+            "skipped_by_scope": dict(plan.get("skipped_by_scope") or {}),
+            "list_columns_declared": int((plan.get("columns") or {}).get("column_count") or 0),
             "skipped_assertions": [
-                {"field": s.get("field"), "kind": s.get("kind") or "", "reason": s.get("reason")}
+                {"field": s.get("field"), "kind": s.get("kind") or "",
+                 "scope": s.get("scope") or "form", "reason": s.get("reason")}
                 for s in skipped[:20]
             ],
             "pending_locator_count": (manifest or {}).get("pending_locator_count", 0),
@@ -956,6 +1271,198 @@ class WebCaseLinkService:
             .order_by(WebTest.created_at.asc())
         )
         return result.scalars().first()
+
+    async def precheck_minimal_loop(
+        self,
+        project_identifier: str,
+        *,
+        module: str | None = None,
+        module_in: list[str] | None = None,
+        module_source: str | None = None,
+        original_module: str | None = None,
+        has_requirement_rule: bool | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        test_case_ids: list[UUID] | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """只读预检（dry-run）：cohort 筛选 + 唯一键判定，**零写入**。
+
+        阶段 1 第 2 步（2026-10-17 评审约定）：
+        - cohort 筛选只用**稳定字段**：``test_cases.module``（实列）、
+          ``custom_fields.module_source``、``custom_fields.original_module``、
+          ``custom_fields.requirement_rule_id``（有无）、``created_at`` 窗口；
+          不使用显示名/业务关键词，避免两套 module 标签家族因显示名混计；
+        - 唯一键判定与 ``_get_existing_web_test`` 同口径：仅 ``web_case_link_service``
+          族按 ``(test_case_id, sub_function_id)`` 语义取最早行（本方法按
+          created_at 取首行预演，不写库）；
+        - 全程只执行 SELECT，不 add / 不 flush / 不 commit；
+        - 顺带暴露 ``web_agent`` 族行数（探针资产堆积的只读观察口径），
+          供阶段 2 业务候选确认时参考。
+        """
+        project = await self._get_project(project_identifier)
+
+        # JSONB 表达式只构造一次并复用：asyncpg 下 WHERE / GROUP BY 若各自
+        # 构造同形表达式，会生成不同绑定名 → Postgres 报 GroupingError。
+        module_source_expr = TestCase.custom_fields["module_source"].astext
+        original_module_expr = TestCase.custom_fields["original_module"].astext
+        rule_len_expr = func.length(
+            func.coalesce(TestCase.custom_fields["requirement_rule_id"].astext, "")
+        )
+
+        conditions = [TestCase.project_id == project.id]
+        if test_case_ids:
+            conditions.append(TestCase.id.in_(test_case_ids))
+        if module:
+            conditions.append(TestCase.module == module)
+        if module_in:
+            conditions.append(TestCase.module.in_(module_in))
+        if module_source:
+            conditions.append(module_source_expr == module_source)
+        if original_module:
+            conditions.append(original_module_expr == original_module)
+        if has_requirement_rule is True:
+            conditions.append(rule_len_expr > 0)
+        elif has_requirement_rule is False:
+            conditions.append(rule_len_expr == 0)
+        if created_from:
+            conditions.append(TestCase.created_at >= created_from)
+        if created_to:
+            conditions.append(TestCase.created_at <= created_to)
+        where = *conditions,
+
+        # 1) cohort 总量（不受 limit 截断）
+        total_result = await self.session.execute(
+            select(func.count()).select_from(TestCase).where(*where)
+        )
+        cohort_total = int(total_result.scalar() or 0)
+
+        # 2) 标签家族分布：按 (module 实列, module_source) 分组，覆盖全部 cohort
+        family_result = await self.session.execute(
+            select(
+                TestCase.module,
+                module_source_expr,
+                func.count(),
+            )
+            .where(*where)
+            .group_by(
+                TestCase.module,
+                module_source_expr,
+            )
+            .order_by(func.count().desc())
+        )
+        label_families = [
+            {"module": row[0], "module_source": row[1], "case_count": int(row[2])}
+            for row in family_result.all()
+        ]
+
+        # 3) cohort 明细（受 limit 截断；created_at → identifier 确定性排序）
+        rows_result = await self.session.execute(
+            select(TestCase)
+            .where(*where)
+            .order_by(TestCase.created_at.asc(), TestCase.identifier.asc())
+            .limit(limit)
+        )
+        cases = list(rows_result.scalars().all())
+        case_ids = [case.id for case in cases]
+
+        # 4) 唯一键判定：service 族既有资产（与 _get_existing_web_test 同口径）
+        service_family: dict[UUID, WebTest] = {}
+        rows_by_agent: dict[UUID, dict[str, int]] = {}
+        if case_ids:
+            asset_result = await self.session.execute(
+                select(
+                    WebTest.test_case_id,
+                    WebTest.generated_by_agent,
+                    func.count(),
+                )
+                .where(WebTest.project_id == project.id)
+                .where(WebTest.test_case_id.in_(case_ids))
+                .group_by(WebTest.test_case_id, WebTest.generated_by_agent)
+            )
+            for row in asset_result.all():
+                rows_by_agent.setdefault(row[0], {})[str(row[1] or "")] = int(row[2])
+
+            svc_result = await self.session.execute(
+                select(WebTest)
+                .where(WebTest.project_id == project.id)
+                .where(WebTest.test_case_id.in_(case_ids))
+                .where(WebTest.generated_by_agent == "web_case_link_service")
+                .order_by(WebTest.created_at.asc())
+            )
+            for asset in svc_result.scalars().all():
+                service_family.setdefault(asset.test_case_id, asset)
+
+        case_items: list[dict[str, Any]] = []
+        reuse_count = 0
+        create_count = 0
+        for case in cases:
+            existing = service_family.get(case.id)
+            fields = case.custom_fields if isinstance(case.custom_fields, dict) else {}
+            action = "reuse" if existing is not None else "create"
+            if action == "reuse":
+                reuse_count += 1
+            else:
+                create_count += 1
+            existing_brief = None
+            if existing is not None:
+                existing_brief = {
+                    "identifier": existing.identifier,
+                    "name": existing.name,
+                    "sub_function_id": str(existing.sub_function_id) if existing.sub_function_id else None,
+                    "created_at": existing.created_at.isoformat() if existing.created_at else None,
+                }
+            case_items.append({
+                "id": str(case.id),
+                "identifier": case.identifier,
+                "name": case.name,
+                "module": case.module,
+                "module_source": fields.get("module_source"),
+                "original_module": fields.get("original_module"),
+                "requirement_rule_id": fields.get("requirement_rule_id"),
+                "created_at": case.created_at.isoformat() if case.created_at else None,
+                "predicted_action": action,
+                "existing_service_web_test": existing_brief,
+                "web_test_rows_by_agent": rows_by_agent.get(case.id, {}),
+            })
+
+        # 5) 资产族统计（cohort 内）：service 族行数守恒口径 + 其他族（探针）暴露
+        service_rows_total = sum(
+            (rows_by_agent.get(cid, {}).get("web_case_link_service", 0) for cid in case_ids),
+            start=0,
+        )
+        other_rows_total = sum(
+            (sum({k: v for k, v in rows_by_agent.get(cid, {}).items() if k != "web_case_link_service"}.values())
+             for cid in case_ids),
+            start=0,
+        )
+
+        return {
+            "read_only": True,
+            "project": {"id": str(project.id), "identifier": project.identifier},
+            "filters_applied": {
+                "module": module,
+                "module_in": module_in,
+                "module_source": module_source,
+                "original_module": original_module,
+                "has_requirement_rule": has_requirement_rule,
+                "created_from": created_from.isoformat() if created_from else None,
+                "created_to": created_to.isoformat() if created_to else None,
+                "test_case_ids_count": len(test_case_ids) if test_case_ids else 0,
+                "limit": limit,
+            },
+            "cohort_total": cohort_total,
+            "returned": len(case_items),
+            "label_families": label_families,
+            "summary": {
+                "predicted_reuse": reuse_count,
+                "predicted_create": create_count,
+                "service_family_rows_in_cohort": service_rows_total,
+                "other_agent_rows_in_cohort": other_rows_total,
+            },
+            "cases": case_items,
+        }
+
 
     async def _resolve_path_config(
         self,
@@ -1278,13 +1785,13 @@ class WebCaseLinkService:
             f"web-tests/{project_identifier}/minimal-loop/{test_case.id}/"
             f"{uuid4().hex}/test-script.spec.ts"
         )
-        script_content = self._generate_playwright_script(
+        script_content = self._stamp_compiler_rev(self._generate_playwright_script(
             test_case, base_url, navigation_path, manifest=manifest, form_plan=form_plan,
             upload_allow_hosts=upload_allow_hosts,
                 upload_allow_rules=upload_allow_rules,
             project_identifier=project_identifier,
             web_template_key=web_template_key,
-        )
+        ))
         storage_info = self._store_script(object_name, script_content)
 
         web_test = WebTest(
@@ -1329,12 +1836,22 @@ class WebCaseLinkService:
                 # 表单定位器来源审计（P1）：sub_function_override / template_default / none
                 "form_locator_source": path_config.get("form_locator_source"),
                 "web_template_key": web_template_key,
+                # rev130（F-1）：模板键**来源**审计——explicit:custom_config.template_key /
+                # sub_function.display_name / keyword。回答"为什么这条用例用了这个模板"，
+                # 也让"配了 template_key 却仍按关键词走"这类回归一眼可见。
+                "template_routing": path_config.get("template_routing"),
+                # P0-2：记录产出该脚本的编译器版本（与 spec 头部指纹同源），便于按版本筛旧产物
+                "compiler_rev": COMPILER_REV,
+                "compiler_digest": compiler_source_digest(),
                 "allow_upload_checks": bool(allow_upload_checks),
                 "compiled_cases": self._manifest_summary(manifest, form_plan),
             },
             total_pages=1,
             total_flows=1,
         )
+        # N7：把编译清单抽成可查询列（口径见 web_test_compile_manifest）。
+        # 必须在 flush 前赋值，让 INSERT 一次带全；事后再 UPDATE 会留一个"列全空"的中间态。
+        apply_compile_manifest(web_test)
         self.session.add(web_test)
         await self.session.flush()
 
@@ -1384,13 +1901,13 @@ class WebCaseLinkService:
                 f"web-tests/{project_identifier}/minimal-loop/{test_case.id}/"
                 f"{uuid4().hex}/test-script.spec.ts"
             )
-        script_content = self._generate_playwright_script(
+        script_content = self._stamp_compiler_rev(self._generate_playwright_script(
             test_case, base_url, navigation_path, manifest=manifest, form_plan=form_plan,
             upload_allow_hosts=upload_allow_hosts,
                 upload_allow_rules=upload_allow_rules,
             project_identifier=project_identifier,
             web_template_key=web_template_key,
-        )
+        ))
         storage_info = self._store_script(web_test.script_path, script_content)
         existing_config = web_test.test_config or {}
         web_test.base_url = base_url
@@ -1428,8 +1945,13 @@ class WebCaseLinkService:
             "case_selection": path_config.get("case_selection"),
             "form_locator_source": path_config.get("form_locator_source"),
             "web_template_key": web_template_key,
+            # P0-2：重新生成时刷新编译器版本（旧值不能保留，否则历史记录会一直显示旧 rev）
+            "compiler_rev": COMPILER_REV,
+            "compiler_digest": compiler_source_digest(),
             "compiled_cases": self._manifest_summary(manifest, form_plan),
         }
+        # N7：重编译会改写 compiled_cases，列必须同步刷新；否则列表页展示的是上一次编译的检查数
+        apply_compile_manifest(web_test, generation_params=web_test.generation_params)
         await self.session.flush()
         # rev62：脚本内容可能已变 → 必须同步更新登记哈希，否则授权以"hash 不符"拒绝
         await self._register_script_provenance(
@@ -1776,6 +2298,35 @@ class WebCaseLinkService:
             ],
         }
 
+    @staticmethod
+    def _stamp_compiler_rev(script_content: str) -> str:
+        """在 spec 头部写入编译器版本指纹（P0-2，2026-10-19）。
+
+        为什么必须在**文件里**留痕：``web_tests.generation_params`` 只说明「这条记录是哪版生成的」，
+        而执行器读的是磁盘/对象存储里的**脚本本体**——两者可能分叉（手工替换、历史产物回填、
+        重新生成失败但记录已更新）。以脚本本体为唯一事实来源，执行前才判得准。
+
+        幂等：已有指纹（含被手工复制粘贴的）不重复写。
+        """
+        head = script_content[:4096]
+        if "COMPILER_REV:" in head:
+            return script_content
+        rev_literal = json.dumps(COMPILER_REV, ensure_ascii=False)
+        digest = compiler_source_digest()
+        digest_literal = json.dumps(digest, ensure_ascii=False)
+        header = (
+            "// ===== 产物指纹（P0-2 / rev118）=====\n"
+            f"// COMPILER_REV: {COMPILER_REV}\n"
+            f"// COMPILER_DIGEST: {digest}\n"
+            "// 由平台编译器写入；执行前与当前编译器比对，不一致按「旧产物」处理。\n"
+            "// DIGEST 覆盖执行器模板与编译逻辑源码 —— 改了逻辑却忘记 bump rev 时，靠它兜底。\n"
+            f"const ARTIFACT_COMPILER_REV = {rev_literal};\n"
+            f"const ARTIFACT_COMPILER_DIGEST = {digest_literal};\n"
+            "console.log(`COMPILER_REV ${JSON.stringify({ rev: ARTIFACT_COMPILER_REV, digest: ARTIFACT_COMPILER_DIGEST })}`);\n"
+            "\n"
+        )
+        return header + script_content
+
     def _generate_playwright_script(
         self,
         test_case: TestCase,
@@ -1811,6 +2362,9 @@ class WebCaseLinkService:
             # （实测 CS email 弹窗：checks=0 + 1 场景，旧闸会产出无执行器的骨架）。
             if form_plan and (form_plan.get("checks") or form_plan.get("negative_scenarios")) else ""
         )
+        # 列头只读比对（N3 第 2 步）：列契约来自编译期 `parse_columns`，此处只序列化注入，
+        # **不**据此产生任何检查/断言（是否判失败由契约里的 assert_on_mismatch 决定，默认关）。
+        columns_json = json.dumps((form_plan or {}).get("columns"), ensure_ascii=False)
         # 模板必须与用例业务**正向匹配**：无匹配时 `_resolve_web_template_key` 抛
         # [unsupported_web_template]，绝不退回其它业务模板
         # （早期实现默认套「储值免单」，实测 PR-9 的 CS Module 批次因此产出内容错误的脚本）。
@@ -1824,6 +2378,7 @@ class WebCaseLinkService:
                 coverage_snippet=coverage_snippet,
                 project_identifier=project_identifier,
                 form_executor=form_executor,
+                columns_json=columns_json,
             )
         if template_key == "enterprise_storage_recharge":
             return self._generate_enterprise_storage_recharge_script(
@@ -1836,6 +2391,15 @@ class WebCaseLinkService:
             )
         if template_key == "purchase_limit":
             return self._generate_purchase_limit_script(
+                test_case,
+                base_url,
+                navigation_path,
+                manifest_block=manifest_block,
+                coverage_snippet=coverage_snippet,
+                form_executor=form_executor,
+            )
+        if template_key == "survey_operation":
+            return self._generate_survey_operation_script(
                 test_case,
                 base_url,
                 navigation_path,
@@ -1863,10 +2427,214 @@ class WebCaseLinkService:
                 manifest_block=manifest_block,
                 coverage_snippet=coverage_snippet,
                 form_executor=form_executor,
+                columns_json=columns_json,
             )
         raise ValueError(
             f"[unsupported_web_template] 未知的 Web 脚本模板键: {template_key}"
         )
+
+    def _generate_survey_operation_script(
+        self,
+        test_case: TestCase,
+        base_url: str,
+        navigation_path: list[str],
+        *,
+        manifest_block: str = "",
+        coverage_snippet: str = "",
+        form_executor: str = "",
+    ) -> str:
+        """Generate a test for 营销云-系统-调查问卷管理.
+
+        与 purchase_limit 模板同构，差异仅在：
+        - 门户卡片是「数盈·营销云」（点击后新开标签页，无 iframe，域名
+          imarketing-uat.xysjg.com）；
+        - 列表断言取问卷列表 8 个展示列 +「新建」入口（2026-10-20 探针实测表头）；
+        - 已知页面行为：左侧子菜单面板展开时会遮挡内容区（pointer-events 被
+          sider 拦截）⇒ 进入列表后先把鼠标移到内容区空白处等待菜单收起，
+          再执行任何按钮定位点击；
+        - 新建表单为整页路由（#/system/survey/surveyOperation/add），表单字段
+          检查/真实落库由 build_form_plan 编译清单 + negative_scenarios 驱动
+          （保存接口 POST /api/icdp/v1/evaluate，resultCode=0 = 受理）。
+        """
+        path_steps = json.dumps(navigation_path, ensure_ascii=False, indent=2)
+
+        def _normalize_nav_step(step: Any) -> str:
+            text = str(step).strip()
+            text = re.sub(r"^(点击|进入|打开|选择)\s*", "", text)
+            text = re.sub(r"(列表页|页面|菜单|按钮|入口)$", "", text).strip()
+            return text
+
+        nav_steps = [
+            _normalize_nav_step(step) for step in (navigation_path or [])
+            if not re.search(r"门户|工作台|登录|卡片|进入|交易云|营销云|微商城", str(step))
+        ]
+        nav_steps = [s for s in nav_steps if s]
+        nav_steps_js = json.dumps(nav_steps, ensure_ascii=False, indent=2)
+        click_by_text_js = render_click_by_text(
+            menu_selectors="el_menu", text_fallback="last", dom_click_fallback=True
+        )
+        required_click_js = render_required_click()
+        return f"""import {{ test, expect, type BrowserContext, type FrameLocator, type Page }} from '@playwright/test';
+
+const LOGIN_URL = process.env.WEB_TEST_BASE_URL || {json.dumps(base_url, ensure_ascii=False)};
+const USERNAME = process.env.WEB_TEST_USERNAME;
+const PASSWORD = process.env.WEB_TEST_PASSWORD;
+const WEB_VALIDATION_PATH = {path_steps};
+const NAV_STEPS = {nav_steps_js};
+{manifest_block}
+type ClickScope = Page | FrameLocator;
+
+{click_by_text_js}
+
+{required_click_js}
+
+async function waitForPortal(page: Page) {{
+  await page.waitForFunction(
+    () => /门户中心|数盈[·\\s]*营销云|Marketing cloud/.test(document.body.innerText),
+    null,
+    {{ timeout: 45000 }},
+  ).catch(() => undefined);
+}}
+
+//: 营销云：门户卡片 → 新开标签页（域名 imarketing-uat.xysjg.com，无 iframe）。
+async function openMarketingCloud(page: Page, context: BrowserContext) {{
+  const newPagePromise = context.waitForEvent('page', {{ timeout: 15000 }}).catch(() => null);
+  let clicked = false;
+  for (let attempt = 0; attempt < 3 && !clicked; attempt += 1) {{
+    clicked = await clickByText(page, ['数盈·营销云', '数盈营销云', '营销云', 'Marketing cloud']);
+    if (!clicked) {{
+      await page.waitForTimeout(2000);
+    }}
+  }}
+  expect(clicked, '未找到或无法点击：数盈营销云卡片（已重试 3 次）').toBeTruthy();
+  let appPage = await newPagePromise;
+  if (!appPage) {{
+    // 定位器点击未带出弹窗时：降级为真实鼠标坐标点击卡片中心（与人工操作一致）。
+    const box = await page.evaluate(() => {{
+      const cols = Array.from(document.querySelectorAll('.ant-col, [class*=flexCenter], .ant-card'));
+      const t = cols.find(e => /营销云/.test((e as HTMLElement).innerText || ''));
+      if (!t) return null;
+      const r = (t as HTMLElement).getBoundingClientRect();
+      return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
+    }});
+    if (box) {{
+      const pop2 = context.waitForEvent('page', {{ timeout: 12000 }}).catch(() => null);
+      await page.mouse.click(box.x, box.y);
+      appPage = (await pop2) || null;
+    }}
+  }}
+  appPage = appPage || page;
+  await appPage.waitForLoadState('domcontentloaded', {{ timeout: 30000 }}).catch(() => undefined);
+  await appPage.waitForTimeout(2500);
+  console.log('[nav] appPage.url =', appPage.url());
+  // 外壳判定（营销云首页：顶部菜单 用户/忠诚度/营销/活动/数据/系统）。
+  const shellReady = await appPage.waitForFunction(
+    () => /忠诚度|广告投放|装修管理|调查问卷/.test(document.body.innerText),
+    null,
+    {{ timeout: 30000 }},
+  ).then(() => true).catch(() => false);
+  console.log('[nav] shellReady =', shellReady);
+  expect(shellReady, '营销云应用外壳未渲染（卡片点击后未进入营销云，弹窗可能被拦截）').toBeTruthy();
+  return appPage;
+}}
+
+async function getAppScope(page: Page): Promise<ClickScope> {{
+  const iframe = page.locator('iframe#systemIframe').first();
+  if (await iframe.count()) {{
+    await iframe.waitFor({{ state: 'attached', timeout: 30000 }}).catch(() => undefined);
+    return page.frameLocator('#systemIframe').first();
+  }}
+  return page;
+}}
+
+async function loginToConsole(page: Page) {{
+  // 与限购/储值模板同一登录实现：显式判定登录完成 + 有界重试。
+  for (let attempt = 0; attempt < 3; attempt += 1) {{
+    const user = page.locator('input[placeholder*="用户名"], input#login_username').first();
+    const pass = page.locator('input[type="password"], input#login_password').first();
+    await user.waitFor({{ state: 'visible', timeout: 20000 }});
+    await user.fill(USERNAME);
+    await pass.fill(PASSWORD);
+    if ((await pass.inputValue()) !== PASSWORD) {{
+      await page.waitForTimeout(500);
+      continue;
+    }}
+    await page.locator('button:has-text("登 录"), button[type="submit"]').first().click();
+    try {{
+      await page.waitForFunction(
+        () => !document.querySelector('input[type="password"], input#login_password'),
+        null,
+        {{ timeout: 20000 }},
+      );
+      return true;
+    }} catch {{
+      await page.waitForTimeout(1000);
+    }}
+  }}
+  return false;
+}}
+
+//: 进入「调查问卷管理」列表页并返回应用作用域。
+async function enterSurveyList(pg: Page, ctx: BrowserContext) {{
+  const loginResponse = await pg.goto(LOGIN_URL, {{ waitUntil: 'domcontentloaded', timeout: 60000 }});
+  const loginStatus = loginResponse ? loginResponse.status() : 0;
+  if (loginStatus === 403 || loginStatus === 503 || loginStatus >= 500) {{
+    throw new Error(
+      `ENVIRONMENT_BLOCKED ${{JSON.stringify({{ reason: 'login_http_status', status: loginStatus }})}} `
+      + `登录页返回 HTTP ${{loginStatus}}（疑似 WAF/网关拦截，非产品缺陷）`,
+    );
+  }}
+  expect(await loginToConsole(pg), '登录未完成（3 次尝试后仍停留在登录页：账号密码未通过或被页面清空）').toBeTruthy();
+  await waitForPortal(pg);
+  const appPage = await openMarketingCloud(pg, ctx);
+  const scope = await getAppScope(appPage);
+  // 菜单导航完全由路径模板驱动（如：系统 → 调查问卷管理）。
+  await appPage.waitForTimeout(2000);
+  for (const step of NAV_STEPS) {{
+    try {{
+      await requiredClick(scope, step, [step], 45000);
+    }} catch (e) {{
+      const dbg = await appPage.evaluate(() => {{
+        const iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src || 'about:blank');
+        return {{
+          body: document.body.innerText.slice(0, 300),
+          iframes: iframes.slice(0, 5),
+          readyState: document.readyState,
+        }};
+      }}).catch((err) => String(err));
+      console.log('[nav] FAILED step=' + step + ' appPage.url=' + appPage.url() + ' dbg=' + JSON.stringify(dbg));
+      throw e;
+    }}
+    await appPage.waitForTimeout(1500);
+  }}
+  // 已知页面行为：左侧子菜单面板展开时会遮挡内容区（实测「新建」按钮的
+  // pointer-events 被 aside 拦截）。把鼠标移到内容区空白处等菜单收起。
+  await appPage.mouse.move(900, 500);
+  await appPage.waitForTimeout(800);
+  return scope;
+}}
+
+test('调查问卷管理入口与列表冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
+  test.setTimeout(Math.min(240000, Number(process.env.WEB_TEST_BUDGET_MS || 0) || 240000));
+  console.log(`TEST_BUDGET ${{JSON.stringify({{ ms: Math.min(240000, Number(process.env.WEB_TEST_BUDGET_MS || 0) || 240000), injected: !!process.env.WEB_TEST_BUDGET_MS, cap: 240000 }})}}`);
+  test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 B端 Web 冒烟执行');
+
+  const appScope = await enterSurveyList(page, context);
+
+  // 问卷列表 8 个展示列 + 新建入口（2026-10-20 探针实测表头）
+  await expect(appScope.getByText('问卷编码', {{ exact: true }}).first()).toBeVisible({{ timeout: 15000 }});
+  await expect(appScope.getByText('问卷标题', {{ exact: true }}).first()).toBeVisible({{ timeout: 15000 }});
+  await expect(appScope.getByText('业务类型', {{ exact: true }}).first()).toBeVisible({{ timeout: 15000 }});
+  await expect(appScope.getByText('适用门店', {{ exact: true }}).first()).toBeVisible({{ timeout: 15000 }});
+  await expect(appScope.getByText('适用商品', {{ exact: true }}).first()).toBeVisible({{ timeout: 15000 }});
+  await expect(appScope.getByText('优先级', {{ exact: true }}).first()).toBeVisible({{ timeout: 15000 }});
+  await expect(appScope.getByText('状态', {{ exact: true }}).first()).toBeVisible({{ timeout: 15000 }});
+  await expect(appScope.getByText('参与次数', {{ exact: true }}).first()).toBeVisible({{ timeout: 15000 }});
+  await expect(appScope.getByRole('button', {{ name: /新\\s*建/ }}).first()).toBeVisible({{ timeout: 15000 }});
+
+  console.log('WEB_VALIDATION_PATH =', JSON.stringify(WEB_VALIDATION_PATH));
+{form_executor}{coverage_snippet}}});
+"""
 
     def _generate_storage_writeoff_script(
         self,
@@ -2031,7 +2799,10 @@ async function loginToConsole(page: Page) {{
 test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
   // 必须放在最前面：默认 30s 的用例预算会在登录/跳转阶段就把测试掐断
   // （实测 page.goto 报 "Test timeout of 30000ms exceeded"）。
-  test.setTimeout(240000);
+  // rev116：不得超执行器下发的进程预算（未注入时用本模板原定的 4 分钟），
+  // 否则进程先被杀、Playwright 来不及产出报告。
+  test.setTimeout(Math.min(240000, Number(process.env.WEB_TEST_BUDGET_MS || 0) || 240000));
+  console.log(`TEST_BUDGET ${{JSON.stringify({{ ms: Math.min(240000, Number(process.env.WEB_TEST_BUDGET_MS || 0) || 240000), injected: !!process.env.WEB_TEST_BUDGET_MS, cap: 240000 }})}}`);
   test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 B端 Web 冒烟执行');
 
   expect(await loginToConsole(page), '登录未完成（3 次尝试后仍停留在登录页：账号密码未通过或被页面清空）').toBeTruthy();
@@ -2067,8 +2838,13 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
 
     @staticmethod
     def _route_keyword_hit(text: str, keywords) -> bool:
-        """关键词命中判定：**两侧都归一化**后做包含匹配。"""
-        return any(normalize_route_text(k) in text for k in keywords)
+        """关键词命中判定：**两侧都归一化 + 折叠大小写**后做包含匹配。
+
+        折叠大小写是为了让英文菜单名关键词（Item Manage / Payment Method /
+        Shop Management 等）不受用例与菜单的大小写差异影响；中文无大小写，
+        该变换对其完全无影响。
+        """
+        return any(normalize_route_text(k).lower() in text.lower() for k in keywords)
 
     def _is_cs_module_case(self, test_case: TestCase) -> bool:
         """CS Module（客户服务管理系统，eatizen CRM Console）用例判定。
@@ -2098,15 +2874,30 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
     def _yl_masterdata_child_menu(self, test_case: TestCase) -> tuple[str, list[str]]:
         """按用例文本推断 YL 主数据的**子菜单**（店鋪/商品/支付方式）。
 
-        返回 ``(业务标签, 子菜单候选集)``。UAT 实测（2026-10-15 探针）菜单为
-        **英文**：Master Data Management → Shop Management；中文候选仅作
-        兼容（UAT 语言切换或后续版本改回中文时不至于整批断链）。
+        返回 ``(业务标签, 子菜单候选集)``。菜单为**英文**，2026-10-15 用户口径确认：
+        - 店鋪 = ``Shop Management``（UAT 探针实测）
+        - 商品 = ``Item Manage``（用户确认；``Item Management`` 为 i18n 语言包旧译名）
+        - 支付 = ``Payment Method``（用户确认；``Payment Methods`` 为 i18n 旧译名）
+
+        候选集**首项为首选**，其后依次是英文旧译名与中文名——点击走 clickByText
+        逐候选兜底，UAT 语言切换或版本改名时不至于整批断链。
         """
         text = self._case_route_text(test_case)
-        if self._route_keyword_hit(text, ["商品主數據", "商品主数据", "Goods Management"]):
-            return "商品主數據", ["Goods Management", "商品主數據", "商品管理", "Goods"]
-        if self._route_keyword_hit(text, ["支付方式主數據", "支付方式主数据", "Payment"]):
-            return "支付方式主數據", ["Payment Method", "支付方式主數據", "支付方式管理", "Payment"]
+        if self._route_keyword_hit(
+            text,
+            ["商品主數據", "商品主数据", "Item Manage", "Item Management", "Goods Management"],
+        ):
+            return "商品主數據", [
+                "Item Manage", "Item Management", "Goods Management",
+                "商品主數據", "商品管理", "Goods",
+            ]
+        if self._route_keyword_hit(
+            text,
+            ["支付方式主數據", "支付方式主数据", "Payment Method", "Payment Methods", "Payment"],
+        ):
+            return "支付方式主數據", [
+                "Payment Method", "Payment Methods", "支付方式主數據", "支付方式管理", "Payment",
+            ]
         return "店鋪主數據", ["Shop Management", "店鋪主數據", "店鋪管理", "Shop"]
 
     def _generate_yl_masterdata_script(
@@ -2118,6 +2909,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         manifest_block: str = "",
         coverage_snippet: str = "",
         form_executor: str = "",
+        columns_json: str = "null",
     ) -> str:
         """YL 主數據管理（店鋪/商品/支付方式主數據）业务模板。
 
@@ -2143,6 +2935,8 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
             menu_selectors="generic", text_fallback="first", dom_click_fallback=True
         )
         required_click_js = render_required_click()
+        frame_diag_js = render_frame_diag()
+        column_diag_js = render_column_diag(columns_json)
         return f"""import {{ test, expect, type BrowserContext, type FrameLocator, type Locator, type Page }} from '@playwright/test';
 
 const LOGIN_URL = process.env.WEB_TEST_BASE_URL || {json.dumps(base_url, ensure_ascii=False)};
@@ -2157,6 +2951,10 @@ type ClickScope = Page | FrameLocator;
 {click_by_text_js}
 
 {required_click_js}
+
+{frame_diag_js}
+
+{column_diag_js}
 
 // ---- 菜单定位（与 cs_module 模板同一套，rev64 语义）------------------------
 // antd SubMenu 是开关语义：先读 aria-expanded，已展开绝不重复点击。
@@ -2283,7 +3081,12 @@ async function ocrCaptcha(page: Page): Promise<string | null> {{
     if (!resp.ok()) return null;
     const body = await resp.json();
     const text = ((body && body.data && body.data.text) || '').trim();
-    return text.length >= 4 ? text : null;
+    // 2026-10-16 实测（UAT eatizen 控制台）：图形验证码长度在 2~4 之间浮动
+    // （"WX"=2 / "YBI"=3 / "LWTE"=4）。原 `>= 4` 门槛会让 2~3 字符码被**永久拒绝**：
+    // 10 轮重试全部在 `if (!code) continue` 退出（3 秒内跑完），最终报"验证码 OCR 重试 10 次
+    // 后仍未离开登录页"，而真实原因与文案不符。放宽到 >= 2 —— OCR 误读的代价只是失败后
+    // 重试一轮（配合 loginToConsole 的整页 reload 换新图，不会退化成同图重复提交）。
+    return text.length >= 2 ? text : null;
   }} catch {{
     return null;
   }}
@@ -2301,6 +3104,14 @@ async function loginToConsole(page: Page) {{
         `ENVIRONMENT_BLOCKED ${{JSON.stringify({{ reason: 'login_http_status', status: loginStatus }})}} `
         + `登录页返回 HTTP ${{loginStatus}}（疑似 WAF/网关拦截，非产品缺陷）`,
       );
+    }}
+    if (attempt > 0) {{
+      // 2026-10-16 实测教训（TR-378 实锤）：`page.goto` 到同 hash 路由（…/#/login）是
+      // **同文档导航**、不触发整页重载；而失败提交后 SPA 也不刷新验证码
+      // ⇒ 不强制 reload 就会 10 轮都对着**同一张缓存图**重复同一个 OCR 误读，
+      // 死循环到底（表现为"重试 10 次仍未离开登录页"）。
+      await page.reload({{ waitUntil: 'domcontentloaded', timeout: 60000 }}).catch(() => undefined);
+      await page.waitForTimeout(800);
     }}
     const user = page.locator('#login_username');
     const pass = page.locator('#login_password');
@@ -2341,17 +3152,29 @@ async function openCrm(page: Page, context: BrowserContext) {{
 }}
 
 async function getCrmScope(appPage: Page): Promise<ClickScope> {{
-  const iframe = appPage.locator('iframe').first();
-  if (await iframe.count()) {{
-    await iframe.waitFor({{ state: 'attached', timeout: 30000 }}).catch(() => undefined);
+  // N5（2026-10-18）：取帧**决策必须留痕**。历史实现只取第一个 iframe，
+  // 失败时日志里连"取了哪个 frame、页面上有几个 iframe"都没有，无法判断是取错帧。
+  // 这里只加诊断，**不改变选择逻辑**（是否改成多帧遍历，等诊断数据出来再定）。
+  const iframes = appPage.locator('iframe');
+  const total = await iframes.count().catch(() => 0);
+  if (total > 0) {{
+    await iframes.first().waitFor({{ state: 'attached', timeout: 30000 }}).catch(() => undefined);
+    const src = String((await iframes.first().getAttribute('src').catch(() => '')) || '');
+    console.log(`SCOPE_PICK ${{JSON.stringify({{ chosen: 'iframe#0', iframes: total, src: src.slice(0, 120), pageUrl: String(appPage.url()).slice(0, 120) }})}}`);
     return appPage.frameLocator('iframe').first();
   }}
+  console.log(`SCOPE_PICK ${{JSON.stringify({{ chosen: 'page', iframes: 0, pageUrl: String(appPage.url()).slice(0, 120) }})}}`);
   return appPage;
 }}
 
 test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
   // 默认 30s 用例预算会在登录/跳转阶段被掐断，显式放宽（同 cs_module 口径）。
-  test.setTimeout(1800000);
+  // rev116：预算改由执行器下发（WEB_TEST_BUDGET_MS = runner 进程超时 - 30s），
+  // 保证「Playwright 自己先超时、能产出报告」，而不是被执行器先杀进程。
+  // 未注入时回退 30 分钟（本地直跑脚本的场景）。
+  test.setTimeout(Number(process.env.WEB_TEST_BUDGET_MS || 0) || 1800000);
+  // 运行期自证：本次预算到底是多少、是执行器下发的还是回退默认值。
+  console.log(`TEST_BUDGET ${{JSON.stringify({{ ms: Number(process.env.WEB_TEST_BUDGET_MS || 0) || 1800000, injected: !!process.env.WEB_TEST_BUDGET_MS }})}}`);
   test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 Web 冒烟执行');
 
   expect(await loginToConsole(page), '企业控制台登录失败（验证码 OCR 重试 10 次后仍未离开登录页）').toBeTruthy();
@@ -2363,12 +3186,24 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
   const childLabels = {child_labels_json};
   let expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
   if (!expanded) {{
+    // rev116：入口取帧时 iframe 可能尚未插入（iframes=0 → 选了 page），失败后重取一次。
+    // rev116-fix：**不要把帧数另读一遍再传进来** —— 两次读 DOM 之间的竞态会让
+    // 「scope=page 但帧数=1」，重取就被判成"没变化"而直接放弃（实测失效）。
+    // 传 scope 本身，由 helper 反推是否该等、是否该换。
+    const refreshed = await refreshCrmScope(appPage, scope, 'yl-menu-expand');
+    if (refreshed.stale) {{
+      scope = refreshed.scope;
+      expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
+    }}
+  }}
+  if (!expanded) {{
     scope = appPage;
     expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
   }}
   if (!expanded) {{
     const dump = JSON.stringify(await visibleMenuTexts(scope));
     console.log(`YL_MENU_DUMP ${{dump}}`);
+    console.log(`FRAME_DIAG ${{await frameDiag(appPage, 'yl-menu-expand')}}`);
     expect(expanded, `未找到或未能展开 Master Data Management 菜单；当前可见菜单=${{dump}}`).toBeTruthy();
   }}
   await appPage.waitForTimeout(1500);
@@ -2377,6 +3212,7 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
   if (!childClicked) {{
     const dump = JSON.stringify(await visibleMenuTexts(scope));
     console.log(`YL_SUBMENU_DUMP ${{dump}}`);
+    console.log(`FRAME_DIAG ${{await frameDiag(appPage, 'yl-submenu-click')}}`);
     expect(childClicked, `未找到 {biz_label} 子菜单（候选=${{childLabels.join('/')}}）；当前可见菜单=${{dump}}`).toBeTruthy();
   }}
   // 断言：列表已渲染（antd 表格或 Total 分页信息）——15s 轮询（口径同 CS rev2026-10-10）
@@ -2396,9 +3232,14 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
   if (!listRendered) {{
     const bodyText = (await scope.locator('body').innerText().catch(() => '')).replace(/\\s+/g, ' ').slice(0, 400);
     console.log(`YL_LIST_DUMP ${{JSON.stringify({{ url: appPage.url(), bodyLen: bodyText.length, body: bodyText }})}}`);
+    console.log(`FRAME_DIAG ${{await frameDiag(appPage, 'yl-list-not-rendered')}}`);
     await appPage.screenshot({{ path: `yl-list-not-rendered-${{Date.now()}}.png`, fullPage: true }}).catch(() => {{}});
   }}
   expect(listRendered, 'YL 主数据列表未渲染（15s 轮询后仍未检测到表格或 Total 分页）').toBeTruthy();
+
+  // 列头只读比对（N3 第 2 步）：渲染成功后**只读**一次表头，不点击、不提交、不造数据。
+  // 未配列时也会输出 COLUMN_HEADERS —— 这是采集真实列头、反补配置的入口。
+  await columnDiag(scope, 'yl-list');
 
   // rev71：注入的 form_executor / coverage_snippet 引用变量名统一为 appScope
   const appScope = scope as any;
@@ -2424,23 +3265,100 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
             self._case_route_text(test_case), _STORAGE_WRITEOFF_KEYWORDS
         )
 
-    def _resolve_web_template_key(self, test_case: TestCase) -> str:
+    def _is_survey_operation_case(self, test_case: TestCase) -> bool:
+        """「调查问卷管理」（营销云-系统）业务判定（正向识别）。"""
+        return self._route_keyword_hit(
+            self._case_route_text(test_case), _SURVEY_KEYWORDS
+        )
+
+    def _explicit_template_key(self, sub_function: Any | None) -> tuple[str | None, str]:
+        """从**子功能**解析显式模板键（2026-10-20 F-1）。
+
+        三档，越靠前越"显式"：
+        1. `custom_config.template_key`
+        2. `custom_config.field_locators.template_key`
+        3. 子功能 `display_name` / `name` 与模板标签**归一化后完全相等**
+
+        返回 `(key, source)`；解析不到返回 `(None, "")`，由调用方回退关键词匹配。
+        值不在 `_WEB_TEMPLATE_LABELS` 内时**告警并忽略**（不静默改成别的模板：
+        拼错的 key 若被当作"没配"，会退回关键词；若被当作"配了"，会跑错流程）。
+        """
+        if sub_function is None:
+            return None, ""
+        custom = getattr(sub_function, "custom_config", None) or {}
+        if isinstance(custom, dict):
+            locators = custom.get("field_locators")
+            candidates = [
+                ("custom_config.template_key", custom.get("template_key")),
+                (
+                    "custom_config.field_locators.template_key",
+                    locators.get("template_key") if isinstance(locators, dict) else None,
+                ),
+            ]
+            for source, raw in candidates:
+                if not isinstance(raw, str) or not raw.strip():
+                    continue
+                key = raw.strip()
+                if key in _WEB_TEMPLATE_LABELS:
+                    return key, source
+                logger.warning(
+                    "[web_case_link] 子功能 %s 的 %s=%r 不是已知模板键（可选：%s），已忽略",
+                    getattr(sub_function, "identifier", None),
+                    source,
+                    key,
+                    "/".join(sorted(_WEB_TEMPLATE_LABELS)),
+                )
+        for attr in ("display_name", "name"):
+            text = normalize_route_text(str(getattr(sub_function, attr, "") or "")).lower()
+            if not text:
+                continue
+            for label, key in _TEMPLATE_LABEL_TO_KEY.items():
+                if normalize_route_text(label).lower() == text:
+                    return key, f"sub_function.{attr}"
+        return None, ""
+
+    def _resolve_web_template_key(
+        self, test_case: TestCase, sub_function: Any | None = None
+    ) -> str:
         """解析该用例应使用的**业务脚本模板**键。
 
-        现有模板都是按具体业务流编写的，因此必须**正向匹配**；匹配不到就报错，
-        不得退回任何一个业务模板（历史实现默认返回「储值免单」标签 + 免单脚本，
-        实测把 PR-9 的 CS Module 批次做成了小杨生煎储值免单流程）。
+        rev130（2026-10-20 F-1）：**显式绑定优先**。此前无条件走关键词匹配，实测
+        236 条问卷用例里 61 条已绑子功能、内容完全可自动化，却因用例名为通用文案
+        （「新建頁-保存按鈕-所有必填項填寫正確」）被判 `[unsupported_web_template]`——
+        "配了却不生效"比"没配"更难排查。现在的顺序：
+
+        1. 子功能显式模板键（`_explicit_template_key`）
+        2. 用例文本关键词正向匹配
+        3. 都不中 → 报错（仍**不兜底**：历史默认套「储值免单」模板，把 PR-9 的
+           CS 用例跑成了小杨生煎储值免单流程）
         """
+        self._last_template_key_audit = {}
+        explicit_key, source = self._explicit_template_key(sub_function)
+        if explicit_key:
+            self._last_template_key_audit = {
+                "key": explicit_key,
+                "source": source,
+                "sub_function": getattr(sub_function, "identifier", None),
+            }
+            logger.info(
+                "[web_case_link] 模板键按显式绑定解析：%s ← %s（子功能 %s）",
+                explicit_key,
+                source,
+                getattr(sub_function, "identifier", None),
+            )
+            return explicit_key
         if self._is_cs_module_case(test_case):
-            return "cs_module"
+            return self._remember_template_key("cs_module", "keyword")
         if self._is_yl_masterdata_case(test_case):
-            return "yl_masterdata"
+            return self._remember_template_key("yl_masterdata", "keyword")
         if self._is_enterprise_storage_recharge_case(test_case):
-            return "enterprise_storage_recharge"
+            return self._remember_template_key("enterprise_storage_recharge", "keyword")
         if self._is_purchase_limit_case(test_case):
-            return "purchase_limit"
+            return self._remember_template_key("purchase_limit", "keyword")
+        if self._is_survey_operation_case(test_case):
+            return self._remember_template_key("survey_operation", "keyword")
         if self._is_storage_writeoff_case(test_case):
-            return "storage_writeoff"
+            return self._remember_template_key("storage_writeoff", "keyword")
         raise ValueError(
             "[unsupported_web_template] 未找到与该用例业务匹配的 Web 脚本模板，已拒绝生成"
             "（现有模板均按具体业务流编写，套用会产生内容错误的脚本）："
@@ -2448,14 +3366,19 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
             f"名称={getattr(test_case, 'name', None)!r} "
             f"模块={getattr(test_case, 'module', None)!r} "
             f"归一化识别文本={self._case_route_text(test_case)!r}。"
-            "请为该业务补充脚本模板（cs_module / enterprise_storage_recharge / "
-            "storage_writeoff / purchase_limit / yl_masterdata）"
-            "并让用例名称/模块可被正向识别后重试。"
+            "两条修法任选：① 给子功能的 custom_config 配 `template_key`"
+            "（cs_module / enterprise_storage_recharge / storage_writeoff / "
+            "purchase_limit / yl_masterdata / survey_operation），显式绑定优先于关键词；"
+            "② 让用例名称/模块可被正向识别。"
             "⚠️ `module` 由**上传需求文档的文件名 stem** 派生"
             "（api/v2/ai.py:_derive_requirement_module）；"
-            "虽然匹配前已做分隔符归一化，但若文件名与业务关键词完全对不上，"
-            "请改名重传而不是改这里的关键词表。"
+            "若文件名与业务关键词完全对不上，请改名重传而不是改关键词表。"
         )
+
+    def _remember_template_key(self, key: str, source: str) -> str:
+        """记录模板键来源后返回（供 `generation_params.template_routing` 审计）。"""
+        self._last_template_key_audit = {"key": key, "source": source}
+        return key
 
     def _web_test_label(self, test_case: TestCase, web_template_key: str | None = None) -> str:
         """资产命名标签。无模板键时按用例业务解析；解析不到即报错（不再静默兜底）。"""
@@ -2477,6 +3400,7 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
         coverage_snippet: str = "",
         project_identifier: str | None = None,
         form_executor: str = "",
+        columns_json: str = "null",
     ) -> str:
         """Generate an entry smoke test for CS Module (eatizen CRM Console).
 
@@ -2495,6 +3419,8 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
             menu_selectors="generic", text_fallback="first", dom_click_fallback=True
         )
         required_click_js = render_required_click()
+        frame_diag_js = render_frame_diag()
+        column_diag_js = render_column_diag(columns_json)
         return f"""import {{ test, expect, type BrowserContext, type FrameLocator, type Locator, type Page }} from '@playwright/test';
 
 const LOGIN_URL = process.env.WEB_TEST_BASE_URL || {json.dumps(base_url, ensure_ascii=False)};
@@ -2509,6 +3435,10 @@ type ClickScope = Page | FrameLocator;
 {click_by_text_js}
 
 {required_click_js}
+
+{frame_diag_js}
+
+{column_diag_js}
 
 // ---- 菜单定位（rev64）------------------------------------------------------
 // 旧实现用"再点一次父菜单"来重试子菜单，而 antd 的 SubMenu 是**开关语义**：
@@ -2643,7 +3573,12 @@ async function ocrCaptcha(page: Page): Promise<string | null> {{
     if (!resp.ok()) return null;
     const body = await resp.json();
     const text = ((body && body.data && body.data.text) || '').trim();
-    return text.length >= 4 ? text : null;
+    // 2026-10-16 实测（UAT eatizen 控制台）：图形验证码长度在 2~4 之间浮动
+    // （"WX"=2 / "YBI"=3 / "LWTE"=4）。原 `>= 4` 门槛会让 2~3 字符码被**永久拒绝**：
+    // 10 轮重试全部在 `if (!code) continue` 退出（3 秒内跑完），最终报"验证码 OCR 重试 10 次
+    // 后仍未离开登录页"，而真实原因与文案不符。放宽到 >= 2 —— OCR 误读的代价只是失败后
+    // 重试一轮（配合 loginToConsole 的整页 reload 换新图，不会退化成同图重复提交）。
+    return text.length >= 2 ? text : null;
   }} catch {{
     return null;
   }}
@@ -2663,6 +3598,14 @@ async function loginToConsole(page: Page) {{
         `ENVIRONMENT_BLOCKED ${{JSON.stringify({{ reason: 'login_http_status', status: loginStatus }})}} `
         + `登录页返回 HTTP ${{loginStatus}}（疑似 WAF/网关拦截，非产品缺陷）`,
       );
+    }}
+    if (attempt > 0) {{
+      // 2026-10-16 实测教训（TR-378 实锤）：`page.goto` 到同 hash 路由（…/#/login）是
+      // **同文档导航**、不触发整页重载；而失败提交后 SPA 也不刷新验证码
+      // ⇒ 不强制 reload 就会 10 轮都对着**同一张缓存图**重复同一个 OCR 误读，
+      // 死循环到底（表现为"重试 10 次仍未离开登录页"）。
+      await page.reload({{ waitUntil: 'domcontentloaded', timeout: 60000 }}).catch(() => undefined);
+      await page.waitForTimeout(800);
     }}
     const user = page.locator('#login_username');
     const pass = page.locator('#login_password');
@@ -2703,24 +3646,36 @@ async function openCrm(page: Page, context: BrowserContext) {{
 }}
 
 async function getCrmScope(appPage: Page): Promise<ClickScope> {{
-  const iframe = appPage.locator('iframe').first();
-  if (await iframe.count()) {{
-    await iframe.waitFor({{ state: 'attached', timeout: 30000 }}).catch(() => undefined);
+  // N5（2026-10-18）：取帧**决策必须留痕**。历史实现只取第一个 iframe，
+  // 失败时日志里连"取了哪个 frame、页面上有几个 iframe"都没有，无法判断是取错帧。
+  // 这里只加诊断，**不改变选择逻辑**（是否改成多帧遍历，等诊断数据出来再定）。
+  const iframes = appPage.locator('iframe');
+  const total = await iframes.count().catch(() => 0);
+  if (total > 0) {{
+    await iframes.first().waitFor({{ state: 'attached', timeout: 30000 }}).catch(() => undefined);
+    const src = String((await iframes.first().getAttribute('src').catch(() => '')) || '');
+    console.log(`SCOPE_PICK ${{JSON.stringify({{ chosen: 'iframe#0', iframes: total, src: src.slice(0, 120), pageUrl: String(appPage.url()).slice(0, 120) }})}}`);
     return appPage.frameLocator('iframe').first();
   }}
+  console.log(`SCOPE_PICK ${{JSON.stringify({{ chosen: 'page', iframes: 0, pageUrl: String(appPage.url()).slice(0, 120) }})}}`);
   return appPage;
 }}
 
-test('CS工单管理入口冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
-  // 默认 30s 用例预算会在登录/跳转阶段被掐断，显式放宽；
-  // rev71：全量批次（96 条）的编译断言全部落在这一个 test 里，300s 远不够
-  //（实测 TR-104 跑满 600s 仍被 runner 掐死），按批次规模放宽到 20 分钟。
-  test.setTimeout(1800000);
-  test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 B端 Web 冒烟执行');
-
-  expect(await loginToConsole(page), '企业控制台登录失败（验证码 OCR 重试 10 次后仍未离开登录页）').toBeTruthy();
-
-  const appPage = await openCrm(page, context);
+async function enterStorageAccountList(pg: Page, ctx: BrowserContext): Promise<ClickScope> {{
+  // 从已登录页进入 CS 工单列表，返回可点击的作用域（iframe 或 page）。
+  // rev120：原先这段逻辑内联在 test() 里，导致 form_executor 的上传隔离分支
+  // 调用了一个不存在的函数（ReferenceError → 永远 main_fallback）。
+  // 现在只保留这一份：主流程与隔离上下文都走它。
+  // rev123：隔离上下文是**新开的 page**（about:blank）。`context.storageState()` 只带
+  // cookie 与 localStorage，**不带 sessionStorage**，而本 SUT 的会话态落在 sessionStorage ——
+  // 实测（TR-731）goto 登录页后仍停在登录页，点不到顶栏 CRM 入口。
+  // 因此这里直接重放登录（与储值模板的 enterStorageAccountList 完全同语义）。
+  // 主流程传进来的 page 已在控制台，不触发该分支，行为不变。
+  if (!/^https?:/i.test(String(pg.url() || ''))) {{
+    expect(await loginToConsole(pg), '隔离上下文登录未完成（3 次尝试后仍停留在登录页）').toBeTruthy();
+    await pg.waitForLoadState('networkidle', {{ timeout: 30000 }}).catch(() => undefined);
+  }}
+  const appPage = await openCrm(pg, ctx);
   let scope = await getCrmScope(appPage);
   // 父菜单与子菜单都按候选集匹配；子菜单标签随 UAT 版本可能变化（Cases / Case List…）
   const parentLabels = ['Customer Service'];
@@ -2728,12 +3683,22 @@ test('CS工单管理入口冒烟 - {test_case.identifier}', async ({{ page, cont
   // 展开 Customer Service（幂等：已展开则不再点击，避免把菜单点回去）；iframe 作用域失败时退回主页面
   let expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
   if (!expanded) {{
+    // rev116：入口取帧时 iframe 可能尚未插入（iframes=0 → 选了 page），失败后重取一次。
+    // rev116-fix：传 scope 而不是二次读到的帧数（竞态下"page + 帧数 1"会让重取被误判成没变化）。
+    const refreshed = await refreshCrmScope(appPage, scope, 'cs-menu-expand');
+    if (refreshed.stale) {{
+      scope = refreshed.scope;
+      expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
+    }}
+  }}
+  if (!expanded) {{
     scope = appPage;
     expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
   }}
   if (!expanded) {{
     const dump = JSON.stringify(await visibleMenuTexts(scope));
     console.log(`CS_MENU_DUMP ${{dump}}`);
+    console.log(`FRAME_DIAG ${{await frameDiag(appPage, 'cs-menu-expand')}}`);
     expect(expanded, `未找到或未能展开 Customer Service 菜单；当前可见菜单=${{dump}}`).toBeTruthy();
   }}
   await appPage.waitForTimeout(1500);
@@ -2743,6 +3708,7 @@ test('CS工单管理入口冒烟 - {test_case.identifier}', async ({{ page, cont
   if (!casesClicked) {{
     const dump = JSON.stringify(await visibleMenuTexts(scope));
     console.log(`CS_SUBMENU_DUMP ${{dump}}`);
+    console.log(`FRAME_DIAG ${{await frameDiag(appPage, 'cs-submenu-click')}}`);
     expect(casesClicked, `未找到工单列表子菜单（候选=${{childLabels.join('/')}}）；当前可见菜单=${{dump}}`).toBeTruthy();
   }}
   // 断言：工单列表已渲染（antd 表格或 Total 分页信息）
@@ -2768,9 +3734,32 @@ test('CS工单管理入口冒烟 - {test_case.identifier}', async ({{ page, cont
   if (!listRendered) {{
     const bodyText = (await scope.locator('body').innerText().catch(() => '')).replace(/\\s+/g, ' ').slice(0, 400);
     console.log(`CS_LIST_DUMP ${{JSON.stringify({{ url: appPage.url(), bodyLen: bodyText.length, body: bodyText }})}}`);
+    console.log(`FRAME_DIAG ${{await frameDiag(appPage, 'cs-list-not-rendered')}}`);
     await appPage.screenshot({{ path: `cs-list-not-rendered-${{Date.now()}}.png`, fullPage: true }}).catch(() => {{}});
   }}
   expect(listRendered, 'CS 工单列表未渲染（15s 轮询后仍未检测到表格或 Total 分页）').toBeTruthy();
+  return scope as ClickScope;
+}}
+
+test('CS工单管理入口冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
+  // 默认 30s 用例预算会在登录/跳转阶段被掐断，显式放宽；
+  // rev71：全量批次（96 条）的编译断言全部落在这一个 test 里，300s 远不够
+  //（实测 TR-104 跑满 600s 仍被 runner 掐死）。
+  // rev116：预算改由执行器下发（WEB_TEST_BUDGET_MS = runner 进程超时 - 30s），
+  // 保证 Playwright 自己先超时并产出报告；未注入时回退 30 分钟。
+  test.setTimeout(Number(process.env.WEB_TEST_BUDGET_MS || 0) || 1800000);
+  // 运行期自证：本次预算到底是多少、是执行器下发的还是回退默认值。
+  console.log(`TEST_BUDGET ${{JSON.stringify({{ ms: Number(process.env.WEB_TEST_BUDGET_MS || 0) || 1800000, injected: !!process.env.WEB_TEST_BUDGET_MS }})}}`);
+  test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 B端 Web 冒烟执行');
+
+  expect(await loginToConsole(page), '企业控制台登录失败（验证码 OCR 重试 10 次后仍未离开登录页）').toBeTruthy();
+
+  // rev120：入口抽成函数（上传阶段的独立上下文要重放同一段入口，只能有一份实现）
+  const scope = await enterStorageAccountList(page, context);
+
+  // 列头只读比对（N3 第 2 步）：渲染成功后**只读**一次表头，不点击、不提交、不造数据。
+  // 未配列时也会输出 COLUMN_HEADERS —— 这是采集真实列头、反补配置的入口。
+  await columnDiag(scope, 'cs-list');
 
   // rev71 修复：注入的 form_executor / coverage_snippet 硬编码引用变量 `appScope`
   //（储值模板入口函数的返回值就叫 appScope）；本模板作用域变量叫 scope，这里补齐别名，
@@ -2903,7 +3892,10 @@ async function enterStorageAccountList(pg: Page, ctx: BrowserContext) {{
 test('企业储值充值入口与表单冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
   // 必须放在最前面：默认 30s 的用例预算会在登录/跳转阶段就把测试掐断
   // （实测 page.goto 报 "Test timeout of 30000ms exceeded"）。
-  test.setTimeout(240000);
+  // rev116：不得超执行器下发的进程预算（未注入时用本模板原定的 4 分钟），
+  // 否则进程先被杀、Playwright 来不及产出报告。
+  test.setTimeout(Math.min(240000, Number(process.env.WEB_TEST_BUDGET_MS || 0) || 240000));
+  console.log(`TEST_BUDGET ${{JSON.stringify({{ ms: Math.min(240000, Number(process.env.WEB_TEST_BUDGET_MS || 0) || 240000), injected: !!process.env.WEB_TEST_BUDGET_MS, cap: 240000 }})}}`);
   test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 B端 Web 冒烟执行');
 
   const appScope = await enterStorageAccountList(page, context);
@@ -3114,7 +4106,10 @@ async function enterPurchaseLimitList(pg: Page, ctx: BrowserContext) {{
 }}
 
 test('会员限购商品管理入口与列表冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
-  test.setTimeout(240000);
+  // rev116：不得超执行器下发的进程预算（未注入时用本模板原定的 4 分钟），
+  // 否则进程先被杀、Playwright 来不及产出报告。
+  test.setTimeout(Math.min(240000, Number(process.env.WEB_TEST_BUDGET_MS || 0) || 240000));
+  console.log(`TEST_BUDGET ${{JSON.stringify({{ ms: Math.min(240000, Number(process.env.WEB_TEST_BUDGET_MS || 0) || 240000), injected: !!process.env.WEB_TEST_BUDGET_MS, cap: 240000 }})}}`);
   test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 B端 Web 冒烟执行');
 
   const appScope = await enterPurchaseLimitList(page, context);

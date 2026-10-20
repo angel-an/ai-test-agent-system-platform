@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 
 def normalize_security(value: Any) -> list[dict] | None:
@@ -99,6 +99,22 @@ class APIEndpointResponse(APIEndpointBase):
     _normalize_security = field_validator("security", mode="before")(
         staticmethod(normalize_security)
     )
+
+    @field_serializer("custom_config")
+    def _redact_custom_config(self, value: dict | None) -> dict | None:
+        """响应输出前脱敏 custom_config.env_config 里的明文密钥。
+
+        env_config 含 appsecret/appid/base_url/测试数据，执行器在服务端读真实值，
+        但接口响应不得把明文密钥返回给前端（安全要求）。非敏感字段（base_url、
+        appid、变量名）保留，便于前端回显配置；敏感值统一替换为 ***。
+        """
+        if not value:
+            return value
+        from app.services.api_endpoint_script_executor import redact_config
+        out = dict(value)
+        if isinstance(out.get("env_config"), dict):
+            out["env_config"] = redact_config(out["env_config"])
+        return out
 # pragma: no cover  My80OmFIVnBZMlhscm9ua3VMazZkbU5uUWc9PTo3NzlkNDI5OA==
 
 class OpenAPIParseResult(BaseModel):

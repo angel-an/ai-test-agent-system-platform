@@ -99,6 +99,14 @@ from app.agents.api.tools.chart_tools import (
 )
 
 # =============================================================================
+# 覆盖度评审工具（设计后、执行前的确定性评分与门禁）
+# =============================================================================
+
+from app.agents.api.tools.coverage_review_tools import (
+    review_api_coverage,
+)
+
+# =============================================================================
 # 场景测试工具
 # =============================================================================
 
@@ -156,6 +164,9 @@ def get_local_tools() -> List[BaseTool]:
         # 脚本执行
         execute_api_script,
         get_test_execution_status,
+
+        # 覆盖度评审（设计后、执行前）
+        review_api_coverage,
 
         # 批量操作
         batch_generate_tests,
@@ -223,6 +234,10 @@ SCRIPT_EXECUTION_TOOLS = [
 BATCH_TOOLS = [
     batch_generate_tests,
     batch_run_tests,
+]
+
+COVERAGE_TOOLS = [
+    review_api_coverage,
 ]
 
 SCENARIO_TOOLS = [

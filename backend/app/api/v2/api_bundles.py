@@ -25,8 +25,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUserIdDep, DbSessionDep
-from app.models.api_asset import ApiDocumentBundle
+from app.models.api_asset import ApiDocumentBundle, ApiVariable
 from app.models.project import Project
+from app.schemas.api_asset import ApiVariableUpsertRequest
 from app.schemas.common import SuccessResponse
 from app.services.api_bundle_service import (
     SOURCE_TYPES,
@@ -250,6 +251,58 @@ async def get_bundle_variables(
 ) -> SuccessResponse[list[dict[str, Any]]]:
     project = await _get_project(project_identifier, db)
     bundle = await _get_bundle(bundle_id, project, db)
+    service = ApiBundleService(db)
+    return SuccessResponse(success=True, data=await service.list_variables(bundle))
+
+
+@router.put(
+    "/{bundle_id}/variables",
+    response_model=SuccessResponse[list[dict[str, Any]]],
+    summary="手动追加/更新资产包变量（仅接受 env:NAME 引用格式）",
+)
+async def upsert_bundle_variables(
+    project_identifier: str,
+    bundle_id: UUID,
+    body: ApiVariableUpsertRequest,
+    db: DbSessionDep,
+) -> SuccessResponse[list[dict[str, Any]]]:
+    project = await _get_project(project_identifier, db)
+    bundle = await _get_bundle(bundle_id, project, db)
+
+    # 校验：value_ref 必须是 env:NAME 格式，拒绝明文
+    for item in body.variables:
+        if not item.value_ref.startswith("env:"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"变量 {item.name} 的 value_ref 必须是 env:NAME 格式，拒绝明文存储",
+            )
+
+    try:
+        for item in body.variables:
+            stmt = select(ApiVariable).where(
+                ApiVariable.bundle_id == bundle.id,
+                ApiVariable.name == item.name,
+            )
+            row = (await db.execute(stmt)).scalar_one_or_none()
+            if row is None:
+                row = ApiVariable(bundle_id=bundle.id, name=item.name)
+                db.add(row)
+            row.value_ref = item.value_ref
+            row.is_secret = item.is_secret
+            row.environment = item.environment
+            row.source_type = "manual"
+            row.enabled = item.enabled
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"变量更新失败（已回滚）: {type(exc).__name__}: {exc}",
+        ) from exc
+
     service = ApiBundleService(db)
     return SuccessResponse(success=True, data=await service.list_variables(bundle))
 

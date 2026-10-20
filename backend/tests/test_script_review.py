@@ -329,7 +329,12 @@ class TestEnqueueAutoBindAttachment:
                 "CREATE TABLE web_tests ("
                 "id CHAR(32) PRIMARY KEY, project_id CHAR(32), sub_function_id CHAR(32), "
                 "function_id CHAR(32), identifier VARCHAR(50), name VARCHAR(200), "
-                "script_path VARCHAR(500), created_at DATETIME)"
+                "script_path VARCHAR(500), generated_by_agent VARCHAR(50), "
+                # N7 编译清单列（迁移 0024）：与模型同步
+                "compile_status VARCHAR(24), compiled_check_count INTEGER, "
+                "compiled_skipped_count INTEGER, compiled_at DATETIME, "
+                "is_legacy_asset BOOLEAN DEFAULT 0, "
+                "created_at DATETIME)"
             ))
             await conn.execute(_text(
                 "CREATE TABLE attachments ("

@@ -64,13 +64,9 @@ composite_backend = CompositeBackend(
 
 skills_middleware = SkillsMiddleware(
     backend=composite_backend,
-    sources=[
-        "/skills/midscene-ios-orchestrator/",
-        "/skills/midscene-ios-env-setup/",
-        "/skills/midscene-ios-test-case-design/",
-        "/skills/midscene-ios-script-generation/",
-        "/skills/midscene-ios-report/",
-    ]
+    # 统一约定：skills_root=.claude/skills，source=/skills/<agent目录>/
+    # 即 .claude/skills/ios/<skill>/SKILL.md。
+    sources=["/skills/ios/"]
 )
 
 

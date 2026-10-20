@@ -701,12 +701,31 @@ async def update_test_case(
 # ============ 结构化断言批量回写接口（2026-09-29 复核 P2）============
 
 class AssertionBatchItem(BaseModel):
-    """单条用例的断言回写请求。"""
+    """单条用例的断言回写请求。
+
+    字段更新语义（2026-10-17 定稿）：
+
+    - ``assertions``：**整体替换**（数组无按 key 合并语义）。空数组会被拒绝，
+      因为那会让用例从"可编译"退回"叙述型"，属破坏性操作，需走显式删除；
+    - ``requirement_rule``：**顶层稀疏补丁**。缺键保留原值、显式 ``null`` 删除该键、
+      未知键报错（值为 ``null`` 且键确实存在的未知键视为清理历史脏键，允许）。
+      **不支持递归合并**：嵌套对象整体替换，``{"source": {"row": 2}}`` 会换掉整个
+      ``source``；
+    - ``rule_field``：``requirement_rule.field`` 的便捷写法，等价于
+      ``{"field": rule_field}``；与历史值不同且断言未指向新字段时只产生告警，不阻断。
+    """
     identifier: str = Field(..., description="测试用例标识符，如 TC-519063")
-    assertions: list[dict[str, Any]] = Field(..., description="结构化断言列表")
+    assertions: list[dict[str, Any]] = Field(
+        ..., description="结构化断言列表（整体替换，不支持部分合并）"
+    )
     rule_id: str | None = Field(default=None, description="需求规则编号，如 R19")
-    rule_field: str | None = Field(default=None, description="规则字段名（便捷参数）")
-    requirement_rule: dict[str, Any] | None = Field(default=None, description="完整规则体（可选）")
+    rule_field: str | None = Field(
+        default=None, description="规则字段名（便捷参数，等价于 requirement_rule.field）"
+    )
+    requirement_rule: dict[str, Any] | None = Field(
+        default=None,
+        description="规则体顶层补丁（缺键保留、null 删除、未知键报错；不做递归合并）",
+    )
 
 
 class AssertionBatchRequest(BaseModel):
@@ -734,6 +753,7 @@ async def batch_write_case_assertions(
     """批量回写断言：**先预览后落库**，且不写死任何业务信息。"""
     from app.schemas.test_case import TestCaseUpdate
     from app.services.test_assertion_service import (
+        RulePatchError,
         SOURCE_MANUAL,
         merge_assertions,
         preview_assertions,
@@ -749,25 +769,46 @@ async def batch_write_case_assertions(
             continue
 
         fields = dict(case.custom_fields or {})
+        existing_rule = fields.get("requirement_rule") or {}
         rule_field = item.rule_field or (
             (item.requirement_rule or {}).get("field")
-            or (fields.get("requirement_rule") or {}).get("field")
+            or (existing_rule or {}).get("field")
         )
-        preview = preview_assertions(
-            item.identifier, item.assertions,
-            name=case.name or "", rule_id=item.rule_id or fields.get("requirement_rule_id") or "",
-            rule_field=rule_field or "",
-        )
-        record = {"identifier": item.identifier, "status": "ok", **preview}
 
-        if preview["valid"] and not data.dry_run:
+        # **先合并、再预览**（2026-10-17 修复）：预览与保存必须用同一份数据，
+        # 否则会出现"预览说 compiled、落库后重编译零检查"（旧实现各拼一套规则体）。
+        try:
             merged = merge_assertions(
                 fields, item.assertions,
                 rule_id=item.rule_id if item.rule_id is not None else fields.get("requirement_rule_id"),
                 rule_field=rule_field,
                 requirement_rule=item.requirement_rule,
                 source=SOURCE_MANUAL,
+                touch=not data.dry_run,
             )
+        except RulePatchError as exc:
+            results.append({
+                "identifier": item.identifier,
+                "status": "invalid",
+                "valid": False,
+                "errors": [str(exc)],
+                "applied": False,
+            })
+            continue
+
+        preview = preview_assertions(
+            item.identifier, item.assertions,
+            name=case.name or "",
+            rule_id=item.rule_id or fields.get("requirement_rule_id") or "",
+            custom_fields=merged,
+        )
+        record = {"identifier": item.identifier, "status": "ok", **preview}
+        if merged.get("assertions_warnings"):
+            record["warnings"] = merged["assertions_warnings"]
+        if merged.get("requirement_rule") is not None:
+            record["requirement_rule_keys"] = sorted((merged.get("requirement_rule") or {}).keys())
+
+        if preview["valid"] and not data.dry_run:
             await service.update_test_case(
                 project_identifier, item.identifier, TestCaseUpdate(custom_fields=merged)
             )

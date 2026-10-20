@@ -153,6 +153,20 @@ class ApiMatchResult(BaseModel):
 
 # ---------- Variable ----------
 
+class ApiVariableUpsertItem(BaseModel):
+    """单个变量追加/更新请求（手动编辑）"""
+    name: str = Field(..., min_length=1, max_length=255, description="变量名")
+    value_ref: str = Field(..., description="值引用，必须是 env:NAME 格式")
+    is_secret: bool = Field(default=False, description="是否敏感变量")
+    enabled: bool = Field(default=True, description="是否启用")
+    environment: str | None = Field(default=None, description="环境标识: uat / production")
+
+
+class ApiVariableUpsertRequest(BaseModel):
+    """批量变量追加/更新请求"""
+    variables: list[ApiVariableUpsertItem] = Field(..., min_length=1)
+
+
 class ApiVariableResponse(BaseModel):
     """变量响应（secret 脱敏）"""
     id: UUID

@@ -1,0 +1,37 @@
+{
+ "success": true,
+ "data": {
+  "project_identifier": "PR-2",
+  "test_cases": [
+   {
+    "id": "6ed1b0af-0dd0-4427-9d08-ff4de180ab24",
+    "identifier": "TC-152251",
+    "name": "企业账户退款金额-必填与取值校验"
+   }
+  ],
+  "web_tests": [
+   {
+    "id": "a1ddb666-81aa-417f-8a81-046a5dabee67",
+    "identifier": "WT-1D0EAC07",
+    "name": "TC-152251 - B端企业储值充值冒烟",
+    "script_path": "web-tests/PR-2/minimal-loop/6ed1b0af-0dd0-4427-9d08-ff4de180ab24/02fc3867dcca47e5947243c3cc50fee5/test-script.spec.ts",
+    "test_case_id": "6ed1b0af-0dd0-4427-9d08-ff4de180ab24",
+    "web_path_match_status": "matched",
+    "web_path_template_id": "b086e98f-8638-43d3-8194-8389f3f96926"
+   }
+  ],
+  "test_run": {
+   "id": "842ed3da-82a0-4e51-8ca5-e7a0b5c9a516",
+   "identifier": "TR-102",
+   "script_jobs": [
+    {
+     "id": "8f1e2c37-0d25-4c7b-bbf3-0671b8093f1d",
+     "script_type": "web_test",
+     "script_id": "a1ddb666-81aa-417f-8a81-046a5dabee67",
+     "script_identifier": "WT-1D0EAC07"
+    }
+   ]
+  },
+  "message": "已创建 1 条 Web 冒烟可执行资产"
+ }
+}

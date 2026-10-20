@@ -1,0 +1,74 @@
+{
+  "success": false,
+  "return_code": 1,
+  "duration": 28.561633,
+  "stdout": "[TestData] 测试名称: [AutoTest] 疯狂星期四-20260710_192156\n[TestData] 编辑后名称: [AutoTest] 疯狂星期四-编辑版-20260710_192156\n\nRunning 9 tests using 1 worker\n[TestData] 测试名称: [AutoTest] 疯狂星期四-20260710_192157\n[TestData] 编辑后名称: [AutoTest] 疯狂星期四-编辑版-20260710_192157\n\n====== TC-LOGIN: 登录并进入会员日管理列表 ======\n[Step 1] 登录控制台...\n[Login] 登录控制台成功\n[Step 2] 切换到营销云...\n[Marketing] 点击前页面数: 1\n[Marketing] 找到数盈·营销云卡片\n[Marketing] 已点击数盈·营销云卡片\n[Marketing] 检测到新标签页: https://imarketing-uat.xysjg.com/front/dtcloud-trade-web-pc/?accessToken=eyJhbGciOiJIUzI1NiJ9.eyJpbn...\n[Marketing] 营销云页面就绪: https://imarketing-uat.xysjg.com/front/dtcloud-trade-web-pc/#/...\n[Step 3] 直接导航到会员日管理列表...\n[Navigate] 当前不在列表页，直接导航...\n[Step 4] 验证列表页元素...\n  ✓ 会员日名称搜索框可见\nF°°°°°°°°\n\n  1) [chromium] › tests\\membershipday_test_20260710_191409.spec.ts:278:7 › 营销云 - 会员日管理 CRUD 功能测试（修复版） › TC-LOGIN: 登录并进入会员日管理列表 \n\n    Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\n    Locator: getByRole('combobox', { name: '请输入状态' })\n    Expected: visible\n    Timeout: 10000ms\n    Error: element(s) not found\n\n    Call log:\n    \u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n    \u001b[2m  - waiting for getByRole('combobox', { name: '请输入状态' })\u001b[22m\n\n\n      295 |     await expect(mcPage.getByPlaceholder('请输入会员日名称')).toBeVisible({ timeout: 10_000 });\n      296 |     console.log('  ✓ 会员日名称搜索框可见');\n    > 297 |     await expect(mcPage.getByRole('combobox', { name: '请输入状态' })).toBeVisible({ timeout: 10_000 });\n          |                                                                   ^\n      298 |     console.log('  ✓ 状态下拉框可见');\n      299 |     await expect(mcPage.getByRole('button', { name: '搜索' })).toBeVisible({ timeout: 10_000 });\n      300 |     console.log('  ✓ 搜索按钮可见');\n        at D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\workspace\\web_cli\\tests\\membershipday_test_20260710_191409.spec.ts:297:67\n\n    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────\n    playwright-report-1783682514304-f6919c2a\\membershipday_test_2026071-ee699-（修复版）-TC-LOGIN-登录并进入会员日管理列表-chromium\\test-failed-2.png\n    ────────────────────────────────────────────────────────────────────────────────────────────────\n\n    attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────\n    playwright-report-1783682514304-f6919c2a\\membershipday_test_2026071-ee699-（修复版）-TC-LOGIN-登录并进入会员日管理列表-chromium\\test-failed-1.png\n    ────────────────────────────────────────────────────────────────────────────────────────────────\n\n    Error Context: playwright-report-1783682514304-f6919c2a\\membershipday_test_2026071-ee699-（修复版）-TC-LOGIN-登录并进入会员日管理列表-chromium\\error-context.md\n\n  1 failed\n    [chromium] › tests\\membershipday_test_20260710_191409.spec.ts:278:7 › 营销云 - 会员日管理 CRUD 功能测试（修复版） › TC-LOGIN: 登录并进入会员日管理列表 \n  8 did not run\n",
+  "stderr": "",
+  "report_path": "D:\\code\\Pyproject\\ai-test-agent-system-platform\\backend\\workspace\\web_cli\\playwright-report",
+  "json_stats": {
+    "total": 9,
+    "passed": 0,
+    "failed": 1,
+    "skipped": 8,
+    "flaky": 0,
+    "duration_ms": 26098,
+    "test_cases": [
+      {
+        "title": "TC-LOGIN: 登录并进入会员日管理列表",
+        "status": "failed",
+        "duration_ms": 24647,
+        "error": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('combobox', { name: '请输入状态' })\nExpected: visible\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('combobox', { name: '请输入状态' })\u001b[22m\n"
+      },
+      {
+        "title": "TC-CREATE: 新增会员日",
+        "status": "skipped",
+        "duration_ms": 0,
+        "error": null
+      },
+      {
+        "title": "TC-VIEW: 查看详情",
+        "status": "skipped",
+        "duration_ms": 0,
+        "error": null
+      },
+      {
+        "title": "TC-EDIT: 编辑会员日",
+        "status": "skipped",
+        "duration_ms": 0,
+        "error": null
+      },
+      {
+        "title": "TC-STATUS-01: 禁用会员日",
+        "status": "skipped",
+        "duration_ms": 0,
+        "error": null
+      },
+      {
+        "title": "TC-STATUS-02: 启用会员日",
+        "status": "skipped",
+        "duration_ms": 0,
+        "error": null
+      },
+      {
+        "title": "TC-DELETE: 删除会员日",
+        "status": "skipped",
+        "duration_ms": 0,
+        "error": null
+      },
+      {
+        "title": "TC-SEARCH: 按名称搜索",
+        "status": "skipped",
+        "duration_ms": 0,
+        "error": null
+      },
+      {
+        "title": "TC-NAV: 返回按钮导航",
+        "status": "skipped",
+        "duration_ms": 0,
+        "error": null
+      }
+    ]
+  },
+  "start_time": "2026-07-10T19:21:54.304666",
+  "end_time": "2026-07-10T19:22:22.866299"
+}

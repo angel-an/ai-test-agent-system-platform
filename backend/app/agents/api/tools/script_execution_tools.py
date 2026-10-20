@@ -7,6 +7,7 @@ API 测试脚本执行工具
 import os
 import sys
 import json
+import asyncio
 import subprocess
 import tempfile
 import zipfile
@@ -14,7 +15,7 @@ import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from langchain_core.tools import tool
 from sqlalchemy import select
@@ -24,6 +25,13 @@ from app.config.database import async_session_factory
 from app.models.attachment import Attachment, AttachmentEntityType
 from app.models.api_endpoint import APIEndpoint
 from app.config.minio_client import MinIOClient
+
+# P1: 统一执行入口 — 所有执行路径必须经过预检
+from app.services.unified_execution import execute_with_preflight
+from app.test_platform.runtime_context import RunContext
+# 复用执行器的环境变量构建：从端点 env_config 注入 base_url/凭证/测试数据，
+# 避免脚本 process.env.XXX 落空后回退到 api.example.com 等占位符导致 DNS 失败。
+from app.services.api_endpoint_script_executor import _build_subprocess_env
 
 # ============================================================================
 # 测试目录配置
@@ -65,7 +73,12 @@ async def execute_api_script(
     framework: str = "playwright",
     reporter: str = "html",
     project_identifier: str = "PR-1",
-    endpoint_id: Optional[str] = None
+    endpoint_id: Optional[str] = None,
+    # P1: 新增 run_id 和 mode 参数，用于预检
+    run_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+    artifact_version: Optional[str] = None,
+    mode: str = "safe",
 ) -> str:
     """
     执行已下载到测试目录的 API 测试脚本
@@ -85,6 +98,10 @@ async def execute_api_script(
         reporter: 报告格式 (html, json, list)
         project_identifier: 项目标识符，用于保存测试报告
         endpoint_id: 端点 ID（可选，用于更新测试统计）
+        run_id: 运行标识符（可选，不传时自动生成格式为 run_YYYYMMDD_HHMMSS）
+        artifact_id: 产物 ID（可选）
+        artifact_version: 产物版本（可选）
+        mode: 执行模式 (safe/live)
 
     Returns:
         JSON 格式的执行结果，包含：
@@ -103,6 +120,82 @@ async def execute_api_script(
         ...     endpoint_id="5ea81a5f-c97b-4a36-a680-13637f1b9eed"
         ... )
     """
+    try:
+        # P0: API 覆盖度门禁（设计后/执行前）
+        # 结论由 review_api_coverage 写入端点 custom_config["coverage_gate"]。
+        # 默认 warn（只告警不阻断，避免影响既有流水线）；
+        # 置 API_COVERAGE_GATE_STRICT=strict 后为硬阻断。
+        from app.agents.api.tools.coverage_review_tools import enforce_coverage_gate
+
+        gate_block = await enforce_coverage_gate(endpoint_id)
+        if gate_block:
+            return json.dumps(gate_block, ensure_ascii=False, indent=2)
+
+        # P1: 统一预检门禁 — 所有执行必须经过预检
+        # 如果没有 run_id，自动生成一个（Agent 场景下允许自动生成，
+        # 因为这里的 run_id 仅用于追踪，不涉及 ArtifactPublisher 发布流程）
+        if not run_id:
+            from datetime import datetime as _dt
+            run_id = f"run_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+            print(f"[API Script Execution] 自动生成 run_id: {run_id}, project={project_identifier}, script={local_script_path}")
+
+        # 构建 RunContext 并执行预检
+        context = RunContext(
+            project_id=project_identifier,
+            run_id=run_id,
+            artifact_id=artifact_id,
+            artifact_version=artifact_version,
+            mode=mode if mode in ("safe", "live") else "safe",
+        )
+
+        # 调用统一执行入口（预检 + 执行）
+        # Agent Tool 场景：跳过 manifest/provenance 检查（脚本通过 download_api_script 下载，
+        # 不走 ArtifactPublisher 发布流程，因此没有 manifest.json 和 script_provenance.json）
+        result = await execute_with_preflight(
+            context=context,
+            track="api",
+            skip_manifest_check=True,
+            executor=lambda: _execute_api_script_impl(
+                local_script_path=local_script_path,
+                framework=framework,
+                reporter=reporter,
+                project_identifier=project_identifier,
+                endpoint_id=endpoint_id,
+                run_id=run_id,
+                artifact_id=artifact_id,
+                artifact_version=artifact_version,
+                mode=mode,
+            ),
+        )
+
+        # 如果预检阻断，直接返回阻断信息
+        if result.get("status") == "blocked":
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        # 正常执行完成，返回结果
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({
+            "success": False,
+            "error": f"执行脚本时发生错误: {str(e)}"
+        }, ensure_ascii=False, indent=2)
+
+
+async def _execute_api_script_impl(
+    local_script_path: str,
+    framework: str = "playwright",
+    reporter: str = "html",
+    project_identifier: str = "PR-1",
+    endpoint_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+    artifact_version: Optional[str] = None,
+    mode: str = "safe",
+) -> dict[str, Any]:
+    """API 脚本执行的实际实现（预检通过后调用）。"""
     try:
         # 1. 解析脚本路径
         # 清理路径：去除开头的斜杠或反斜杠，标准化分隔符
@@ -134,10 +227,10 @@ async def execute_api_script(
 
         # 3. 验证脚本文件存在
         if not script_path.exists():
-            return json.dumps({
+            return {
                 "success": False,
                 "error": f"脚本文件不存在: {script_path}"
-            }, ensure_ascii=False, indent=2)
+            }
 # pylint: disable  MC80OmFIVnBZMlhscm9ua3VMazZXamRsT0E9PToyMjk3MDJhZA==
 
         script_filename = script_path.name
@@ -154,13 +247,28 @@ async def execute_api_script(
         print(f"[API Script Execution] 项目根目录: {project_root}")
         print(f"[API Script Execution] 相对脚本路径: {relative_path}")
 
+        # 4.5 读取端点环境配置（base_url/凭证/测试数据），执行时注入子进程环境变量。
+        # 来源：端点 custom_config.env_config（由"环境配置并执行"流程持久化）。
+        # 脚本里 process.env.API_BASE_URL / MX_APPID / MX_APPSECRET / TEST_* 依赖这些值，
+        # 缺省会回退到 api.example.com 等占位符，导致 getaddrinfo ENOTFOUND 全军覆没。
+        env_config: Dict[str, Any] = {}
+        if endpoint_id:
+            async with async_session_factory() as db:
+                ep_res = await db.execute(
+                    select(APIEndpoint).where(APIEndpoint.id == UUID(endpoint_id))
+                )
+                _ep = ep_res.scalar_one_or_none()
+            if _ep and _ep.custom_config:
+                env_config = (_ep.custom_config.get("env_config") or {})
+
         # 5. 执行脚本
         execution_result = await _execute_script_internal(
             script_path=str(relative_path),
             script_filename=script_filename,
             framework=framework,
             reporter=reporter,
-            project_root=str(project_root)
+            project_root=str(project_root),
+            env_config=env_config,
         )
 
         # 6. 保存测试报告到 MinIO（如果生成了 HTML 报告）
@@ -222,22 +330,24 @@ async def execute_api_script(
         if endpoint_id:
             result["endpoint_id"] = endpoint_id
 
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        # P1: 返回 dict（外层 execute_with_preflight 会统一处理 JSON 序列化）
+        return result
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return json.dumps({
+        return {
             "success": False,
             "error": f"执行脚本时发生错误: {str(e)}"
-        }, ensure_ascii=False, indent=2)
+        }
 
 async def _execute_script_internal(
     script_path: str,
     script_filename: str,
     framework: str,
     reporter: str,
-    project_root: str
+    project_root: str,
+    env_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     内部执行脚本函数
@@ -248,6 +358,8 @@ async def _execute_script_internal(
         framework: 测试框架
         reporter: 报告格式
         project_root: 项目根目录
+        env_config: 端点环境配置（base_url/appid/appsecret/env 自定义键值），
+            注入子进程环境变量供脚本 process.env.XXX 引用；缺省则脚本用占位符。
 
     Returns:
         执行结果字典
@@ -285,10 +397,23 @@ async def _execute_script_internal(
         print(f"[API Script Execution] 执行命令: {' '.join(cmd)}")
         print(f"[API Script Execution] 工作目录: {project_root}")
 
-        # 准备环境变量（设置 CI=1 禁用 Playwright HTML reporter 自动打开浏览器）
-        env = os.environ.copy()
+        # 准备环境变量：复用执行器的构建逻辑，从端点 env_config 注入
+        # base_url/appid/appsecret/自定义键值，供脚本 process.env.XXX 引用。
+        # 再设 CI=1 禁用 Playwright HTML reporter 自动打开浏览器。
+        env = _build_subprocess_env(
+            env_config or {},
+            base_env=os.environ.copy(),
+            node_bin=str(Path(project_root) / "node_modules" / ".bin"),
+        )
         if reporter == "html":
             env['CI'] = '1'
+
+        # 把 base_url 显式映射为 API_BASE_URL（脚本里 process.env.API_BASE_URL 引用），
+        # 避免脚本回退到 api.example.com 占位符。base_url 不含密钥，打印便于排查。
+        base_url = (env_config or {}).get("base_url")
+        if base_url:
+            env["API_BASE_URL"] = str(base_url).rstrip("/")
+            print(f"[API Script Execution] 注入 API_BASE_URL={env['API_BASE_URL']}")
 
         # Execute without a shell so test paths remain safe and predictable.
         result = subprocess.run(
@@ -370,8 +495,11 @@ async def _save_test_report(
     """
     try:
         # 1. 将报告目录打包成 ZIP
+        # object_name 带短 UUID：attachments.object_name 是全局唯一约束，秒级时间戳在
+        # 并发/快速重试时会冲突导致落库失败，加后缀保证唯一。
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        zip_filename = f"api_test_report_{timestamp}.zip"
+        unique_suffix = uuid4().hex[:8]
+        zip_filename = f"api_test_report_{timestamp}_{unique_suffix}.zip"
         zip_path = Path(project_root) / zip_filename
 
         print(f"[API Report] 打包测试报告: {report_path} -> {zip_path}")
@@ -388,7 +516,7 @@ async def _save_test_report(
             zip_bytes = f.read()
 
         # 3. 上传到 MinIO
-        object_name = f"api-tests/{project_identifier}/endpoints/{endpoint_id}/test-report-{timestamp}.zip"
+        object_name = f"api-tests/{project_identifier}/endpoints/{endpoint_id}/test-report-{timestamp}-{unique_suffix}.zip"
         MinIOClient.upload_bytes(
             object_name=object_name,
             data=zip_bytes,
@@ -398,61 +526,125 @@ async def _save_test_report(
         print(f"[API Report] 报告已上传到 MinIO: {object_name}")
 
         # 4. 创建附件记录
-        async with async_session_factory() as session:
-            # 生成报告描述
-            duration = execution_result.get("duration", 0)
-            stdout = execution_result.get("stdout", "")
+        # _persist_report_attachment 用 ON CONFLICT 幂等落库，cancel 时尽力完成。
+        # 描述只写整体状态+耗时：stdout 里 ✓/passed 双计数会重复，逐条统计不可靠，
+        # 精确计数由离线 report-summary 接口解析 result.json 提供。
+        description = f"API 测试报告 - {endpoint.display_name}\n"
+        description += f"执行时间: {execution_result.get('duration', 0):.2f}秒\n"
+        description += "结果: " + ("通过" if execution_result.get("success") else "存在失败")
 
-            # 尝试解析测试结果
-            passed_count = stdout.count("✓") + stdout.count("passed")
-            failed_count = stdout.count("✘") + stdout.count("failed")
+        attachment_id = await _persist_report_attachment(
+            endpoint_id=endpoint_id,
+            endpoint=endpoint,
+            object_name=object_name,
+            zip_bytes=zip_bytes,
+            description=description,
+            file_name=zip_filename,
+        )
 
-            description = f"API 测试报告 - {endpoint.display_name}\n"
-            description += f"执行时间: {duration:.2f}秒\n"
-            if passed_count > 0 or failed_count > 0:
-                description += f"通过: {passed_count} | 失败: {failed_count}"
+        print(f"[API Report] 附件记录已创建: {attachment_id}")
 
-            # 创建附件
-            attachment = Attachment(
-                entity_type=AttachmentEntityType.API_TEST_REPORT,
-                entity_id=UUID(endpoint_id),
-                project_id=endpoint.project_id,
-                file_name=f"api-test-report-{timestamp}.zip",
-                file_size=len(zip_bytes),
-                content_type="application/zip",
-                object_name=object_name,
-                description=description,
-                created_by="api-agent"
-            )
+        # 5. 清理临时 ZIP 文件
+        try:
+            zip_path.unlink()
+            print(f"[API Report] 临时 ZIP 文件已清理: {zip_path}")
+        except Exception as e:
+            print(f"[API Report] 清理临时 ZIP 文件失败: {e}")
 
-            session.add(attachment)
-            await session.commit()
-            await session.refresh(attachment)
+        # 6. 清理报告目录
+        try:
+            shutil.rmtree(report_path)
+            print(f"[API Report] 报告目录已清理: {report_path}")
+        except Exception as e:
+            print(f"[API Report] 清理报告目录失败: {e}")
 
-            print(f"[API Report] 附件记录已创建: {attachment.id}")
-
-            # 5. 清理临时 ZIP 文件
-            try:
-                zip_path.unlink()
-                print(f"[API Report] 临时 ZIP 文件已清理: {zip_path}")
-            except Exception as e:
-                print(f"[API Report] 清理临时 ZIP 文件失败: {e}")
-
-            # 6. 清理报告目录
-            try:
-                shutil.rmtree(report_path)
-                print(f"[API Report] 报告目录已清理: {report_path}")
-            except Exception as e:
-                print(f"[API Report] 清理报告目录失败: {e}")
-
-            return str(attachment.id)
-# fmt: off  My80OmFIVnBZMlhscm9ua3VMazZXamRsT0E9PToyMjk3MDJhZA==
+        return attachment_id
 
     except Exception as e:
         print(f"[API Report] 保存测试报告失败: {e}")
         import traceback
         traceback.print_exc()
         return None
+
+
+async def _persist_report_attachment(
+    endpoint_id: str,
+    endpoint: "APIEndpoint",
+    object_name: str,
+    zip_bytes: bytes,
+    description: str,
+    file_name: str,
+) -> str:
+    """把报告附件记录写入 DB，返回附件 ID。
+
+    幂等：用 PostgreSQL ON CONFLICT (object_name) DO NOTHING，并发/重试冲突不报错，
+    随后回查拿已有记录 ID，避免"先查再插"的竞态。
+
+    cancel：脚本执行耗时长，客户端断开/langgraph interrupt 会注入 cancel。INSERT 的
+    commit 被 cancel 时尽力完成（ON CONFLICT 保证不重复插入）再向上抛；调用处回查 ID
+    时也吞 cancel 完成。注意：这是尽最大努力，重复取消/服务关闭/DB 故障仍可能落库失败。
+    """
+    try:
+        row_id = await _insert_report_attachment(
+            endpoint_id, endpoint, object_name, zip_bytes, description, file_name
+        )
+    except asyncio.CancelledError:
+        # INSERT 的 commit 被 cancel：记录可能已落库，回查拿 ID 后向上响应取消
+        attachment_id = await _fetch_attachment_id_by_object_name(object_name)
+        raise asyncio.CancelledError() from None
+    if row_id is not None:
+        return row_id
+    # INSERT 因冲突未插入：记录已存在，回查拿 ID
+    try:
+        return await _fetch_attachment_id_by_object_name(object_name)
+    except asyncio.CancelledError:
+        return await _fetch_attachment_id_by_object_name(object_name)
+
+
+async def _insert_report_attachment(
+    endpoint_id: str,
+    endpoint: "APIEndpoint",
+    object_name: str,
+    zip_bytes: bytes,
+    description: str,
+    file_name: str,
+) -> Optional[str]:
+    """INSERT ... ON CONFLICT (object_name) DO NOTHING。返回新记录 ID；冲突未插入返回 None。
+    commit 被 cancel 时吞掉并完成（ON CONFLICT 保证不重复插入），随后向上抛 CancelledError。"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    stmt = pg_insert(Attachment).values(
+        entity_type=AttachmentEntityType.API_TEST_REPORT,
+        entity_id=UUID(endpoint_id),
+        project_id=endpoint.project_id,
+        file_name=file_name,
+        file_size=len(zip_bytes),
+        content_type="application/zip",
+        object_name=object_name,
+        description=description,
+        created_by="api-agent",
+    ).on_conflict_do_nothing(index_elements=["object_name"]).returning(Attachment.id)
+
+    async with async_session_factory() as session:
+        try:
+            result = await session.execute(stmt)
+            await session.commit()
+        except asyncio.CancelledError:
+            # 尽力完成 commit（幂等，不会重复插入），再向上响应取消
+            await session.commit()
+            raise
+        row = result.first()
+        return str(row[0]) if row else None
+
+
+async def _fetch_attachment_id_by_object_name(object_name: str) -> str:
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Attachment.id).where(Attachment.object_name == object_name)
+        )
+        row = result.first()
+        if row is None:
+            raise RuntimeError(f"report attachment not found after insert: {object_name}")
+        return str(row[0])
 
 @tool
 async def get_test_execution_status(

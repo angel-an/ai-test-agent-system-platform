@@ -197,6 +197,20 @@ class TestRunListInfo(BaseModel):
     max_concurrency: int = Field(default=5, description="最大并发数")
     created_at: datetime = Field(..., description="创建时间")
 
+
+class TestRunAddCasesResult(TestRunInfo):
+    """添加用例到运行的结果（2026-09-29 复核："跳过 + 仅写日志"是部分接纳、用户无感知，
+    必须显式反馈）。
+
+    - ``excluded_deprecated_cases``：因 deprecated=true 未纳入本次运行的用例标识
+      （含原因：已废弃）。部分排除时请求成功但此处列出；全部被排除时端点返回 400、
+      **不创建空运行**。
+    """
+    excluded_deprecated_cases: list[str] = Field(
+        default_factory=list,
+        description="因已废弃（deprecated=true）未纳入运行的用例标识",
+    )
+
 # type: ignore  My80OmFIVnBZMlhscm9ua3VMazZWbHBNZFE9PTo1ZmQ1MDhkMA==
 
 class TestRunTestCaseInfo(BaseModel):
@@ -213,6 +227,10 @@ class TestRunTestCaseInfo(BaseModel):
     configuration_id: Optional[int] = Field(default=None, description="配置 ID")
     assignee: Optional[str] = Field(default=None, description="负责人邮箱")
     latest_status: TestResultStatus = Field(default=TestResultStatus.NOT_EXECUTED, description="最新状态")
+    #: 最新一次执行的明细原因（来自 test_results.description 的断言级摘要），
+    #: 让 SKIPPED/NOT_EXECUTED 在运行详情页也能说明"为什么"。
+    latest_reason: Optional[str] = Field(default=None, description="最新执行原因/明细（断言级摘要）")
+    latest_unverified: Optional[int] = Field(default=None, description="最新执行中未验证断言条数")
     priority: Optional[Priority] = Field(default=None, description="优先级")
     test_case_type: Optional[TestCaseType] = Field(default=None, description="测试类型")
     folder_id: Optional[UUID] = Field(default=None, description="文件夹 ID")
@@ -234,6 +252,39 @@ class CloseTestRunRequest(BaseModel):
         default=TestRunActiveState.CLOSED,
         description="活跃状态"
     )
+
+
+class TestRunRetentionRequest(BaseModel):
+    """测试运行保留策略（归档/清理）请求。
+
+    口径：归档**不删除**运行与作业，只把大体积且可重建的 stdout/stderr 降级为
+    ``result_summary.retention.evidence`` 摘要；只处理终态运行；默认 dry-run。
+    """
+    dry_run: bool = Field(default=True, description="只评估不落库（默认开启，避免误清证据）")
+    confirm: bool = Field(
+        default=False,
+        description="dry_run=false 时必须显式置 true，否则 400——破坏性清理的二次确认",
+    )
+    older_than_days: Optional[float] = Field(
+        default=None,
+        description=(
+            "只归档创建时间早于 N 天的运行；None 表示不按时间过滤。"
+            "既未给 run_identifiers 也未给 keep_latest_per_project 时，服务端按 14 天兜底"
+        ),
+    )
+    run_identifiers: Optional[list[str]] = Field(
+        default=None,
+        description="只归档指定运行标识（如 ['TR-84']）；给定后不再按时间过滤之外的运行生效",
+    )
+    keep_latest_per_project: Optional[int] = Field(
+        default=None,
+        description="每个项目保留最近 N 个运行不归档（None 表示不启用）",
+    )
+    include_disk: bool = Field(default=True, description="是否同时评估/清理磁盘报告目录")
+    disk_older_than_days: Optional[float] = Field(
+        default=None, description="磁盘报告目录的保留期；默认与 older_than_days 相同"
+    )
+    disk_limit: Optional[int] = Field(default=None, description="本次最多清理的目录数（None=不限）")
 
 
 # ============================================================================

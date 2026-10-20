@@ -12,6 +12,15 @@ IDP HTTP 客户端
 - 统一处理超时、401、5xx 错误
 - 请求/响应日志脱敏
 - 401 时自动刷新 Token 并重试一次
+
+⚠️ 服务端能力边界（2026-10-15 实测，完整结论见 `docs/IDP_API_CONTRACT.md` §9）：
+- **无程序化附图通道**：`issues/{id}/attachments`、`issue_images`、`upload_images` 均 403
+  ⇒ 不要在此新增"上传附件/图片"方法，截图只能人工拖入；
+  唯一可能的程序化内嵌路径是 description 的 Delta image op + 公网可读图片 URL。
+- **需求/元数据端点不可用**：`requirements`、`backlog`、`issues?typeCode=feature`、
+  `schemes/query_issue_types` 均 403 ⇒ 需求名称等元数据只能来自本地配置或人工给定。
+- **列表端点 403 + 号段 ≠ issueId**：问题号（如 `dmcloud-saas-67196`）不是 issueId（`927934`），
+  误当 issueId 查询会 **HTTP 200 静默返回无关单**；无法按编号反查，只能用锚点区间内插扫描。
 """
 
 import json
@@ -252,6 +261,13 @@ class IDPClient:
         已按浏览器请求确认：PUT /agile/v1/projects/{project_id}/issues。
         请求体至少包含 issueId、objectVersionNumber、description。
 
+        成功判据（三者齐全才算成功，2026-10-15 实测）：
+          1) HTTP **201**（不是 200）；
+          2) 回读 `objectVersionNumber` = 原值 + 1；
+          3) 目标字段与预期内容 **逐字** 一致。
+        ⚠️ 只查关键词（如"描述里出现 requestId"）会把成功写入误判为失败；
+        ⚠️ 回滚场景要按版本另存快照，再次 GET 会覆盖 before 快照。
+
         Args:
             project_id: IDP 项目 ID
             issue_data: 更新请求体，包含 issueId、objectVersionNumber、description
@@ -270,9 +286,13 @@ class IDPClient:
         """
         查询缺陷详情
 
+        ⚠️ 返回体是 **扁平 JSON**（无 `{"data": ...}` 包装）——解析写成 `.get("data") or {}`
+        会把整条单读成空值、误判"标题/描述丢了"；正确写法 `payload.get("data") or payload`。
+        ⚠️ `issue_id` 必须是**真实 issueId**，传问题号号段会 HTTP 200 静默返回无关单。
+
         Args:
             project_id: IDP 项目 ID
-            issue_id: IDP Issue ID
+            issue_id: IDP Issue ID（不是问题号 issueNum）
 
         Returns:
             dict: 缺陷详情

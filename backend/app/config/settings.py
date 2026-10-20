@@ -5,20 +5,79 @@
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 # pragma: no cover
+
+# 仓库根目录：本文件位于 <repo>/backend/app/config/settings.py
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# ---------------------------------------------------------------------------
+# Skill 维护目录（唯一约定，改动前请先读这里）
+# ---------------------------------------------------------------------------
+# 1. **唯一维护目录**：`<repo>/.claude/skills/`。
+#    每个 agent 一个子目录：`<repo>/.claude/skills/<agent>/<skill>/SKILL.md`。
+#    不要在 `backend/workspace/**` 下另存一份 skill —— 双份副本必然漂移
+#    （历史上 testcase 曾在 backend/workspace/testcase/skills/ 另存一份，
+#     其中 uat-scenario-design 更新到 194 行而 .claude 侧仍是 117 行）。
+#
+# 2. **接线约定**：所有 `*_skills_root` 一律等于 `.claude/skills`，
+#    agent 侧 `SkillsMiddleware(sources=["/skills/<agent目录>/"])`。
+#    `/skills/` 是 CompositeBackend 的挂载前缀（见各 agent.py 的 routes），
+#    SkillsMiddleware 会把该前缀去掉后拼到 skills_root 上。
+#    因此 `sources=["/skills/"]` + root=`.claude/skills/<agent>` 这种写法
+#    等价但易与上一条混淆，新代码请统一用本约定的写法。
+#
+# 3. **自检**：`app/config/skill_assembly_check.py` 在启动时校验每个 source
+#    真能装配到 SKILL.md，装配失败记 ERROR。新增 agent 需同步其 default_specs。
+# ---------------------------------------------------------------------------
+
 
 class Settings(BaseSettings):
     """应用配置类"""
     
     model_config = SettingsConfigDict(
-        env_file="app/.env",
+        # 绝对路径：``env_file`` 默认按进程 CWD 解析，而本项目存在两种启动方式
+        # （``cd backend && uvicorn app.main:app`` 与仓库根 ``start_server_*.py``）。
+        # 用绝对路径可保证两种方式读到同一份本地配置；外部环境变量仍优先于它。
+        env_file=str(_REPO_ROOT / "backend" / "app" / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def _anchor_relative_roots(self):
+        """把所有相对路径的 ``*_root(s)`` 锚定到仓库根目录。
+
+        这些配置按"仓库根相对路径"书写（如 ``backend/workspace/api``），
+        但 ``env_file`` 是相对 **进程 CWD** 解析的，而实际存在两种启动方式
+        （``cd backend && uvicorn app.main:app`` 与仓库根 ``start_server_*.py``）。
+
+        不锚定的后果是同一份配置在两种启动方式下解析到不同目录，且失败是
+        静默的：实测 ``cd backend`` 启动时 ``testcase_skills_root`` 被解析成
+        ``<repo>/backend/backend/workspace/testcase``（不存在），
+        导致 testcase Agent 加载 0 个 skill（quality-review 等全部失效）。
+        """
+        for name in type(self).model_fields:
+            if not (name.endswith("_root") or name.endswith("_roots")):
+                continue
+            value = getattr(self, name, None)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            path = Path(value)
+            if not path.is_absolute():
+                setattr(self, name, str((_REPO_ROOT / path).resolve()))
+        # idp_project_mapping_path 不以 _root 结尾但被同一 CWD 问题击中：
+        # 相对路径书写、两种启动方式解析结果不同，且失败静默
+        #（实测 cd backend 启动时映射文件"不存在"，自动提单 20/20 因项目未匹配被跳过）。
+        mapping_path = Path(self.idp_project_mapping_path)
+        if not mapping_path.is_absolute():
+            self.idp_project_mapping_path = str((_REPO_ROOT / mapping_path).resolve())
+        return self
     
     # 应用基础配置
     app_name: str = "测试管理系统"
@@ -35,7 +94,12 @@ class Settings(BaseSettings):
     
     # Redis 配置
     redis_uri: str = "redis://localhost:6379/0"
-    
+
+    # 迁移预检（统一导入的幂等键依赖 api_endpoints 唯一约束，迁移未到 head 时必须可见）
+    # 默认只告警不阻断，避免既有部署因新检查无法启动；生产可用环境变量设为 true。
+    migration_preflight_strict: bool = False
+    migration_preflight_enabled: bool = True
+
     @property
     def postgres_url(self) -> str:
         """获取 PostgreSQL 连接 URL"""
@@ -96,6 +160,8 @@ class Settings(BaseSettings):
     secret_key: str = "your-secret-key-change-in-production"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
+    #: 作业总超时（秒）：整个脚本作业（下载/预检/运行器）的上限，防无总超时脚本挂起
+    job_timeout_seconds: int = 1800
 
     # 默认测试用户配置（开发环境使用）
     default_user_id: str = "00000000-0000-0000-0000-000000000001"
@@ -135,7 +201,7 @@ class Settings(BaseSettings):
     # 图片/多模态模型配置（豆包/火山引擎）
     image_parser_api_key: Optional[str] = None  # 豆包 API Key
     image_parser_api_base: str = "https://ark.cn-beijing.volces.com/api/v3"  # 火山引擎 API 地址
-    image_parser_model: str = "doubao-seed-1-6-vision-250815"  # 豆包多模态模型
+    image_parser_model: str = "doubao-seed-2-1-turbo-260628"  # 豆包多模态模型
 
     # 性能测试工作目录配置
     perf_workspace_root: str = "backend/app/agents/perf/workspace"
@@ -146,12 +212,14 @@ class Settings(BaseSettings):
     # 接口测试工作目录配置
     api_workspace_root: str = "backend/workspace/api"
     api_mcp_root: str = "backend/mcp/api"
-    api_skills_root: str = "backend/workspace/api"
+    # 必须与 agent 侧 sources=["/skills/api/"] 匹配，即 <root>/api/<skill>/SKILL.md
+    api_skills_root: str = ".claude/skills"
 
     # Web 测试工作目录配置
     web_mcp_workspace_root: str = "backend/workspace/web_mcp"
     web_mcp_root: str = "backend/mcp/web_mcp"
-    web_mcp_skills_root: str = "backend/workspace/web_mcp"
+    # 同上：sources=["/skills/web_mcp/"]
+    web_mcp_skills_root: str = ".claude/skills"
 
     # Web CLI 测试工作目录配置
     web_cli_workspace_root: str = "backend/workspace/web_cli"
@@ -168,19 +236,21 @@ class Settings(BaseSettings):
 
     # 测试用例工作目录配置
     testcase_workspace_root: str = "backend/workspace/testcase"
-    testcase_skills_root: str = "backend/workspace/testcase"
+    # 统一约定（见下方"Skill 维护目录"说明）：根目录一律 .claude/skills，
+    # agent 侧以 sources=["/skills/<agent目录>/"] 取自己的 skill。
+    testcase_skills_root: str = ".claude/skills"
 
     # 安全测试工作目录配置
     security_workspace_root: str = "backend/workspace/security"
-    security_skills_root: str = ".claude/skills/security"
+    security_skills_root: str = ".claude/skills"
 
     # Android 测试工作目录配置
     android_workspace_root: str = "backend/workspace/android"
-    android_skills_root: str = ".claude/skills/android"
+    android_skills_root: str = ".claude/skills"
 
     # iOS 测试工作目录配置
     ios_workspace_root: str = "backend/workspace/ios"
-    ios_skills_root: str = ".claude/skills/ios"
+    ios_skills_root: str = ".claude/skills"
 
     # 应用端口（用于内部 API 调用）
     app_port: int = 8000

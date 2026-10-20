@@ -197,5 +197,43 @@ backend/app/agents/*/workspace/
 **/conversation_history/
 **/artifacts_backup/
 
+# 误建/游离的嵌套子树（历史上曾出现 backend/backend/，由错误的 CWD/root
+# 复制产生，内含 npm 缓存与报告产物 55MB；清理后加规则防止再次被误提交）
+backend/backend/
+
+# npm 本地缓存（node_modules 已单独忽略）
+.npm-cache/
+
 # Evidence workspace (contains sensitive data, managed locally)
 workspace/evidence/
+
+# 全量回归的工作区临时目录（pytest --basetemp）：沙箱无法删除，避免污染 git status
+.pytest-tmp/
+backend/.pytest-tmp-round/
+
+# 本机会话产物（rev147 提交前梳理）：运行日志 / 临时目录 / 本地配置 / 运行时数据
+.workbuddy/
+.claude/settings.local.json
+.uvicorn-*.err
+*.err.log
+.review-rev*-tmp/
+.review-rev*-utf8-tmp/
+gitnexus-*/
+out_yl_case_audit/
+workspace/
+storage/
+test-videos/
+KB_E2E_TEST_OUTPUT.txt
+KB_SMOKE_TEST_REPORT.json
+KB_VERIFICATION_REPORT.json
+backend/workspace/
+backend/tr94_case_ids.json
+backend/verify_round_final.json
+# 误报单删除留档与参照快照（本地留存，不入库）
+小杨生煎-误报单931769-删除留档-20261020/
+.YL三模块用例双路验证-20261016.ref/
+# 独立 SUT 测试项目（内含登录凭证的 workspace 产物，暂不入库）
+小杨生煎-B端储值充值/
+# 本地构建缓存与 vendored 运行时源
+ui/.next-dev/
+core/

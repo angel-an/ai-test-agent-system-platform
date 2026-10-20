@@ -379,6 +379,11 @@ class IDPDefectService:
         统一格式：【自动化测试】【类型】【业务模块】缺陷现象
         类型：API / Web / 安全
         示例：【自动化测试】【API】【会员卡】分页参数 pageNum=9999 返回 500
+
+        ⚠️ 本口径**仅用于框架自动提单**。人工 / 半自动提单（测试执行人写单）用另一套口径：
+        `【美心-HK】_UAT_<需求名称>，<对象>，<现象>`（`_UAT_` 后跟**需求名称**，不是固定段；
+        同事单里的 `_UAT_CS` 只是"那批需求恰好叫 CS"，属参照实例，不可照抄）。
+        两套口径并存但**不得混用**，详见 `docs/IDP_API_CONTRACT.md` §9.6。
         """
         # 从场景名称中提取业务模块
         module = IDPDefectService._extract_module(scenario_name)

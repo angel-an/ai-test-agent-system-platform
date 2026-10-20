@@ -37,6 +37,19 @@ BACKEND = ROOT / "backend"
 #: 从暂存的后端文件出发，解析这些顶层包
 SCOPE_PREFIXES = ("backend/app/", "backend/alembic/", "backend/scripts/", "backend/tests/")
 
+#: 额外必须扫描的目录（**新增但未被跟踪的文件**，其 import 关系无法从已跟踪文件推导）。
+#:
+#: 盲区成因：本检查器沿 import 图遍历，起点是"提交/暂存里的文件"。
+#: 一个**从未被跟踪、又不被任何已跟踪文件 import** 的文件（如顶层新增测试文件）
+#: 永远不会出现在图里，因此不会被发现。
+#: 实测事故：`tests/test_api_asset_models.py`、`tests/test_postman_parsers.py`
+#: 未跟踪，却被 `p0_baseline_manifest.py` 列为基线目标 →
+#: clean clone 里基线命令直接 exit 4（usage error）。
+EXTRA_SCAN_DIRS = ("backend/tests/",)
+
+#: 清单类文件：其字符串字面量引用会被当作"必须存在"的依赖来检查。
+MANIFEST_FILES = ("backend/tests/p0_baseline_manifest.py",)
+
 #: 基线既有缺口（**显式登记，不静默忽略**）。
 #:
 #: 历史：P0 交付期间此处登记过 7 项（`api_spec_test_generator.py`、
@@ -135,6 +148,42 @@ def main() -> int:
     referenced: dict[str, str] = {}
     missing: dict[str, str] = {}
 
+    # --- 盲区补丁：清单类文件里以字符串字面量引用的文件必须存在**且已被跟踪** ---
+    # （如 p0_baseline_manifest.py 列出的测试目标；它们不被 import，
+    #   因此不进入 import 图，但缺了会让基线命令直接失败）
+    #
+    # 注意：不做"目录下未跟踪文件"的泛扫描 —— 其它工作流的未跟踪测试
+    # 不属于本次交付，泛扫描会产生大量假阳性。本检查只认**显式引用**。
+    # 清单登记为 P1 归属的文件**故意未纳入版本控制**（等待 P1 单独提交），
+    # 因此不算缺口。这里**直接读取清单模块**而不是文本解析 ——
+    # 文本解析曾把注释里的路径也算进去，产生假阳性。
+    p1_registered: set[str] = set()
+    try:
+        import importlib.util
+
+        manifest_path = ROOT / "backend" / "tests" / "p0_baseline_manifest.py"
+        if manifest_path.exists():
+            spec = importlib.util.spec_from_file_location("_p0_manifest", manifest_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            p1_registered = {str(p) for p in getattr(module, "P1_OWNED_TESTS", {})}
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [警告] 读取 P0 清单失败，P1 登记集合按空处理: {type(exc).__name__}")
+
+    for rel in MANIFEST_FILES:
+        manifest = ROOT / rel
+        if not manifest.exists():
+            continue
+        text = manifest.read_text(encoding="utf-8", errors="replace")
+        for quoted in re.findall(r'["\'](tests/[\w./-]+\.py)["\']', text):
+            if quoted in p1_registered:
+                continue
+            target = f"backend/{quoted}"
+            if not (ROOT / target).exists():
+                missing.setdefault(target, f"{rel}（清单引用，文件不存在）")
+            elif target not in tracked and target not in staged:
+                missing.setdefault(target, f"{rel}（清单引用但未被跟踪）")
+
     while queue:
         rel = queue.pop()
         if rel in seen:
@@ -142,6 +191,11 @@ def main() -> int:
         seen.add(rel)
         path = ROOT / rel
         if not path.exists():
+            continue
+        # 只遍历**已提交或已暂存**的源文件：
+        # 工作区里可能还有未纳入本次交付的在途文件（如 P1 的 WIP 模块），
+        # 它们的依赖不属于"提交快照"的完整性责任，不应阻塞本校验。
+        if rel not in tracked and rel not in staged:
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")

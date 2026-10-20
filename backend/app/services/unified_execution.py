@@ -27,6 +27,7 @@ async def execute_with_preflight(
     track: Literal["api", "web", "scenario"],
     executor: Callable[[], Coroutine[Any, Any, dict[str, Any]]],
     gate_config: GateConfig | None = None,
+    skip_manifest_check: bool = False,
 ) -> dict[str, Any]:
     """统一执行入口 — 先预检，通过后执行。
 
@@ -38,6 +39,9 @@ async def execute_with_preflight(
         track: 执行轨道类型
         executor: 实际执行函数（预检通过后调用）
         gate_config: 可选的门控配置（默认从环境变量读取）
+        skip_manifest_check: 跳过 manifest/provenance 检查（Agent Tool 场景），
+            Agent 下载脚本的方式不走 ArtifactPublisher 发布流程，因此没有
+            manifest.json 和 script_provenance.json，需要跳过这些检查。
 
     Returns:
         执行结果字典，预检失败时返回阻断信息
@@ -69,31 +73,68 @@ async def execute_with_preflight(
                 fail_closed=_gate.fail_closed,
             )
 
-    preflight = ExecutionPreflight(gate_config=_gate)
-    try:
-        preflight_result = preflight.require_passed(context, track=track)
+    if skip_manifest_check:
+        # Agent Tool 场景：跳过 manifest/provenance 检查，只做上下文校验和门控检查
+        valid, reason = context.validate()
+        if not valid:
+            return {
+                "success": False,
+                "status": "blocked",
+                "reason_code": "INVALID_CONTEXT",
+                "message": f"运行上下文校验失败: {reason}",
+                "run_id": context.run_id,
+                "track": track,
+                "mode": context.mode,
+            }
+        from app.test_platform.execution_gates import ExecutionGate
+        gate = ExecutionGate(_gate)
+        allowed, gate_reasons = gate.check_all(track)
+        if not allowed:
+            return {
+                "success": False,
+                "status": "blocked",
+                "reason_code": "GATE_BLOCKED",
+                "message": f"执行门控阻断: {'; '.join(gate_reasons)}",
+                "run_id": context.run_id,
+                "track": track,
+                "mode": context.mode,
+            }
+        preflight_result = type('PreflightResult', (), {
+            'to_dict': lambda self: {"status": "passed", "skipped_manifest_check": True},
+        })()
         logger.info(
-            "[execute_with_preflight] 预检通过: run_id=%s, track=%s, mode=%s",
+            "[execute_with_preflight] 预检通过(跳过 manifest 检查): run_id=%s, track=%s, mode=%s",
             context.run_id, track, context.mode,
         )
-    except PreflightBlockedError as e:
-        logger.warning(
-            "[execute_with_preflight] 预检阻断: run_id=%s, track=%s, reason=%s",
-            context.run_id, track, e.result.reason_code,
-        )
-        return {
-            "success": False,
-            "status": "blocked",
-            "run_id": context.run_id,
-            "track": track,
-            "mode": context.mode,
-            "preflight": e.result.to_dict(),
-            "message": f"执行被预检阻断: {e.result.message}",
-        }
+    else:
+        preflight = ExecutionPreflight(gate_config=_gate)
+        try:
+            preflight_result = preflight.require_passed(context, track=track)
+            logger.info(
+                "[execute_with_preflight] 预检通过: run_id=%s, track=%s, mode=%s",
+                context.run_id, track, context.mode,
+            )
+        except PreflightBlockedError as e:
+            logger.warning(
+                "[execute_with_preflight] 预检阻断: run_id=%s, track=%s, reason=%s",
+                context.run_id, track, e.result.reason_code,
+            )
+            return {
+                "success": False,
+                "status": "blocked",
+                "run_id": context.run_id,
+                "track": track,
+                "mode": context.mode,
+                "preflight": e.result.to_dict(),
+                "message": f"执行被预检阻断: {e.result.message}",
+            }
 
     # 2. 真正执行
     try:
         result = await executor()
+        # 确保 result 是 dict（executor 可能返回字符串或其他类型）
+        if not isinstance(result, dict):
+            result = {"success": False, "error": f"执行器返回了非 dict 类型: {type(result).__name__}", "raw_result": str(result)[:1000]}
         result["_preflight"] = preflight_result.to_dict()
         return result
     except Exception as e:

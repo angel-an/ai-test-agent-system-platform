@@ -1,0 +1,161 @@
+{
+  "note": "编译器版本登记表。digest = 执行器模板与编译逻辑源码的 sha256 前12位。改逻辑必须 bump COMPILER_REV 并追加一条记录；只改注释不会改变 digest。由 scripts/check_compiler_rev.py --update 维护。",
+  "entries": [
+    {
+      "rev": "rev118",
+      "digest": "8458a07e1c94",
+      "date": "2026-10-19",
+      "summary": "产物指纹增加 digest 绑定；严格模式三态（auto 默认：无指纹放行、版本倒退拒绝）"
+    },
+    {
+      "rev": "rev119",
+      "digest": "5d266b631550",
+      "date": "2026-10-20",
+      "summary": "字段级上传放行（A1）：field_locators.upload_allow 经 upload_policy.allow_upload_rules 下发，新增 UPLOAD_POLICY 自证日志与 upload_policy_gap 缺口诊断；修复附件类用例无场景 ⇒ 从无上传放行 ⇒ 恒 unverified"
+    },
+    {
+      "rev": "rev121",
+      "digest": "cced68161218",
+      "date": "2026-10-20",
+      "summary": "① CS 模板抽出 enterStorageAccountList：原先 form_executor 的上传隔离分支调用的函数只存在于储值模板，每轮 ReferenceError 静默回退 main_fallback ⇒ 上传独立上下文从未生效（原定 rev120，因下面的 digest 变更合并进本 rev，未单独生效）；② digest 扩围到 web_case_link_service 的 _generate_*_script（AST 静态抽取、不 import）：产物一半来自那些业务模板，原先 digest 只算 web_case_compiler ⇒ 改模板时 digest 不变、registry 的 rev↔digest 一一对应被打破。此后改任一业务模板都会改变 digest"
+    },
+    {
+      "rev": "rev122",
+      "digest": "b0ea57b38745",
+      "date": "2026-10-20",
+      "summary": "隔离上下文先落到登录页再进 CRM：rev121 起 enterStorageAccountList 真的被调用，但隔离上下文是新开 page（about:blank），直接 openCrm 找不到 CRM 入口（TR-730 实测）。只在页面还没加载任何文档时先 goto 登录页；主流程 page 已在控制台，不触发，行为不变。"
+    },
+    {
+      "rev": "rev123",
+      "digest": "afbf4ef34c7d",
+      "date": "2026-10-20",
+      "summary": "隔离上下文改为重放登录：rev122 的 goto 不够——context.storageState() 只带 cookie 与 localStorage，不带 sessionStorage，而本 SUT 会话态在 sessionStorage ⇒ goto 后仍停在登录页（TR-731）。改为调用同一 loginToConsole（含验证码 OCR），与储值模板的入口函数完全同语义。"
+    },
+    {
+      "rev": "rev124",
+      "digest": "d0ab09af20a8",
+      "date": "2026-10-20",
+      "summary": "运行期唯一化 A2：真实落库场景的填值原先在编译期定死（FORM_PLAN 是快照），同一份产物重跑必撞唯一约束 20003，期望受理通道把它判成「疑似缺陷坐实」= 假缺陷。现在 {{RUN_TAG}} 原样留在快照，执行器每次运行生成 MMDDHHMMSS+2 位随机（可用 WEB_RUN_TAG 钉住），fill/type 两条写入路径统一走 runTagValue；「数据重复」类拒绝改判 unverified 而非 blocked；编译期把「真实落库但值固定」列入 run_tag_gap，运行期输出 RUN_TAG_GAP。"
+    },
+    {
+      "rev": "rev125",
+      "digest": "b14a2b1a3531",
+      "date": "2026-10-20",
+      "summary": "run_tag_gap 判据收窄：TR-733 实测店鋪電話 12345678 被「≥4 位连续数字」命中，每轮报一条噪声，而这条诊断正是「重复运行必然 20003」的唯一提示渠道，被噪声淹没等于失效。改为同时要求 ≥2 个字母。另把 run_tag_usage / run_tag_gaps 纳入 digest —— 它们产出计划字段却不在 build_form_plan 源码内，属与 rev120「模板不在 digest 覆盖内」同源的盲点。"
+    },
+    {
+      "rev": "rev126",
+      "digest": "cefa4def22df",
+      "date": "2026-10-20",
+      "summary": "唯一化自证 RUN_TAG_APPLIED：RUN_TAG_USED 只证明算了值，不证明控件里是这个值——maxLength 控件会静默截断，截掉尾段等于没唯一化却仍报「已唯一化」。填入后回读 inputValue 比对，truncated=true 即刻可见。TR-733/734 实测本 SUT 店鋪編號 17 字符未被截断。"
+    },
+    {
+      "rev": "rev127",
+      "digest": "6221b0c68f1a",
+      "date": "2026-10-20",
+      "summary": "随机段 2→3 位（撞车概率 1/1296 → 1/46656），并把「数据重复」判据里的裸词「唯一」去掉：否则「編號唯一性校驗不通過」这种真缺陷文案会被降级成「数据冲突」，属反向误判。改为只认 唯一约/唯一約/unique constraint。"
+    },
+    {
+      "rev": "rev128",
+      "digest": "e2952db64161",
+      "date": "2026-10-20",
+      "summary": "新增业务模板 survey_operation（营销云-系统-调查问卷管理，小杨生煎项目）：link_service 新增 _generate_survey_operation_script（营销云卡片/问卷列表 8 列断言/左侧子菜单遮挡对策）与 _is_survey_operation_case（正向关键词：调查问卷/问卷标题/问卷题目/问卷编码/参与次数）。表单检查与真实落库由 field_locators + negative_scenarios(expect_accept: POST /api/icdp/v1/evaluate) 驱动。"
+    },
+    {
+      "rev": "rev129",
+      "digest": "157c75ecd338",
+      "date": "2026-10-20",
+      "summary": "规则级场景的 request/response 监听器挂到应用所在页面：门户卡片式应用（数盈营销云/交易云）点卡片后新开标签页，anyScope 是那个新 Page，旧实现把监听器挂在主 page（console 门户）上，一个请求都收不到——服务端已受理（数据已落库，实测 TR-742 问卷编码 2464988432）却判 unverified，判定层假阴性。anyScope 是 Page（有 .on）挂 anyScope，FrameLocator（iframe 应用）回退 page。"
+    },
+    {
+      "rev": "rev130",
+      "digest": "9626acb61168",
+      "date": "2026-10-20",
+      "summary": "F-2：提交层四处 page.on(...) 改为 submitListenPage（anyScope 是 Page 时挂应用页面）——rev129 只修了规则级场景那半，提交层同源缺陷未修，门户卡片新开标签页时 submit_phase 会重演「服务端已受理却判 unverified」。F-3：新增 COVERAGE_RECONCILE 对账行与 FORM_PLAN.planned_assertions（build_form_plan 写入，同快照），把 planned/executable/skipped_no_locator/scenario_executed/emitted 收成一条恒等式并输出 unexplained_plan/unexplained_emitted（实测 TR-747 旧产物 7/5/6/2 无法自证，新口径 balanced=true）。"
+    },
+    {
+      "rev": "rev131",
+      "digest": "86829c1ac828",
+      "date": "2026-10-20",
+      "summary": "F-3 修正：render_form_executor 的 FORM_PLAN payload 是白名单字典，rev130 漏登记 planned_assertions，实测 TR-748 打出 planned=0 / unexplained_plan=-3 / balanced=false——对账行自己制造了新误导。本版把 planned_assertions 纳入 payload，使 COVERAGE_RECONCILE 的恒等式 planned = executable + skipped_no_locator + unexplained_plan 可成立。教训记入注释：凡运行期要读的计划字段必须显式登记进 payload。"
+    },
+    {
+      "rev": "rev134",
+      "digest": "13a933797c20",
+      "date": "2026-10-20",
+      "summary": "字段别名与默认值真正落地：aliases 命中写进回执 field_alias_applied，悬空别名单列并告警；aliases/defaults 不再被数成定位器键；RUN_TAG 回读改走 controlValue()，修掉 contenteditable 上 inputValue() 长度错乱导致的唯一化误判"
+    },
+    {
+      "rev": "rev135",
+      "digest": "7f986216a2d5",
+      "date": "2026-10-20",
+      "summary": "rev134 的注释收敛：执行器注释里去掉了会被护栏子串命中的旧调用写法，行为零变化（digest 覆盖模板全文，故必须 bump）"
+    },
+    {
+      "rev": "rev136",
+      "digest": "870d91c58a64",
+      "date": "2026-10-20",
+      "summary": "COVERAGE_RECONCILE 的 plan 侧恒等式减去 config_only_checks：默认选中/条件显示不是文档断言，旧公式把它们算进 executable 导致 unexplained_plan 恒为负（TR-752 实测 -2）"
+    },
+    {
+      "rev": "rev137",
+      "digest": "318c8073e51f",
+      "date": "2026-10-20",
+      "summary": "字段检查前置动作 pre_actions：field_locators 可声明检查前必须先完成的一次点击（labels/for_fields/times/wait_ms），执行器按需在第一条作用于目标字段的检查前触发，输出 PRE_ACTION / PRE_ACTIONS_PLAN 自证行；前置动作失败时后续检查报「前置动作未完成」而非「未定位到输入框」。实测背景：问卷题目卡片在点「新增题目」前根本不存在（探针 [class*=questionCard]=0），定位器本身正确却只能记 unverified。pre_actions 列入 NON_LOCATOR_CONFIG_KEYS 与 payload 白名单，解析函数纳入 digest。"
+    },
+    {
+      "rev": "rev138",
+      "digest": "9b9f815b1d13",
+      "date": "2026-10-20",
+      "summary": "字段级作用域 scope + 现场行诚实化：rev137 让「新增题目」真的点成（TR-754 PRE_ACTION ok=true）后四条断言仍报未定位到输入框，探针证明题目卡片渲染在 <form class=\"ant-form\"> 之外（form.contains(card)=false，同一选择器全文档 1 / 表单内 0）。新增 fields.<字段>.scope=\"page\" 按字段切定位层（不放宽 modal，避免默认值/单选 :has-text 跨区域误命中），hint 与 label 兜底两条路径同时生效，并以 LOCATE_SCOPE / LOCATE_SCOPE_INVALID 自证落地。同时修 [observation] 的 tried：旧实现只回显 placeholder_hint（未配时恒空），而执行用 selector_hint，现场行看起来像没配 hint，把排障引向补一个本来就正确的配置；现写出真实使用的选择器与 scope 层。"
+    },
+    {
+      "rev": "rev139",
+      "digest": "330e790a3e51",
+      "date": "2026-10-20",
+      "summary": "对账口径补 submit_resubmitted：TR-755 实测 emitted=9 / executable=6 / scenario=1 / unexplained_emitted=2 / balanced=false，那 2 条不是丢失——提交层把两条 required_error 又记了一次（真实提交才算证据，是设计）。旧公式把重发算成多发，把没丢报成丢了 2 条。本版用独立包装 submitRec 精确计数（不拿 queued 当代数：超时/中断也会各写一条），summary.submit_phase 增加 emitted，恒等式与 COVERAGE_RECONCILE 日志显式包含 submit_resubmitted。"
+    },
+    {
+      "rev": "rev140",
+      "digest": "01437a4b2b27",
+      "date": "2026-10-21",
+      "summary": ""
+    },
+    {
+      "rev": "rev141",
+      "digest": "c71f129f2d98",
+      "date": "2026-10-21",
+      "summary": ""
+    },
+    {
+      "rev": "rev142",
+      "digest": "8e5b9e97b10a",
+      "date": "2026-10-21",
+      "summary": ""
+    },
+    {
+      "rev": "rev143",
+      "digest": "72922fd1ab9e",
+      "date": "2026-10-21",
+      "summary": ""
+    },
+    {
+      "rev": "rev144",
+      "digest": "79cc95c12187",
+      "date": "2026-10-21",
+      "summary": ""
+    },
+    {
+      "rev": "rev145",
+      "digest": "780de9243194",
+      "date": "2026-10-21",
+      "summary": ""
+    },
+    {
+      "rev": "rev146",
+      "digest": "7d6cfdd460b8",
+      "date": "2026-10-21",
+      "summary": ""
+    }
+  ]
+}

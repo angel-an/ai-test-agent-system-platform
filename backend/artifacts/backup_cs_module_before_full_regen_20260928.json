@@ -1,0 +1,2215 @@
+{
+ "case_count": 35,
+ "cases": [
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-152071",
+   "name": "Service Mode-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Service Mode（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "不存在的枚举值",
+      "kind": "enum",
+      "rule": "枚舉内容Dine-in，In-Store Takeaway，Onlinetakeaway，3rd Party Platform",
+      "field": "Service Mode",
+      "expect": "reject",
+      "allowed": [
+       "Dine-in",
+       "In-Store Takeaway",
+       "Onlinetakeaway",
+       "3rd Party Platform"
+      ]
+     },
+     {
+      "data": "Dine-in",
+      "kind": "enum",
+      "rule": "枚舉内容Dine-in，In-Store Takeaway，Onlinetakeaway，3rd Party Platform",
+      "field": "Service Mode",
+      "expect": "accept"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Service Mode",
+     "source": {
+      "row": 4,
+      "table": 7,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-7cdc452693"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "182c1681-25f7-462a-86f6-72052153467f",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T11:02:29.245522+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "正向",
+   "tp_code": "FR-7cdc452693",
+   "risk_level": "medium",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第4行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-824498",
+   "name": "Subject-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Subject（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Subject",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Subject",
+     "source": {
+      "row": 3,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-29654a135b"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "7edba1d6-2006-4a7c-8831-ab2ee93f4762",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-29654a135b",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第3行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-942147",
+   "name": "Subject-边界值与格式校验（最长50字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Subject（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "50字",
+      "kind": "max_length",
+      "rule": "限制50個字",
+      "field": "Subject",
+      "expect": "accept"
+     },
+     {
+      "data": "51字",
+      "kind": "max_length",
+      "rule": "限制50個字",
+      "field": "Subject",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Subject",
+     "source": {
+      "row": 3,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-29654a135b"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "0e9880fc-ce4e-480a-93db-0a0dd58a8138",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-29654a135b",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第3行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-764192",
+   "name": "Description-边界值与格式校验（最长500字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Description（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "500字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Description",
+      "expect": "accept"
+     },
+     {
+      "data": "501字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Description",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Description",
+     "source": {
+      "row": 4,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-74f183a326"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "abc779e8-d7ea-4bc1-8ce4-1be78da2a1f6",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-74f183a326",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第4行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-317979",
+   "name": "Attachments-边界值与格式校验（文件≤10M）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Attachments（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "<=10M",
+      "kind": "file_size",
+      "rule": "文件大小不超過10m",
+      "field": "Attachments",
+      "expect": "accept"
+     },
+     {
+      "data": ">10M",
+      "kind": "file_size",
+      "rule": "文件大小不超過10m",
+      "field": "Attachments",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Attachments",
+     "source": {
+      "row": 5,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-6b458ab562"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "c9291a2f-37fb-4a16-b271-d6bf822ba8c3",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-6b458ab562",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第5行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-803945",
+   "name": "Subject-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Subject（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Subject",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Subject",
+     "source": {
+      "row": 8,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-29654a135b"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "e04f1d42-d295-45cb-b178-4816ca6d77b1",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-29654a135b",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第8行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-913385",
+   "name": "Subject-边界值与格式校验（最长50字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Subject（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "50字",
+      "kind": "max_length",
+      "rule": "限制50個字",
+      "field": "Subject",
+      "expect": "accept"
+     },
+     {
+      "data": "51字",
+      "kind": "max_length",
+      "rule": "限制50個字",
+      "field": "Subject",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Subject",
+     "source": {
+      "row": 8,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-29654a135b"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "fc849aa5-0e94-47e9-8208-7185805cae3e",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-29654a135b",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第8行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-339164",
+   "name": "Description-边界值与格式校验（最长500字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Description（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "500字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Description",
+      "expect": "accept"
+     },
+     {
+      "data": "501字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Description",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Description",
+     "source": {
+      "row": 11,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-74f183a326"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "5a841efd-9415-445c-8da2-7010eb7d2dca",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-74f183a326",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第11行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-822857",
+   "name": "Description-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Description（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Description",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Description",
+     "source": {
+      "row": 14,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-74f183a326"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "f547caa5-3ee0-4e43-b184-ab032ae6cfff",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-74f183a326",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第14行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-437493",
+   "name": "Description-边界值与格式校验（最长500字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Description（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "500字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Description",
+      "expect": "accept"
+     },
+     {
+      "data": "501字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Description",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Description",
+     "source": {
+      "row": 14,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-74f183a326"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "03e34c39-e7d4-401e-8bef-a5380f635f7a",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-74f183a326",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第14行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-719632",
+   "name": "Attachment-边界值与格式校验（文件≤10M）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Attachment（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "<=10M",
+      "kind": "file_size",
+      "rule": "文件大小不超過10m",
+      "field": "Attachment",
+      "expect": "accept"
+     },
+     {
+      "data": ">10M",
+      "kind": "file_size",
+      "rule": "文件大小不超過10m",
+      "field": "Attachment",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Attachment",
+     "source": {
+      "row": 16,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-b42ae89ce4"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "91ff6127-675a-48b9-b6b8-c844c6043896",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-b42ae89ce4",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第16行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-378661",
+   "name": "reply-边界值与格式校验（最长100字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：reply（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "100字",
+      "kind": "max_length",
+      "rule": "限制100個字",
+      "field": "reply",
+      "expect": "accept"
+     },
+     {
+      "data": "101字",
+      "kind": "max_length",
+      "rule": "限制100個字",
+      "field": "reply",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "reply",
+     "source": {
+      "row": 18,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-dfa33fe9f9"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "4da96d91-b831-4d59-9a93-ef7fa61ac33e",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-dfa33fe9f9",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第18行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-198988",
+   "name": "Attachment-边界值与格式校验（文件≤4M）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Attachment（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "<=4M",
+      "kind": "file_size",
+      "rule": "文件大小不超過4M",
+      "field": "Attachment",
+      "expect": "accept"
+     },
+     {
+      "data": ">4M",
+      "kind": "file_size",
+      "rule": "文件大小不超過4M",
+      "field": "Attachment",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Attachment",
+     "source": {
+      "row": 19,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-b42ae89ce4"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "0de4a389-51c8-472c-a7e5-beb003aa3c73",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-b42ae89ce4",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第19行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-319218",
+   "name": "Subject-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Subject（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Subject",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Subject",
+     "source": {
+      "row": 21,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-29654a135b"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "6db5258e-8e1d-406e-b007-b4b48a23e63f",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-29654a135b",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第21行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-460749",
+   "name": "Subject-边界值与格式校验（最长50字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Subject（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "50字",
+      "kind": "max_length",
+      "rule": "限制50個字",
+      "field": "Subject",
+      "expect": "accept"
+     },
+     {
+      "data": "51字",
+      "kind": "max_length",
+      "rule": "限制50個字",
+      "field": "Subject",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Subject",
+     "source": {
+      "row": 21,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-29654a135b"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "47839ccb-eb91-439e-8798-367a03b0423d",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-29654a135b",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第21行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-343779",
+   "name": "Description-边界值与格式校验（最长500字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Description（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "500字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Description",
+      "expect": "accept"
+     },
+     {
+      "data": "501字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Description",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Description",
+     "source": {
+      "row": 26,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-74f183a326"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "95f2acda-ccd8-4bda-b2ff-340a92d80603",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-74f183a326",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第26行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-284588",
+   "name": "Member-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Member（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Member",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Member",
+     "source": {
+      "row": 4,
+      "table": 32,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-3e30d7f14e"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "4faac681-6428-4b32-a337-ffbb4a756d5e",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T11:02:29.245522+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-3e30d7f14e",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第4行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-135305",
+   "name": "Case-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Case（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Case",
+      "expect": "reject"
+     },
+     {
+      "data": "",
+      "kind": "default",
+      "rule": "默認為當前case",
+      "field": "Case",
+      "expect": "default=當前case"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Case",
+     "source": {
+      "row": 5,
+      "table": 32,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-4e86b18239"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "a818e2f2-2c91-4b4e-9fff-3c5b5d1d7d06",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:20:58.807353+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-4e86b18239",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第5行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-719277",
+   "name": "Case-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Case（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Case",
+      "expect": "reject"
+     },
+     {
+      "data": "",
+      "kind": "default",
+      "rule": "默認為當前case",
+      "field": "Case",
+      "expect": "default=當前case"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Case",
+     "source": {
+      "row": 2,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-4e86b18239"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "a85eb6e0-f89a-4f6a-865d-a61907e63261",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:20:58.807353+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-4e86b18239",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第2行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-210283",
+   "name": "Select-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Select（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Select",
+      "expect": "reject"
+     },
+     {
+      "data": "",
+      "kind": "default",
+      "rule": "默認Add",
+      "field": "Select",
+      "expect": "default=Add"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Select",
+     "source": {
+      "row": 6,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-df5cc23be1"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "6b2e6a00-6cd6-4fc4-a41b-7b732774feba",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:27:06.727635+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-df5cc23be1",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第6行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-680831",
+   "name": "Select CouponTemplate-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Select CouponTemplate（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Select CouponTemplate",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Select CouponTemplate",
+     "source": {
+      "row": 7,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-d8b3f2f35e"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "96d0bfca-c66c-4fe0-8886-b5461c3bff11",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-d8b3f2f35e",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第7行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-653476",
+   "name": "Stamp Activity-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Stamp Activity（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "不存在的枚举值",
+      "kind": "enum",
+      "rule": "支持選擇一個活動，彈窗選擇活動模板",
+      "field": "Stamp Activity",
+      "expect": "reject",
+      "allowed": [
+       "一個活動",
+       "彈窗選擇活動模板"
+      ]
+     },
+     {
+      "data": "一個活動",
+      "kind": "enum",
+      "rule": "支持選擇一個活動，彈窗選擇活動模板",
+      "field": "Stamp Activity",
+      "expect": "accept"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Stamp Activity",
+     "source": {
+      "row": 9,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-8e0cde599f"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "f62ae26f-22be-42f5-99b2-aabd8d6624c5",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "正向",
+   "tp_code": "FR-8e0cde599f",
+   "risk_level": "medium",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第9行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-236644",
+   "name": "Reasons-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Reasons（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Reasons",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Reasons",
+     "source": {
+      "row": 11,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-1d2bf34605"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "cbffcf5e-0006-4505-ae21-eb86018bbbda",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:20:58.807353+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-1d2bf34605",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第11行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-638287",
+   "name": "Reasons-边界值与格式校验（最长500字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Reasons（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "500字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Reasons",
+      "expect": "accept"
+     },
+     {
+      "data": "501字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Reasons",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Reasons",
+     "source": {
+      "row": 11,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-1d2bf34605"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "c655cf14-34e2-44bc-92de-39378b198ca3",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:20:58.807353+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-1d2bf34605",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第11行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-646407",
+   "name": "Approve-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Approve（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "NOT_AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Approve",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Approve",
+     "source": {
+      "row": 13,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-91a44cc7bb"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "540cef49-f951-42de-b6f6-7b621b59cf8c",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": null,
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-91a44cc7bb",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第13行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-120991",
+   "name": "Call From-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Call From（未标注类型）\n\nWeb验证路径：登录企业控制台(Business Console) -> 点击顶部 CRM 进入嵌入式 CRM -> 展开 Customer Service 菜单 -> 点击 Cases 进入工单列表",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "channel": "web",
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Call From",
+      "expect": "reject"
+     }
+    ],
+    "web_test_id": "67a0aef3-857e-4f7d-8801-af512738a335",
+    "login_profile": "WEB_TEST_DEFAULT",
+    "generated_from": "document_ai",
+    "executable_type": "web_test",
+    "sub_function_id": "617df4f9-0e43-4741-ba9d-02afcaef09b4",
+    "requirement_rule": {
+     "type": "",
+     "field": "Call From",
+     "source": {
+      "row": 22,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-8a4fe59695",
+    "web_validation_path": [
+     "登录企业控制台(Business Console)",
+     "点击顶部 CRM 进入嵌入式 CRM",
+     "展开 Customer Service 菜单",
+     "点击 Cases 进入工单列表"
+    ],
+    "web_path_match_score": 10,
+    "web_path_template_id": "074f27bf-3775-4633-a69c-1ae480213ebc",
+    "web_path_match_status": "matched",
+    "web_path_base_url_source": "template"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "5e12c95c-63e4-4e2b-87eb-10918724b3dd",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:52:55.873964+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-8a4fe59695",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第22行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-834931",
+   "name": "GoodWill Type-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：GoodWill Type（未标注类型）\n\nWeb验证路径：登录企业控制台(Business Console) -> 点击顶部 CRM 进入嵌入式 CRM -> 展开 Customer Service 菜单 -> 点击 Cases 进入工单列表",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "channel": "web",
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "GoodWill Type",
+      "expect": "reject"
+     },
+     {
+      "data": "",
+      "kind": "default",
+      "rule": "默認“Adjust Points”",
+      "field": "GoodWill Type",
+      "expect": "default=“Adjust Points”"
+     }
+    ],
+    "web_test_id": "becee108-178f-4d6b-aa97-a53f519e5ac4",
+    "login_profile": "WEB_TEST_DEFAULT",
+    "generated_from": "document_ai",
+    "executable_type": "web_test",
+    "sub_function_id": "86132943-2878-4ebb-811d-560714603a73",
+    "requirement_rule": {
+     "type": "",
+     "field": "GoodWill Type",
+     "source": {
+      "row": 5,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-29455d2a81",
+    "web_validation_path": [
+     "登录企业控制台(Business Console)",
+     "点击顶部 CRM 进入嵌入式 CRM",
+     "展开 Customer Service 菜单",
+     "点击 Cases 进入工单列表"
+    ],
+    "web_path_match_score": 10,
+    "web_path_template_id": "074f27bf-3775-4633-a69c-1ae480213ebc",
+    "web_path_match_status": "matched",
+    "web_path_base_url_source": "template"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "ff55bc2c-2f2f-4f10-9b99-2fcc61c793d4",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:57:03.559039+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-29455d2a81",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第5行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-228442",
+   "name": "Case Title-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Case Title（輸入框）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Case Title",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "輸入框",
+     "field": "Case Title",
+     "source": {
+      "row": 7,
+      "table": 13,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-2a164214c1"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "15b0fe6a-8bf9-4a2b-9212-cc5435f2f8cf",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T11:02:29.245522+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-2a164214c1",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第7行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-993829",
+   "name": "Case Title-边界值与格式校验（最长50字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Case Title（輸入框）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "50字",
+      "kind": "max_length",
+      "rule": "限制輸入50個字",
+      "field": "Case Title",
+      "expect": "accept"
+     },
+     {
+      "data": "51字",
+      "kind": "max_length",
+      "rule": "限制輸入50個字",
+      "field": "Case Title",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "輸入框",
+     "field": "Case Title",
+     "source": {
+      "row": 7,
+      "table": 13,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-2a164214c1"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "768f7d1e-1b00-47d0-8f43-23cdbf06b531",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T11:02:29.245522+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-2a164214c1",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第7行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-673667",
+   "name": "Brand-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Brand（下拉選擇）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "不存在的枚举值",
+      "kind": "enum",
+      "rule": "支持選擇ETZ",
+      "field": "Brand",
+      "expect": "reject",
+      "allowed": [
+       "ETZ"
+      ]
+     },
+     {
+      "data": "ETZ",
+      "kind": "enum",
+      "rule": "支持選擇ETZ",
+      "field": "Brand",
+      "expect": "accept"
+     },
+     {
+      "data": "",
+      "kind": "default",
+      "rule": "默認YL選項",
+      "field": "Brand",
+      "expect": "default=YL"
+     }
+    ],
+    "requirement_rule": {
+     "type": "下拉選擇",
+     "field": "Brand",
+     "source": {
+      "row": 9,
+      "table": 13,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-1d6ad84f60"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "43a17049-7c88-4083-8eed-5ac10bba93e1",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T11:02:29.245522+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "正向",
+   "tp_code": "FR-1d6ad84f60",
+   "risk_level": "medium",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第9行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-834973",
+   "name": "Member-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Member（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Member",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Member",
+     "source": {
+      "row": 1,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-3e30d7f14e"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "db033244-77bd-4db9-9333-5f16cc83dd8d",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T11:02:29.245522+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-3e30d7f14e",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第1行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-194969",
+   "name": "Business Date-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Business Date（未标注类型）\n\nWeb验证路径：登录企业控制台(Business Console) -> 点击顶部 CRM 进入嵌入式 CRM -> 展开 Customer Service 菜单 -> 点击 Cases 进入工单列表",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "channel": "web",
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Business Date",
+      "expect": "reject"
+     }
+    ],
+    "web_test_id": "61cbadb9-cdc2-48b6-86e5-117b27b0f772",
+    "login_profile": "WEB_TEST_DEFAULT",
+    "generated_from": "document_ai",
+    "executable_type": "web_test",
+    "sub_function_id": "938d3345-e9f4-48fa-bf96-cb512bbd1071",
+    "requirement_rule": {
+     "type": "",
+     "field": "Business Date",
+     "source": {
+      "row": 3,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-a67c90062d",
+    "web_validation_path": [
+     "登录企业控制台(Business Console)",
+     "点击顶部 CRM 进入嵌入式 CRM",
+     "展开 Customer Service 菜单",
+     "点击 Cases 进入工单列表"
+    ],
+    "web_path_match_score": 10,
+    "web_path_template_id": "074f27bf-3775-4633-a69c-1ae480213ebc",
+    "web_path_match_status": "matched",
+    "web_path_base_url_source": "template"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "cc4103b4-dd0d-402e-83e7-6fece5ac9ce3",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:51:53.853331+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-a67c90062d",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第3行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-951454",
+   "name": "Reasons-边界值与格式校验（最长500字）",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Reasons（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "500字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Reasons",
+      "expect": "accept"
+     },
+     {
+      "data": "501字",
+      "kind": "max_length",
+      "rule": "限制500個字",
+      "field": "Reasons",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Reasons",
+     "source": {
+      "row": 12,
+      "table": 27,
+      "rebalanced": false
+     },
+     "required": false,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-1d2bf34605"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "120acb8d-0024-4bbd-a2ea-b450f099f3ab",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:20:58.807353+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "边界",
+   "tp_code": "FR-1d2bf34605",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第12行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-381853",
+   "name": "Branch code-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Branch code（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Branch code",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Branch code",
+     "source": {
+      "row": 4,
+      "table": 43,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-a3dee0013c"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "36dd6f3b-257f-4fb7-aad1-a5780bf21626",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:20:58.807353+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-a3dee0013c",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第4行"
+  },
+  {
+   "project_id": "942226d9-6071-43fa-b2bb-f7cbc93a0028",
+   "folder_id": "abc46f5b-1653-46e8-a73e-a6aad46ee39c",
+   "identifier": "TC-493252",
+   "name": "Call To-必填与取值校验",
+   "description": "基于上传需求文档《CS Module方案説明2.0.pdf》的字段说明生成；字段：Call To（未标注类型）",
+   "preconditions": "已登录并进入需求描述的页面",
+   "priority": "MEDIUM",
+   "state": "new",
+   "test_case_type": "FUNCTIONAL",
+   "template": "TEST_CASE",
+   "feature": null,
+   "scenario": null,
+   "background": null,
+   "automation_status": "AUTOMATED",
+   "custom_fields": {
+    "assertions": [
+     {
+      "data": "",
+      "kind": "required",
+      "rule": "是否必填=是",
+      "field": "Call To",
+      "expect": "reject"
+     }
+    ],
+    "requirement_rule": {
+     "type": "",
+     "field": "Call To",
+     "source": {
+      "row": 23,
+      "table": 25,
+      "rebalanced": false
+     },
+     "required": true,
+     "condition": ""
+    },
+    "requirement_rule_id": "FR-abd3e4345a"
+   },
+   "issues": null,
+   "owner_id": null,
+   "created_by": "00000000-0000-0000-0000-000000000001",
+   "version": 1,
+   "id": "ef1a3e56-05ad-49e9-ba54-a42a0027b8b5",
+   "created_at": "2026-09-28T10:52:12.013732+08:00",
+   "updated_at": "2026-09-28T12:52:55.873964+08:00",
+   "dataset": null,
+   "last_updated_by": null,
+   "module": "CS Module方案説明2.0",
+   "keyword": "反向",
+   "tp_code": "FR-abd3e4345a",
+   "risk_level": "high",
+   "case_kind": "sit",
+   "requirement_id": null,
+   "feature_id": null,
+   "acceptance_id": null,
+   "source_location": "CS Module方案説明2.0.pdf#字段说明表 第23行"
+  }
+ ]
+}

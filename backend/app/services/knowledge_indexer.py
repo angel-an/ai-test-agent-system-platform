@@ -88,13 +88,23 @@ class KnowledgeIndexer:
             document.chunk_count = len(chunks)
             await self.session.flush()
 
+            # 显式提交，确保索引数据落库。
+            # 调用方（get_db 依赖注入）在请求正常返回后也会 commit，
+            # 但此处显式提交可在异常路径下避免"副作用已完成但数据被回滚"的不一致。
+            await self.session.commit()
+
             elapsed = __import__('time').time() - start_time
             logger.info(f"文档 {document_id} 索引完成，耗时 {elapsed:.2f}s")
             return True
 
         except Exception as e:
             logger.error(f"文档索引失败 {document_id}: {e}", exc_info=True)
-            # 更新失败状态
+            # 回滚未提交的事务，避免残留中间状态
+            try:
+                await self.session.rollback()
+            except Exception:
+                pass
+            # 更新失败状态（新事务）
             try:
                 result = await self.session.execute(
                     select(KnowledgeDocument).where(KnowledgeDocument.id == document_id)
@@ -104,6 +114,7 @@ class KnowledgeIndexer:
                     document.status = DocumentStatus.FAILED
                     document.error_message = str(e)[:500]
                     await self.session.flush()
+                    await self.session.commit()
             except Exception:
                 pass
             return False
@@ -317,7 +328,7 @@ class KnowledgeIndexer:
 
         await self.session.flush()
 
-        # 重新索引每个文档
+        # 重新索引每个文档（index_document 内部已显式 commit）
         for doc in documents:
             if await self.index_document(doc.id):
                 success_count += 1

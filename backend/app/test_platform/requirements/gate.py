@@ -7,6 +7,11 @@
 - 只有 ``status == Complete`` 才会被判定为可生成；
 - 结构化结果解析失败 → 默认 Incomplete（由 :mod:`analysis` 保证），同样被门控拦下。
 
+例外（B1，2026-09-24）：**字段规格类文档**（``applicable_profile == "field_spec"``，
+即文档提供 ≥ :data:`FIELD_SPEC_MIN_FIELD_RULES` 条结构化字段规则）按适用档案放行：
+这类文档没有 PRD 章节体（业务目标/操作流程天然不存在），
+`status` 仍如实保留 Incomplete，但允许生成，依据记录在 ``profile_reason`` 与报告里。
+
 本模块同时维护一次生成会话的状态机：
 ``not_started`` → ``generated`` / ``blocked``（被门控拦下时）。
 """
@@ -25,6 +30,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.test_platform.requirements.analysis import (
+    FIELD_SPEC_PROFILE,
     PRDAnalysisResult,
     PRDQualityStatus,
     TestCaseGenerationStatus,
@@ -274,7 +280,12 @@ def check_generation_gate(
     allowed_by_analysis = (
         analysis is not None
         and analysis.can_generate_testcases
-        and analysis.status == PRDQualityStatus.COMPLETE
+        and (
+            analysis.status == PRDQualityStatus.COMPLETE
+            # 字段规格类文档（B1）：文档没有 PRD 章节体，但有足量结构化字段规则；
+            # 状态仍如实为 Incomplete，这里按「适用档案」放行，依据写在 profile_reason 与报告里。
+            or analysis.applicable_profile == FIELD_SPEC_PROFILE
+        )
     )
 
     if allowed_by_analysis:

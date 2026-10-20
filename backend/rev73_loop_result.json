@@ -1,0 +1,37 @@
+{
+ "success": true,
+ "data": {
+  "project_identifier": "PR-9",
+  "test_cases": [
+   {
+    "id": "5e12c95c-63e4-4e2b-87eb-10918724b3dd",
+    "identifier": "TC-120991",
+    "name": "Call From-必填与取值校验"
+   }
+  ],
+  "web_tests": [
+   {
+    "id": "67a0aef3-857e-4f7d-8801-af512738a335",
+    "identifier": "WT-2BE3E37D",
+    "name": "TC-120991 - CS工单管理冒烟",
+    "script_path": "web-tests/PR-9/minimal-loop/5e12c95c-63e4-4e2b-87eb-10918724b3dd/c1eb64308f5642c998ac0287b66680b1/test-script.spec.ts",
+    "test_case_id": "5e12c95c-63e4-4e2b-87eb-10918724b3dd",
+    "web_path_match_status": "matched",
+    "web_path_template_id": "074f27bf-3775-4633-a69c-1ae480213ebc"
+   }
+  ],
+  "test_run": {
+   "id": "98a2c598-749d-40ec-8ec5-453230dc0828",
+   "identifier": "TR-110",
+   "script_jobs": [
+    {
+     "id": "bf79ec0a-70e7-4e22-85a3-e696e914b059",
+     "script_type": "web_test",
+     "script_id": "67a0aef3-857e-4f7d-8801-af512738a335",
+     "script_identifier": "WT-2BE3E37D"
+    }
+   ]
+  },
+  "message": "已创建 1 条 Web 冒烟可执行资产"
+ }
+}

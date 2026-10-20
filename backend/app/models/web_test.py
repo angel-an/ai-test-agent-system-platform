@@ -6,7 +6,9 @@ Web 测试模型
 
 # pragma: no cover  MC80OmFIVnBZMlhscm9ua3VMazZaVWxDTWc9PTpjNjI3Y2RkZA==
 
-from sqlalchemy import ForeignKey, Integer, String, Text, Enum as SQLEnum
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -150,6 +152,38 @@ class WebTest(Base, UUIDMixin, TimestampMixin):
         JSONB,
         nullable=True,
         comment="生成参数"
+    )
+
+    # ---- 编译清单（N7：从 generation_params.compiled_cases 抽成可查询列）----
+    # 口径见 app/services/web_test_compile_manifest.py：
+    # compiled_check_count 为 NULL 表示"不知道"（无产物 / 未生成检查计划），
+    # 只有确实编译过且零条可执行检查时才写 0。
+    compile_status: Mapped[str | None] = mapped_column(
+        String(24),
+        nullable=True,
+        comment="编译状态 compiled/zero_checks/check_plan_missing/not_compiled"
+    )
+    compiled_check_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="可生成的可执行检查数（NULL=未知，0=编译过但零检查）"
+    )
+    compiled_skipped_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="因无定位器被跳过的断言数（NULL=未知）"
+    )
+    compiled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="最近一次编译产物写入时刻（回填值取自 updated_at，为近似值）"
+    )
+    is_legacy_asset: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="历史资产标记（web_agent/web-agent 生成，从未经过用例编译链）"
     )
 
     # 统计信息

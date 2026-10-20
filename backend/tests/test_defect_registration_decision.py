@@ -131,6 +131,20 @@ LIVE_OUTCOME_CASES = [
     # 收紧前这两条 = "blocked"（不登记、漏报）；收紧后必须走进判定层 → create。
     ("Error: expect(received).toBe(200)\nReceived: 503 Service Unavailable", "create"),
     ("退出登录接口异常：HTTP/1.1 503 Service Unavailable", "create"),
+    # --- 渲染/空白页类（2026-10-10 新增规则）---
+    # 现场只有「内容区为空」：路由与菜单正常、无状态码、无断言结果 ⇒ 不登记。
+    # 实测来源：PR-9 CS 批次 9 次 `CS 工单列表未渲染`，在无本规则时被判 create
+    # （仅因 PR-9 未映射 IDP 才以 skipped 落库），属"平台自我断言式提单"风险面。
+    (
+        "Error: expect(received).toBeTruthy()\n\n"
+        "CS 工单列表未渲染（未检测到表格或 Total 分页）",
+        "skip",
+    ),
+    (
+        "Error: expect(received).toBeTruthy()\n\n"
+        "CS 工单列表未渲染（60s 轮询后仍未检测到表格或 Total 分页）",
+        "skip",
+    ),
 ]
 
 
@@ -166,6 +180,45 @@ class TestLiveRegistrationOutcome:
             expected_status_code=200,
         )
         assert decision.decision.value == "skip"
+
+    def test_render_failure_without_sut_evidence_does_not_file(self):
+        """渲染/空白页类失败不开单（2026-10-10 新增）。
+
+        判定依据来自实拍现场：路由 `#/cs/case/list` 与菜单都正常，仅 iframe 内容区为空；
+        独立探针 150s 采样 `bodyLen` 恒 0（无 JS 异常、无请求失败）⇒ 无法归因到 SUT 行为。
+        """
+        decision = DefectDecisionService.decide(
+            test_status="failed",
+            error_message=(
+                "Error: expect(received).toBeTruthy()\n\n"
+                "CS 工单列表未渲染（未检测到表格或 Total 分页）"
+            ),
+            response_status_code=None,
+            expected_status_code=None,
+        )
+        assert decision.decision.value == "skip"
+        assert "渲染" in decision.reason
+
+    def test_render_failure_with_business_assertion_still_files(self):
+        """反向保护：渲染失败若同时带**业务断言结果**，那是 SUT 的真实观测，仍开单。"""
+        decision = DefectDecisionService.decide(
+            test_status="failed",
+            error_message="CS 工单列表未渲染（未检测到表格或 Total 分页）",
+            response_status_code=None,
+            expected_status_code=None,
+            assertion_results=[{"name": "工单列表可见", "status": "failed"}],
+        )
+        assert decision.decision.value == "create"
+
+    def test_render_failure_with_abnormal_status_still_files(self):
+        """反向保护：渲染失败若同时观测到 >=400 状态码，仍开单。"""
+        decision = DefectDecisionService.decide(
+            test_status="failed",
+            error_message="CS 工单列表未渲染（未检测到表格或 Total 分页）",
+            response_status_code=503,
+            expected_status_code=200,
+        )
+        assert decision.decision.value == "create"
 
 
 class TestRealSut503IsNotSwallowed:

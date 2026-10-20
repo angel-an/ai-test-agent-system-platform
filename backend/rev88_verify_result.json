@@ -1,0 +1,19 @@
+{
+ "test_run": "TR-120",
+ "loops": [
+  {
+   "sub": "WSF-TL-NOTE",
+   "wts": [
+    "WT-CBBA9812"
+   ],
+   "http": null
+  },
+  {
+   "sub": "WSF-TL-POST",
+   "wts": [
+    "WT-51E85A60"
+   ],
+   "http": null
+  }
+ ]
+}

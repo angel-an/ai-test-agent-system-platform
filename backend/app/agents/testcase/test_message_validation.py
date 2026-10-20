@@ -1,4 +1,4 @@
-"""Tests for message sequence validation in testcase agent."""
+"""Tests for message sequence validation middleware."""
 
 import sys
 from pathlib import Path
@@ -135,84 +135,88 @@ class TestValidateMessageSequence:
 
 
 class TestMessageSequenceValidationMiddleware:
-    """测试 MessageSequenceValidationMiddleware 的 abefore_model 方法。"""
+    """测试 MessageSequenceValidationMiddleware 的 awrap_model_call 方法。"""
 
-    async def _run_abefore_model(self, middleware, state):
-        """Helper to run abefore_model asynchronously."""
-        return await middleware.abefore_model(state, None)
+    async def _run_awrap_model_call(self, middleware, request):
+        """Helper to run awrap_model_call asynchronously."""
+        async def mock_handler(req):
+            return req
 
-    def test_abefore_model_with_valid_sequence(self):
-        """有效的消息序列应该返回 None（不修改）。"""
+        return await middleware.awrap_model_call(request, mock_handler)
+
+    def _make_request(self, messages):
+        """Helper to create a ModelRequest-like object."""
+        from dataclasses import dataclass
+        from typing import Any
+
+        @dataclass
+        class MockRequest:
+            messages: list
+            system_message: Any = None
+            runtime: Any = None
+
+            def override(self, **kwargs):
+                return MockRequest(
+                    messages=kwargs.get("messages", self.messages),
+                    system_message=kwargs.get("system_message", self.system_message),
+                    runtime=kwargs.get("runtime", self.runtime),
+                )
+
+        return MockRequest(messages=messages)
+
+    def test_awrap_model_call_with_valid_sequence(self):
+        """有效的消息序列应该不修改。"""
         import asyncio
 
         middleware = MessageSequenceValidationMiddleware()
-        state = {
-            "messages": [
-                HumanMessage(content="Use tool"),
-                _make_ai_with_tool_calls(["call_1"]),
-                ToolMessage(content="Result", tool_call_id="call_1"),
-            ]
-        }
-        result = asyncio.run(self._run_abefore_model(middleware, state))
-        assert result is None
+        request = self._make_request([
+            HumanMessage(content="Use tool"),
+            _make_ai_with_tool_calls(["call_1"]),
+            ToolMessage(content="Result", tool_call_id="call_1"),
+        ])
+        result = asyncio.run(self._run_awrap_model_call(middleware, request))
+        # 消息应该保持不变
+        assert len(result.messages) == 3
+        assert result.messages[1].tool_calls
 
-    def test_abefore_model_with_orphan_tool_message(self):
+    def test_awrap_model_call_with_orphan_tool_message(self):
         """孤儿 ToolMessage 应该被移除。"""
         import asyncio
 
         middleware = MessageSequenceValidationMiddleware()
-        state = {
-            "messages": [
-                HumanMessage(content="Hello"),
-                ToolMessage(content="Orphan", tool_call_id="call_orphan"),
-                AIMessage(content="Response"),
-            ]
-        }
-        result = asyncio.run(self._run_abefore_model(middleware, state))
-        assert result is not None
-        assert "messages" in result
-        # 应该包含 RemoveMessage + 修复后的消息
-        from langgraph.graph.message import RemoveMessage
+        request = self._make_request([
+            HumanMessage(content="Hello"),
+            ToolMessage(content="Orphan", tool_call_id="call_orphan"),
+            AIMessage(content="Response"),
+        ])
+        result = asyncio.run(self._run_awrap_model_call(middleware, request))
+        assert len(result.messages) == 2
+        assert isinstance(result.messages[0], HumanMessage)
+        assert isinstance(result.messages[1], AIMessage)
 
-        assert any(isinstance(m, RemoveMessage) for m in result["messages"])
-        # 过滤掉 RemoveMessage，检查剩余消息
-        non_remove = [m for m in result["messages"] if not isinstance(m, RemoveMessage)]
-        assert len(non_remove) == 2
-        assert isinstance(non_remove[0], HumanMessage)
-        assert isinstance(non_remove[1], AIMessage)
-
-    def test_abefore_model_with_missing_tool_response(self):
+    def test_awrap_model_call_with_missing_tool_response(self):
         """缺少 ToolMessage 时应该清除 AIMessage 的 tool_calls。"""
         import asyncio
 
         middleware = MessageSequenceValidationMiddleware()
-        ai_msg = _make_ai_with_tool_calls(["call_1"])
-        state = {
-            "messages": [
-                HumanMessage(content="Use tool"),
-                ai_msg,
-                AIMessage(content="Next"),
-            ]
-        }
-        result = asyncio.run(self._run_abefore_model(middleware, state))
-        assert result is not None
-        assert "messages" in result
-        from langgraph.graph.message import RemoveMessage
-
-        assert any(isinstance(m, RemoveMessage) for m in result["messages"])
-        non_remove = [m for m in result["messages"] if not isinstance(m, RemoveMessage)]
-        assert len(non_remove) == 3
+        request = self._make_request([
+            HumanMessage(content="Use tool"),
+            _make_ai_with_tool_calls(["call_1"]),
+            AIMessage(content="Next"),
+        ])
+        result = asyncio.run(self._run_awrap_model_call(middleware, request))
+        assert len(result.messages) == 3
         # AIMessage 的 tool_calls 应该被清除
-        assert not non_remove[1].tool_calls
+        assert not result.messages[1].tool_calls
 
-    def test_abefore_model_empty_messages(self):
-        """空消息列表应该返回 None。"""
+    def test_awrap_model_call_empty_messages(self):
+        """空消息列表应该不修改。"""
         import asyncio
 
         middleware = MessageSequenceValidationMiddleware()
-        state = {"messages": []}
-        result = asyncio.run(self._run_abefore_model(middleware, state))
-        assert result is None
+        request = self._make_request([])
+        result = asyncio.run(self._run_awrap_model_call(middleware, request))
+        assert len(result.messages) == 0
 
 
 if __name__ == "__main__":

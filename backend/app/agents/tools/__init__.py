@@ -28,7 +28,7 @@ from app.agents.tools.web import (
     ALL_WEB_TOOLS,
     get_local_tools as get_web_local_tools,
 )
-from app.agents.tools.api import (
+from app.agents.api.tools import (
     OPENAPI_TOOLS,
     ARTIFACT_TOOLS as API_ARTIFACT_TOOLS,
     SCRIPT_TOOLS as API_SCRIPT_TOOLS,

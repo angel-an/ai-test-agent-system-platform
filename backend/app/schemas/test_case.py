@@ -218,6 +218,23 @@ class TestCaseInfo(BaseModel):
     feature_id: Optional[str] = Field(default=None, description="功能点编号，如 FP-001")
     acceptance_id: Optional[str] = Field(default=None, description="验收标准编号")
     source_location: Optional[str] = Field(default=None, description="需求来源位置")
+    #: 最近一次执行状态（来源 test_run_test_cases.latest_status）。
+    #: 与 status(=用例生命周期 state) 区分：后者执行不会更新，列表里永远显示"新建"。
+    latest_run_status: Optional[str] = Field(
+        default=None,
+        description="最近一次执行状态：PASSED/FAILED/SKIPPED/BLOCKED/NOT_EXECUTED",
+    )
+    latest_run_identifier: Optional[str] = Field(
+        default=None, description="最近一次执行的运行标识（如 TR-54）"
+    )
+    #: 执行原因/明细（逐条断言的 name=outcome（observed）摘要）。
+    #: 作用：让 SKIPPED/NOT_EXECUTED 也能说明"为什么"，避免状态变成新的"灰色通过"。
+    latest_run_reason: Optional[str] = Field(
+        default=None, description="最近一次执行的原因/明细（断言级摘要）"
+    )
+    latest_run_unverified: Optional[int] = Field(
+        default=None, description="最近一次执行中未验证的断言条数"
+    )
     links: Optional[LinkInfo] = Field(default=None, description="相关资源链接")
 
     model_config = {"from_attributes": True}

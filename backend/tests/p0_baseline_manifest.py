@@ -36,8 +36,12 @@ P0_ROOT_FILES = [
     "tests/test_api_spec_generator.py",
 ]
 
-#: P1 归属的测试文件（**必须排除**，等 P1 单独验收后另立基线）
-P1_EXCLUDED = {
+#: P1 归属的测试文件（**不属于 P0 基线**，因此不在 P0_ROOTS/P0_ROOT_FILES 中）。
+#:
+#: 说明：这里只做**登记说明**，不放进 P0 覆盖列表 —— 之前把它写成"必须排除"
+#: 会让 `--ignore` 指向一个未跟踪文件，语义上像是引用了一个不存在的目标。
+#: P1 单独验收时，应在其自己的基线清单里显式列出这些文件。
+P1_OWNED_TESTS = {
     "tests/api/test_contract_driven_p1.py":
         "P1 契约驱动生成 + 执行前环境门禁（未提交，留在工作区）",
     "tests/platform/test_collection_assertions_and_preflight.py":

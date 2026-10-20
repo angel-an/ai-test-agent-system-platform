@@ -706,6 +706,7 @@ create_web_sub_function(
 | `sub_function_id` | 否 | 单个子功能 ID（用于关联测试报告到子功能） |
 | `sub_function_ids` | 否 | 多个子功能 ID，逗号分隔（合并脚本场景） |
 | `reporter` | 否 | 报告格式 (html, json, list)，默认 html |
+| `run_id` | 否 | 运行标识符（可选，不传时自动生成格式为 run_YYYYMMDD_HHMMSS） |
 
 ## 💡 重要提醒
 

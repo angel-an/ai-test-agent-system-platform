@@ -10,6 +10,7 @@ andan
 
 import logging
 import os
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Optional, Any
 
@@ -38,7 +39,9 @@ async def _make_http_request(
 ) -> dict[str, Any]:
     """发送 HTTP 请求的通用函数"""
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # trust_env=False：本函数只调用本机 API（localhost），绝不应走系统代理——
+        # 沙箱/企业代理环境下默认 trust_env 会把 localhost 请求转给代理导致间歇 404（实测踩坑）。
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             response = await client.request(
                 method=method,
                 url=url,
@@ -1306,3 +1309,137 @@ async def clear_staged_uat_scenarios() -> str:
     """清空 UAT 暂存区。仅在用户明确表示"重做 UAT、放弃之前的场景"时调用。"""
     n = _get_staging().clear_uat()
     return _json.dumps({"cleared_count": n, "message": f"已清空 UAT 暂存区（{n} 个场景）。"}, ensure_ascii=False)
+
+
+# ============ 补规则转自动工具（2026-09-25 rev66）============
+
+@tool
+async def supplement_case_rule_tool(
+    project_identifier: str,
+    test_case_identifier: str,
+    rule_field: Optional[str] = None,
+    rule_range: Optional[str] = None,
+    rule_required: bool = False,
+    rule_condition: Optional[str] = None,
+    requirement_rule: Optional[dict[str, Any]] = None,
+    assertions: Optional[list[dict[str, Any]]] = None,
+    create_test_run: bool = False,
+) -> dict[str, Any]:
+    """
+    给「需人工执行」的用例补充规则体与断言，一条指令完成全链路转换：
+    读取用例 → 写入规则体+断言 → 撤销 manual_execution 标记与「需人工执行」标签 → 触发重编译。
+
+    使用场景：用户说"给 TC-xxx 补充规则/断言，让它可以自动执行"。
+    注意：断言值必须来自需求文档真实约束，不要编造文档里不存在的判定标准。
+
+    Args:
+        project_identifier: 项目标识符，如 'PR-2'
+        test_case_identifier: 测试用例标识符，如 'TC-519063'
+        rule_field: 规则字段名（便捷参数），如 '企业账户充值金额'
+        rule_range: 取值范围原文（便捷参数），如 '(0,99999]'
+        rule_required: 是否必填（便捷参数）
+        rule_condition: 显示条件（可选便捷参数）
+        requirement_rule: 完整规则体 dict（优先级高于便捷参数），结构如
+            {"field": "企业账户充值金额", "type": "数字", "required": true, "condition": ""}
+        assertions: 断言列表，每条形如
+            {"kind": "boundary", "field": "企业账户充值金额", "data": "100000",
+             "expect": "reject", "rule": "(0,99999]"}
+            kind 可选：required/enum/default/boundary/precision/max_length/max_count/file_format/file_size
+        create_test_run: 重编译时是否同时创建并启动测试运行（默认 False，只重编译）
+    """
+    if requirement_rule is None and not rule_field:
+        return {"success": False, "message": "必须提供 requirement_rule 或 rule_field（规则字段名）"}
+    if not assertions:
+        return {"success": False, "message": "必须提供至少一条断言（assertions），否则用例仍无法自动执行"}
+
+    # 1) 读取用例现有数据（tags/custom_fields 需全量带回，PATCH 是整字段替换）
+    get_url = _get_api_url(
+        f"/projects/{project_identifier}/test-cases/{test_case_identifier}"
+    )
+    get_resp = await _make_http_request(method="GET", url=get_url)
+    if not get_resp.get("success"):
+        return {"success": False, "message": f"读取用例 {test_case_identifier} 失败"}
+    case = get_resp.get("data") or {}
+    case_id = case.get("id")
+    custom_fields = dict(case.get("custom_fields") or {})
+
+    # 2) 写入规则体与断言（断言 schema 与生成链路一致；撤销人工执行标记）
+    if requirement_rule is not None:
+        custom_fields["requirement_rule"] = requirement_rule
+    else:
+        custom_fields["requirement_rule"] = {
+            "field": rule_field,
+            "required": rule_required,
+            "condition": rule_condition or "",
+            "range_raw": rule_range or "",
+        }
+    custom_fields["requirement_rule"]["source"] = {
+        "from": "manual_supplement",
+        "via": "assistant_tool",
+    }
+    custom_fields["assertions"] = assertions
+    # 来源标记（2026-09-29）：人工/助手回写的断言标 manual，
+    # 需求文档变更时可据此列出需要人工复核的断言（文档抽取的标 doc_extracted）
+    custom_fields["assertions_source"] = "manual"
+    custom_fields["assertions_updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    custom_fields.pop("manual_execution", None)
+
+    patch_url = _get_api_url(
+        f"/projects/{project_identifier}/test-cases/{test_case_identifier}"
+    )
+    patch_resp = await _make_http_request(
+        method="PATCH", url=patch_url, json_data={"custom_fields": custom_fields}
+    )
+    if not patch_resp.get("success"):
+        return {"success": False, "message": "写入规则/断言失败（custom_fields 更新被拒绝）"}
+
+    # 3) 撤销「需人工执行」标签（tags 为 REPLACE 语义：传过滤后的全量列表）
+    tags_removed = False
+    old_tags = list(case.get("tags") or [])
+    new_tags = [t for t in old_tags if t != "需人工执行"]
+    if new_tags != old_tags:
+        tag_resp = await _make_http_request(
+            method="PATCH", url=patch_url, json_data={"tags": new_tags}
+        )
+        tags_removed = bool(tag_resp.get("success"))
+
+    # 4) 触发重编译（minimal-loop 内对本批次全部用例重新编译并重打标）
+    recompile: dict[str, Any] = {"triggered": False}
+    if case_id:
+        loop_url = _get_api_url(f"/projects/{project_identifier}/web-case-links/minimal-loop")
+        loop_resp = await _make_http_request(
+            method="POST",
+            url=loop_url,
+            json_data={
+                "test_case_ids": [case_id],
+                "create_test_run": bool(create_test_run),
+            },
+        )
+        if loop_resp.get("success"):
+            loop_data = loop_resp.get("data") or {}
+            recompile = {
+                "triggered": True,
+                "web_tests": len(loop_data.get("web_tests") or []),
+                "test_run": (loop_data.get("test_run") or {}).get("identifier"),
+            }
+        else:
+            recompile["error"] = str(loop_resp.get("message") or loop_resp.get("detail") or "重编译失败")
+
+    still_manual = "manual_execution" in ((patch_resp.get("data") or {}).get("custom_fields") or {})
+    return {
+        "success": True,
+        "message": (
+            f"{test_case_identifier} 已补充规则体（{custom_fields['requirement_rule'].get('field')}）"
+            f"与 {len(assertions)} 条断言，撤销人工执行标记{'与「需人工执行」标签' if tags_removed else ''}，"
+            "并已触发重编译。"
+        ),
+        "data": {
+            "tags_removed": tags_removed,
+            "recompile": recompile,
+            "note": (
+                "重编译后如用例仍被标记需人工执行（manual_execution 重新出现），"
+                "说明断言仍未通过编译校验，请检查断言字段与结构。"
+                if not still_manual else "请复查断言结构。"
+            ),
+        },
+    }

@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.attachment import Attachment, AttachmentEntityType
 from app.models.web_function import WebSubFunction
 from app.models.web_test import WebTest, WebTestRun
+from app.services.web_test_compile_manifest import apply_compile_manifest
 from app.config.minio_client import MinIOClient
 from app.config.database import async_session_factory
 from app.config.settings import settings
@@ -746,6 +747,8 @@ async def save_web_test_script(
                     script_language=script_language,
                     generated_by_agent="web-agent"
                 )
+                # N7：旧链路生成的资产没有编译产物 → 打 legacy 标记（检查数为 NULL，不写 0）
+                apply_compile_manifest(web_test)
                 session.add(web_test)
                 print(f"[save_web_test_script] 创建新 WebTest: {identifier}")
 
@@ -1071,6 +1074,8 @@ async def save_web_test_report(
                     script_language="python",
                     generated_by_agent="web-agent"
                 )
+                # N7：同上，报告落库时自动创建的资产同样属旧链路
+                apply_compile_manifest(web_test)
                 session.add(web_test)
                 await session.flush()
                 print(f"[save_web_test_report] 自动创建 WebTest: {web_test.id}")
