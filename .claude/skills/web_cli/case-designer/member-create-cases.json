@@ -1,0 +1,357 @@
+[
+  {
+    "name": "点击新建按钮跳转 - 进入新建会员页面",
+    "description": "验证在会员管理页面点击「新建」按钮，可以正确跳转到新建会员页面/弹窗",
+    "priority": "high",
+    "prerequisites": [
+      "用户已登录系统",
+      "用户已进入会员管理页面（列表已加载）",
+      "用户拥有会员管理的新建权限"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "navigate",
+        "description": "导航到登录页面",
+        "target": "登录页面",
+        "locator": null,
+        "data": "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/login"
+      },
+      {
+        "step_number": 2,
+        "action": "fill",
+        "description": "填写用户名",
+        "target": "用户名输入框",
+        "locator": "getByLabel('用户名')",
+        "data": "andan"
+      },
+      {
+        "step_number": 3,
+        "action": "fill",
+        "description": "填写密码",
+        "target": "密码输入框",
+        "locator": "getByLabel('密码')",
+        "data": "andan123"
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "点击登录按钮",
+        "target": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "data": null
+      },
+      {
+        "step_number": 5,
+        "action": "click",
+        "description": "点击「数盈·营销云」入口",
+        "target": "数盈·营销云入口",
+        "locator": "getByText('数盈·营销云')",
+        "data": null
+      },
+      {
+        "step_number": 6,
+        "action": "click",
+        "description": "在左侧菜单中点击「用户」展开菜单",
+        "target": "用户菜单项",
+        "locator": "getByText('用户')",
+        "data": null
+      },
+      {
+        "step_number": 7,
+        "action": "click",
+        "description": "点击「会员管理」进入列表页",
+        "target": "会员管理菜单项",
+        "locator": "getByText('会员管理')",
+        "data": null
+      },
+      {
+        "step_number": 8,
+        "action": "click",
+        "description": "点击「新建」按钮",
+        "target": "新建按钮",
+        "locator": "getByRole('button', { name: '新建' })",
+        "data": null
+      }
+    ],
+    "expected_result": "点击「新建」按钮后，页面跳转至新建会员页面（或打开新建会员弹窗/抽屉），展示会员信息填写表单",
+    "verification_points": [
+      {
+        "type": "url",
+        "description": "验证 URL 已跳转至新建会员页面",
+        "locator": null,
+        "expected": "/customer/memberlist"
+      },
+      {
+        "type": "element_visible",
+        "description": "验证新建会员表单页面已显示",
+        "locator": "getByRole('button', { name: '新建' })",
+        "expected": false
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "用户名输入框",
+        "locator": "getByLabel('用户名')",
+        "type": "textbox"
+      },
+      {
+        "name": "密码输入框",
+        "locator": "getByLabel('密码')",
+        "type": "textbox"
+      },
+      {
+        "name": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "type": "button"
+      },
+      {
+        "name": "数盈·营销云入口",
+        "locator": "getByText('数盈·营销云')",
+        "type": "link"
+      },
+      {
+        "name": "用户菜单项",
+        "locator": "getByText('用户')",
+        "type": "menu_item"
+      },
+      {
+        "name": "会员管理菜单项",
+        "locator": "getByText('会员管理')",
+        "type": "menu_item"
+      },
+      {
+        "name": "新建按钮",
+        "locator": "getByRole('button', { name: '新建' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "create-member", "navigation", "smoke-test"]
+  },
+  {
+    "name": "成功创建会员 - 填写完整信息提交",
+    "description": "验证在新建会员页面填写所有必填字段和可选字段后，提交表单可以成功创建会员",
+    "priority": "high",
+    "prerequisites": [
+      "用户已登录系统",
+      "用户已进入新建会员页面",
+      "使用唯一手机号以避免与已有数据冲突"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "navigate",
+        "description": "导航到登录页面",
+        "target": "登录页面",
+        "locator": null,
+        "data": "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/login"
+      },
+      {
+        "step_number": 2,
+        "action": "fill",
+        "description": "填写用户名",
+        "target": "用户名输入框",
+        "locator": "getByLabel('用户名')",
+        "data": "andan"
+      },
+      {
+        "step_number": 3,
+        "action": "fill",
+        "description": "填写密码",
+        "target": "密码输入框",
+        "locator": "getByLabel('密码')",
+        "data": "andan123"
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "点击登录按钮",
+        "target": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "data": null
+      },
+      {
+        "step_number": 5,
+        "action": "click",
+        "description": "点击「数盈·营销云」入口",
+        "target": "数盈·营销云入口",
+        "locator": "getByText('数盈·营销云')",
+        "data": null
+      },
+      {
+        "step_number": 6,
+        "action": "click",
+        "description": "在左侧菜单中点击「用户」展开菜单",
+        "target": "用户菜单项",
+        "locator": "getByText('用户')",
+        "data": null
+      },
+      {
+        "step_number": 7,
+        "action": "click",
+        "description": "点击「会员管理」进入列表页",
+        "target": "会员管理菜单项",
+        "locator": "getByText('会员管理')",
+        "data": null
+      },
+      {
+        "step_number": 8,
+        "action": "click",
+        "description": "点击「新建」按钮进入新建会员页面",
+        "target": "新建按钮",
+        "locator": "getByRole('button', { name: '新建' })",
+        "data": null
+      },
+      {
+        "step_number": 9,
+        "action": "fill",
+        "description": "填写手机号码（必填）",
+        "target": "手机号码输入框",
+        "locator": "getByLabel('手机号码')",
+        "data": "13800138000"
+      },
+      {
+        "step_number": 10,
+        "action": "fill",
+        "description": "填写会员姓名（必填）",
+        "target": "姓名输入框",
+        "locator": "getByLabel('姓名')",
+        "data": "张三"
+      },
+      {
+        "step_number": 11,
+        "action": "fill",
+        "description": "填写会员卡号",
+        "target": "会员卡号输入框",
+        "locator": "getByLabel('会员卡号')",
+        "data": "VIP20260001"
+      },
+      {
+        "step_number": 12,
+        "action": "select",
+        "description": "选择会员状态",
+        "target": "会员状态下拉框",
+        "locator": "getByLabel('会员状态')",
+        "data": "激活"
+      },
+      {
+        "step_number": 13,
+        "action": "select",
+        "description": "选择会员等级",
+        "target": "会员等级下拉框",
+        "locator": "getByLabel('会员等级')",
+        "data": "普通会员"
+      },
+      {
+        "step_number": 14,
+        "action": "select",
+        "description": "选择付费会员类型",
+        "target": "付费会员下拉框",
+        "locator": "getByLabel('付费会员')",
+        "data": "否"
+      },
+      {
+        "step_number": 15,
+        "action": "click",
+        "description": "点击「提交」或「保存」按钮",
+        "target": "提交按钮",
+        "locator": "getByRole('button', { name: '提交' })",
+        "data": null
+      }
+    ],
+    "expected_result": "表单提交成功，显示创建成功的提示信息，页面跳转回会员列表页，新创建的会员出现在列表中",
+    "verification_points": [
+      {
+        "type": "element_visible",
+        "description": "验证创建成功的提示消息显示",
+        "locator": "getByText('创建成功')",
+        "expected": true
+      },
+      {
+        "type": "url",
+        "description": "验证 URL 已跳转回会员列表页",
+        "locator": null,
+        "expected": "/customer/memberlist"
+      },
+      {
+        "type": "element_text",
+        "description": "验证新创建的会员出现在列表中",
+        "locator": "getByText('13800138000')",
+        "expected": "13800138000"
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "用户名输入框",
+        "locator": "getByLabel('用户名')",
+        "type": "textbox"
+      },
+      {
+        "name": "密码输入框",
+        "locator": "getByLabel('密码')",
+        "type": "textbox"
+      },
+      {
+        "name": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "type": "button"
+      },
+      {
+        "name": "数盈·营销云入口",
+        "locator": "getByText('数盈·营销云')",
+        "type": "link"
+      },
+      {
+        "name": "用户菜单项",
+        "locator": "getByText('用户')",
+        "type": "menu_item"
+      },
+      {
+        "name": "会员管理菜单项",
+        "locator": "getByText('会员管理')",
+        "type": "menu_item"
+      },
+      {
+        "name": "新建按钮",
+        "locator": "getByRole('button', { name: '新建' })",
+        "type": "button"
+      },
+      {
+        "name": "手机号码输入框",
+        "locator": "getByLabel('手机号码')",
+        "type": "textbox"
+      },
+      {
+        "name": "姓名输入框",
+        "locator": "getByLabel('姓名')",
+        "type": "textbox"
+      },
+      {
+        "name": "会员卡号输入框",
+        "locator": "getByLabel('会员卡号')",
+        "type": "textbox"
+      },
+      {
+        "name": "会员状态下拉框",
+        "locator": "getByLabel('会员状态')",
+        "type": "select"
+      },
+      {
+        "name": "会员等级下拉框",
+        "locator": "getByLabel('会员等级')",
+        "type": "select"
+      },
+      {
+        "name": "付费会员下拉框",
+        "locator": "getByLabel('付费会员')",
+        "type": "select"
+      },
+      {
+        "name": "提交按钮",
+        "locator": "getByRole('button', { name: '提交' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "create-member", "smoke-test", "critical-flow"]
+  }
+]

@@ -1,0 +1,265 @@
+[
+  {
+    "name": "TC-1-001: 从控制台登录到消息管理页面的完整导航验证",
+    "description": "验证用户从控制台登录页面开始，经过输入用户名密码、登录、点击营销云卡片、进入系统菜单、点击消息管理，最终到达消息管理页面的完整导航流程，并验证页面关键元素完整性",
+    "priority": "high",
+    "prerequisites": [
+      "用户处于未登录状态，控制台登录页面可访问",
+      "UAT 环境服务正常运行",
+      "测试账号 andan 具有消息管理菜单的可见权限和完整操作权限"
+    ],
+    "steps": [
+      { "step_number": 1, "action": "navigate", "description": "打开控制台登录页面", "target": "控制台登录页面", "locator": "page.goto('https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/login')", "data": null },
+      { "step_number": 2, "action": "type", "description": "在用户名输入框中输入 andan", "target": "用户名输入框", "locator": "page.getByRole('textbox', { name: '请输入用户名' })", "data": "andan" },
+      { "step_number": 3, "action": "type", "description": "在密码输入框中输入 andan123", "target": "密码输入框", "locator": "page.getByRole('textbox', { name: '请输入密码' })", "data": "andan123" },
+      { "step_number": 4, "action": "click", "description": "点击登录按钮", "target": "登录按钮", "locator": "page.getByRole('button', { name: '登 录' })", "data": null },
+      { "step_number": 5, "action": "wait", "description": "等待控制台首页加载完成", "target": "控制台首页", "locator": "page.waitForURL('**/dtcloud-console-web-pc/**')", "data": null },
+      { "step_number": 6, "action": "click", "description": "点击数盈·营销云卡片，打开新标签页", "target": "数盈·营销云卡片", "locator": "page.locator('div').filter({ hasText: /数盈·营销云/ })", "data": null },
+      { "step_number": 7, "action": "switch_to_new_tab", "description": "切换到新打开的营销云标签页", "target": "营销云新标签页", "locator": "await newPage.waitForLoadState('networkidle')", "data": null },
+      { "step_number": 8, "action": "wait", "description": "等待营销云侧边栏菜单加载完成", "target": "侧边栏菜单", "locator": "page.locator('div').filter({ hasText: /^系统$/ }).first().waitFor()", "data": null },
+      { "step_number": 9, "action": "click", "description": "点击侧边栏系统菜单", "target": "系统菜单", "locator": "page.locator('div').filter({ hasText: /^系统$/ }).first()", "data": null },
+      { "step_number": 10, "action": "click", "description": "点击消息管理菜单项", "target": "消息管理菜单项", "locator": "page.getByRole('menuitem', { name: '消息管理' })", "data": null },
+      { "step_number": 11, "action": "verify", "description": "验证消息管理页面加载完成，消息模板 Tab 默认激活", "target": "消息模板 Tab", "locator": "page.getByRole('tab', { name: '消息模板' })", "data": null },
+      { "step_number": 12, "action": "verify", "description": "验证渠道配置 Tab 可见", "target": "渠道配置 Tab", "locator": "page.getByRole('tab', { name: '渠道配置' })", "data": null },
+      { "step_number": 13, "action": "verify", "description": "验证新增消息模版按钮可见", "target": "新增消息模版按钮", "locator": "page.getByRole('button', { name: '新增消息模版' })", "data": null },
+      { "step_number": 14, "action": "verify", "description": "验证搜索按钮可见", "target": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "data": null },
+      { "step_number": 15, "action": "verify", "description": "验证重置按钮可见", "target": "重置按钮", "locator": "page.getByRole('button', { name: '重置' })", "data": null },
+      { "step_number": 16, "action": "verify", "description": "验证模版名称输入框可见", "target": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "data": null },
+      { "step_number": 17, "action": "verify", "description": "验证模版 ID 输入框可见", "target": "模版ID输入框", "locator": "page.getByPlaceholder('请输入模版ID')", "data": null },
+      { "step_number": 18, "action": "verify", "description": "验证更新账号输入框可见", "target": "更新账号输入框", "locator": "page.getByPlaceholder('请输入更新账号')", "data": null },
+      { "step_number": 19, "action": "verify", "description": "验证表格列标题：消息模版名称", "target": "表格列标题", "locator": "page.getByRole('columnheader', { name: '消息模版名称' })", "data": null },
+      { "step_number": 20, "action": "verify", "description": "验证表格列标题：状态", "target": "表格列标题", "locator": "page.getByRole('columnheader', { name: '状态' })", "data": null },
+      { "step_number": 21, "action": "verify", "description": "验证表格列标题：渠道类型", "target": "表格列标题", "locator": "page.getByRole('columnheader', { name: '渠道类型' })", "data": null },
+      { "step_number": 22, "action": "verify", "description": "验证表格列标题：消息类型", "target": "表格列标题", "locator": "page.getByRole('columnheader', { name: '消息类型' })", "data": null },
+      { "step_number": 23, "action": "verify", "description": "验证分页信息显示", "target": "分页信息", "locator": "page.getByText(/共.*条/)", "data": null }
+    ],
+    "expected_result": "登录成功进入控制台首页，点击数盈·营销云卡片后在新标签页打开营销云，系统菜单展开后可见消息管理子菜单，消息管理页面默认显示消息模板 Tab，搜索表单、表格、分页等核心元素完整可见，表格显示消息模板数据",
+    "verification_points": [
+      { "type": "element_visible", "description": "验证消息模板 Tab 处于激活状态", "locator": "page.getByRole('tab', { name: '消息模板' })", "expected": true },
+      { "type": "element_visible", "description": "验证渠道配置 Tab 可见", "locator": "page.getByRole('tab', { name: '渠道配置' })", "expected": true },
+      { "type": "element_visible", "description": "验证新增消息模版按钮可见", "locator": "page.getByRole('button', { name: '新增消息模版' })", "expected": true },
+      { "type": "element_visible", "description": "验证搜索按钮可见", "locator": "page.getByRole('button', { name: '搜索' })", "expected": true },
+      { "type": "element_visible", "description": "验证重置按钮可见", "locator": "page.getByRole('button', { name: '重置' })", "expected": true },
+      { "type": "element_visible", "description": "验证模版名称输入框可见", "locator": "page.getByPlaceholder('请输入模版名称')", "expected": true },
+      { "type": "element_visible", "description": "验证模版 ID 输入框可见", "locator": "page.getByPlaceholder('请输入模版ID')", "expected": true },
+      { "type": "element_visible", "description": "验证消息模版名称列标题可见", "locator": "page.getByRole('columnheader', { name: '消息模版名称' })", "expected": true },
+      { "type": "element_visible", "description": "验证状态列标题可见", "locator": "page.getByRole('columnheader', { name: '状态' })", "expected": true },
+      { "type": "element_visible", "description": "验证分页信息可见", "locator": "page.getByText(/共.*条/)", "expected": true },
+      { "type": "url_check", "description": "验证登录后跳转到控制台首页", "locator": "page.url()", "expected": "URL 包含 dtcloud-console-web-pc" }
+    ],
+    "page_elements": [
+      { "name": "用户名输入框", "locator": "page.getByRole('textbox', { name: '请输入用户名' })", "type": "textbox" },
+      { "name": "密码输入框", "locator": "page.getByRole('textbox', { name: '请输入密码' })", "type": "textbox" },
+      { "name": "登录按钮", "locator": "page.getByRole('button', { name: '登 录' })", "type": "button" },
+      { "name": "数盈·营销云卡片", "locator": "page.locator('div').filter({ hasText: /数盈·营销云/ })", "type": "card" },
+      { "name": "系统菜单", "locator": "page.locator('div').filter({ hasText: /^系统$/ }).first()", "type": "menu" },
+      { "name": "消息管理菜单项", "locator": "page.getByRole('menuitem', { name: '消息管理' })", "type": "menuitem" },
+      { "name": "消息模板 Tab", "locator": "page.getByRole('tab', { name: '消息模板' })", "type": "tab" },
+      { "name": "渠道配置 Tab", "locator": "page.getByRole('tab', { name: '渠道配置' })", "type": "tab" },
+      { "name": "新增消息模版按钮", "locator": "page.getByRole('button', { name: '新增消息模版' })", "type": "button" },
+      { "name": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "type": "button" },
+      { "name": "重置按钮", "locator": "page.getByRole('button', { name: '重置' })", "type": "button" },
+      { "name": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "type": "textbox" },
+      { "name": "模版ID输入框", "locator": "page.getByPlaceholder('请输入模版ID')", "type": "textbox" },
+      { "name": "更新账号输入框", "locator": "page.getByPlaceholder('请输入更新账号')", "type": "textbox" },
+      { "name": "消息模版名称列", "locator": "page.getByRole('columnheader', { name: '消息模版名称' })", "type": "columnheader" },
+      { "name": "状态列", "locator": "page.getByRole('columnheader', { name: '状态' })", "type": "columnheader" },
+      { "name": "渠道类型列", "locator": "page.getByRole('columnheader', { name: '渠道类型' })", "type": "columnheader" },
+      { "name": "消息类型列", "locator": "page.getByRole('columnheader', { name: '消息类型' })", "type": "columnheader" },
+      { "name": "分页信息", "locator": "page.getByText(/共.*条/)", "type": "text" }
+    ],
+    "tags": ["P0", "冒烟测试", "导航", "登录", "消息管理"]
+  },
+  {
+    "name": "TC-2-001: 按完整模版名称精确搜索消息模板",
+    "description": "验证在消息模板页面，通过输入完整的模版名称进行精确搜索，搜索结果应正确匹配输入的名称",
+    "priority": "high",
+    "prerequisites": [
+      "已成功导航到消息管理页面（消息模板 Tab）",
+      "消息模板表格中有至少一条数据记录"
+    ],
+    "steps": [
+      { "step_number": 1, "action": "read_data", "description": "从消息模板表格中获取第一行的模版名称", "target": "表格第一行模版名称", "locator": null, "data": null },
+      { "step_number": 2, "action": "type", "description": "在模版名称输入框中输入获取到的完整模版名称", "target": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "data": "从步骤1获取的模版名称" },
+      { "step_number": 3, "action": "click", "description": "点击搜索按钮", "target": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "data": null },
+      { "step_number": 4, "action": "wait", "description": "等待表格数据刷新", "target": "搜索结果表格", "locator": null, "data": null },
+      { "step_number": 5, "action": "verify", "description": "验证搜索结果表格中至少显示一条结果", "target": "搜索结果表格", "locator": null, "data": null },
+      { "step_number": 6, "action": "verify", "description": "验证搜索结果中的第一条记录的名称与搜索关键词匹配", "target": "搜索结果行", "locator": null, "data": null },
+      { "step_number": 7, "action": "verify", "description": "验证搜索结果分页信息，结果数小于等于原始总数", "target": "分页信息", "locator": "page.getByText(/共.*条/)", "data": null }
+    ],
+    "expected_result": "输入完整模版名称后点击搜索，表格刷新显示搜索结果，搜索结果至少包含一条记录且模版名称与搜索关键词匹配，结果条数小于或等于原始总记录数，表格元素正常渲染",
+    "verification_points": [
+      { "type": "text_match", "description": "验证搜索结果中第一条记录的名称包含搜索关键词", "locator": null, "expected": "模版名称包含输入的搜索关键词" },
+      { "type": "count_check", "description": "验证搜索结果条数 >= 1", "locator": null, "expected": "至少1条结果" },
+      { "type": "count_check", "description": "验证搜索结果条数 <= 原始总记录数", "locator": "page.getByText(/共.*条/)", "expected": "结果数 ≤ 38" }
+    ],
+    "page_elements": [
+      { "name": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "type": "textbox" },
+      { "name": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "type": "button" },
+      { "name": "分页信息", "locator": "page.getByText(/共.*条/)", "type": "text" }
+    ],
+    "tags": ["P0", "正向功能测试", "搜索", "消息模板"]
+  },
+  {
+    "name": "TC-2-002: 按模版名称部分关键字搜索消息模板",
+    "description": "验证在消息模板页面，通过输入模版名称的部分关键字（名称子串）进行模糊搜索，所有搜索结果应包含该关键字",
+    "priority": "high",
+    "prerequisites": [
+      "已成功导航到消息管理页面（消息模板 Tab）",
+      "消息模板表格中有至少一条数据记录"
+    ],
+    "steps": [
+      { "step_number": 1, "action": "read_data", "description": "从消息模板表格中获取第一行的模版名称的前2-3个字符作为关键字", "target": "表格第一行模版名称", "locator": null, "data": null },
+      { "step_number": 2, "action": "type", "description": "在模版名称输入框中输入获取到的关键字子串", "target": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "data": "从步骤1获取的模版名称子串" },
+      { "step_number": 3, "action": "click", "description": "点击搜索按钮", "target": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "data": null },
+      { "step_number": 4, "action": "wait", "description": "等待表格数据刷新", "target": "搜索结果表格", "locator": null, "data": null },
+      { "step_number": 5, "action": "verify", "description": "验证搜索结果表格中至少显示一条结果", "target": "搜索结果表格", "locator": null, "data": null },
+      { "step_number": 6, "action": "verify", "description": "验证所有搜索结果的模版名称均包含搜索关键词", "target": "搜索结果行", "locator": null, "data": null }
+    ],
+    "expected_result": "输入部分关键字后点击搜索，搜索正常执行，所有搜索结果的模版名称均包含搜索关键词（模糊匹配），搜索结果显示正确",
+    "verification_points": [
+      { "type": "text_match", "description": "验证每条搜索结果的模版名称都包含搜索关键字", "locator": null, "expected": "所有结果模版名称均包含关键子串" },
+      { "type": "count_check", "description": "验证搜索结果至少有一条", "locator": null, "expected": "至少1条结果" }
+    ],
+    "page_elements": [
+      { "name": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "type": "textbox" },
+      { "name": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "type": "button" }
+    ],
+    "tags": ["P0", "边界测试", "搜索", "模糊匹配", "消息模板"]
+  },
+  {
+    "name": "TC-2-003: 使用不存在的模版名称搜索（空结果处理）",
+    "description": "验证输入不存在的模版名称搜索时，页面正确处理空结果，显示空状态提示，分页信息更新为0条",
+    "priority": "medium",
+    "prerequisites": [
+      "已成功导航到消息管理页面（消息模板 Tab）"
+    ],
+    "steps": [
+      { "step_number": 1, "action": "type", "description": "在模版名称输入框中输入不存在的模版名称", "target": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "data": "__NON_EXISTENT_TEMPLATE_NAME_99999__" },
+      { "step_number": 2, "action": "click", "description": "点击搜索按钮", "target": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "data": null },
+      { "step_number": 3, "action": "wait", "description": "等待表格数据刷新", "target": "搜索结果表格", "locator": null, "data": null },
+      { "step_number": 4, "action": "verify", "description": "验证空结果提示信息显示", "target": "空状态组件", "locator": "page.getByText(/暂无数据|No Data|No results/)", "data": null },
+      { "step_number": 5, "action": "verify", "description": "验证表格中无数据行", "target": "表格", "locator": null, "data": null },
+      { "step_number": 6, "action": "verify", "description": "验证分页信息更新为共0条", "target": "分页信息", "locator": "page.getByText(/共.*条/)", "data": null }
+    ],
+    "expected_result": "搜索无匹配结果时，表格显示空状态提示信息，无数据行，分页信息更新为共0条，页面不报错",
+    "verification_points": [
+      { "type": "element_visible", "description": "验证空状态提示可见", "locator": "page.getByText(/暂无数据|No Data|No results/)", "expected": true },
+      { "type": "count_check", "description": "验证表格中无数据行", "locator": null, "expected": "无数据行（仅表头）" },
+      { "type": "text_match", "description": "验证分页信息显示共0条", "locator": "page.getByText(/共.*条/)", "expected": "共 0 条" },
+      { "type": "no_error", "description": "验证页面无报错信息", "locator": null, "expected": "无报错" }
+    ],
+    "page_elements": [
+      { "name": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "type": "textbox" },
+      { "name": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "type": "button" },
+      { "name": "分页信息", "locator": "page.getByText(/共.*条/)", "type": "text" }
+    ],
+    "tags": ["P1", "负向测试", "搜索", "空结果", "消息模板"]
+  },
+  {
+    "name": "TC-2-004: 搜索后点击重置按钮恢复完整列表",
+    "description": "验证搜索后点击重置按钮，搜索条件被清空，表格恢复显示所有消息模板数据",
+    "priority": "medium",
+    "prerequisites": [
+      "已成功导航到消息管理页面（消息模板 Tab）",
+      "消息管理中存在多条消息模板记录"
+    ],
+    "steps": [
+      { "step_number": 1, "action": "type", "description": "在模版名称输入框中输入已知存在的模版名称", "target": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "data": "已知存在的模版名称" },
+      { "step_number": 2, "action": "click", "description": "点击搜索按钮", "target": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "data": null },
+      { "step_number": 3, "action": "verify", "description": "验证搜索结果已过滤，数量减少", "target": "搜索结果表格", "locator": null, "data": null },
+      { "step_number": 4, "action": "click", "description": "点击重置按钮", "target": "重置按钮", "locator": "page.getByRole('button', { name: '重置' })", "data": null },
+      { "step_number": 5, "action": "verify", "description": "验证模版名称输入框已清空", "target": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "data": null },
+      { "step_number": 6, "action": "verify", "description": "验证表格恢复显示完整数据列表", "target": "表格数据", "locator": null, "data": null },
+      { "step_number": 7, "action": "verify", "description": "验证分页信息恢复为共38条", "target": "分页信息", "locator": "page.getByText(/共.*条/)", "data": null }
+    ],
+    "expected_result": "搜索后表格显示过滤后的结果，点击重置后所有搜索条件被清空，模版名称输入框清空，表格恢复显示所有消息模板，分页信息恢复为共38条",
+    "verification_points": [
+      { "type": "text_match", "description": "验证模版名称输入框已清空", "locator": "page.getByPlaceholder('请输入模版名称')", "expected": "输入框内容为空" },
+      { "type": "count_check", "description": "验证表格恢复显示全部数据（共38条）", "locator": "page.getByText(/共.*条/)", "expected": "共 38 条" },
+      { "type": "count_check", "description": "验证搜索结果时数量少于总数量", "locator": null, "expected": "搜索结果数 < 38" }
+    ],
+    "page_elements": [
+      { "name": "模版名称输入框", "locator": "page.getByPlaceholder('请输入模版名称')", "type": "textbox" },
+      { "name": "搜索按钮", "locator": "page.getByRole('button', { name: '搜索' })", "type": "button" },
+      { "name": "重置按钮", "locator": "page.getByRole('button', { name: '重置' })", "type": "button" },
+      { "name": "分页信息", "locator": "page.getByText(/共.*条/)", "type": "text" }
+    ],
+    "tags": ["P1", "正向功能测试", "搜索", "重置", "消息模板"]
+  },
+  {
+    "name": "TC-3-001: 查看消息模板详情",
+    "description": "验证从消息模板列表点击查看按钮，正确打开模板详情页面/弹窗，展示完整信息且与表格行数据一致，可正常关闭返回列表",
+    "priority": "high",
+    "prerequisites": [
+      "已成功导航到消息管理页面（消息模板 Tab）",
+      "消息模板表格中有至少一条数据记录"
+    ],
+    "steps": [
+      { "step_number": 1, "action": "verify", "description": "确认表格中存在消息模板数据", "target": "表格数据行", "locator": null, "data": null },
+      { "step_number": 2, "action": "verify", "description": "定位第一行数据的查看按钮，确认可见且可点击", "target": "查看操作按钮", "locator": "page.getByRole('button', { name: '查看' }).first()", "data": null },
+      { "step_number": 3, "action": "click", "description": "点击查看按钮", "target": "查看操作按钮", "locator": "page.getByRole('button', { name: '查看' }).first()", "data": null },
+      { "step_number": 4, "action": "wait", "description": "等待详情页面/弹窗加载完成", "target": "详情页面/弹窗", "locator": null, "data": null },
+      { "step_number": 5, "action": "verify", "description": "验证详情页面展示的模版名称、状态、渠道类型、消息类型等字段", "target": "详情内容区域", "locator": null, "data": null },
+      { "step_number": 6, "action": "verify", "description": "验证详情信息与表格中对应行的数据一致性", "target": "详情与表格数据", "locator": null, "data": null },
+      { "step_number": 7, "action": "click", "description": "关闭详情页面/弹窗", "target": "关闭按钮", "locator": "page.getByRole('button', { name: /Close|关闭|返回/ })", "data": null },
+      { "step_number": 8, "action": "verify", "description": "验证关闭详情后返回列表页，页面状态保持不变", "target": "消息模板列表页", "locator": "page.getByRole('tab', { name: '消息模板' })", "data": null }
+    ],
+    "expected_result": "点击查看按钮后打开消息模板详情页面/弹窗，详情显示模版名称、状态、渠道类型、消息类型、审核状态、更新时间、更新账号、启用账号、消息模版ID等完整信息，且与表格行数据一致，可正常关闭详情返回到列表页，列表页状态保持不变",
+    "verification_points": [
+      { "type": "element_visible", "description": "验证查看按钮可见", "locator": "page.getByRole('button', { name: '查看' }).first()", "expected": true },
+      { "type": "element_visible", "description": "验证详情页面/弹窗已打开", "locator": null, "expected": true },
+      { "type": "data_consistency", "description": "验证详情中模版名称与表格行一致", "locator": null, "expected": "模版名称匹配" },
+      { "type": "data_consistency", "description": "验证详情中状态与表格行一致", "locator": null, "expected": "状态匹配" },
+      { "type": "data_consistency", "description": "验证详情中渠道类型与表格行一致", "locator": null, "expected": "渠道类型匹配" },
+      { "type": "data_consistency", "description": "验证详情中消息类型与表格行一致", "locator": null, "expected": "消息类型匹配" },
+      { "type": "data_consistency", "description": "验证详情中消息模版ID与表格行一致", "locator": null, "expected": "消息模版ID匹配" },
+      { "type": "element_visible", "description": "验证关闭详情后返回列表页", "locator": "page.getByRole('tab', { name: '消息模板' })", "expected": true }
+    ],
+    "page_elements": [
+      { "name": "查看操作按钮", "locator": "page.getByRole('button', { name: '查看' }).first()", "type": "button" },
+      { "name": "关闭按钮", "locator": "page.getByRole('button', { name: /Close|关闭|返回/ })", "type": "button" }
+    ],
+    "tags": ["P0", "正向功能测试", "详情查看", "消息模板"]
+  },
+  {
+    "name": "TC-4-001: 禁用已启用的消息模板",
+    "description": "验证对已启用的消息模板执行禁用操作，弹出确认弹窗，确认后模板状态从启用变为禁用，操作按钮从禁用变为启用",
+    "priority": "medium",
+    "prerequisites": [
+      "已成功导航到消息管理页面（消息模板 Tab）",
+      "存在状态为启用的消息模板（操作列显示禁用按钮）",
+      "测试完成后需恢复模板状态"
+    ],
+    "steps": [
+      { "step_number": 1, "action": "find", "description": "在表格中找到一条状态为启用的模板记录", "target": "启用状态模板行", "locator": null, "data": null },
+      { "step_number": 2, "action": "click", "description": "点击该行的禁用按钮", "target": "禁用按钮", "locator": "page.getByRole('button', { name: '禁用' }).first()", "data": null },
+      { "step_number": 3, "action": "wait", "description": "等待确认弹窗出现", "target": "确认弹窗", "locator": "page.getByRole('dialog')", "data": null },
+      { "step_number": 4, "action": "click", "description": "点击确认按钮确认禁用操作", "target": "确认按钮", "locator": "page.getByRole('button', { name: /确定|确认|OK/ })", "data": null },
+      { "step_number": 5, "action": "wait", "description": "等待 loading 状态结束，操作完成", "target": "操作结果", "locator": null, "data": null },
+      { "step_number": 6, "action": "verify", "description": "验证禁用成功提示消息", "target": "成功提示", "locator": "page.getByRole('alert')", "data": null },
+      { "step_number": 7, "action": "verify", "description": "验证该行状态已变为禁用", "target": "状态列", "locator": null, "data": null },
+      { "step_number": 8, "action": "verify", "description": "验证该行操作按钮已变为启用", "target": "启用按钮", "locator": "page.getByRole('button', { name: '启用' })", "data": null }
+    ],
+    "expected_result": "点击禁用按钮后弹出确认对话框，确认后消息模板被成功禁用，页面显示操作成功提示，对应行的状态从启用变为禁用，操作按钮从禁用变为启用",
+    "verification_points": [
+      { "type": "element_visible", "description": "验证确认弹窗出现", "locator": "page.getByRole('dialog')", "expected": true },
+      { "type": "element_visible", "description": "验证禁用成功提示消息", "locator": "page.getByRole('alert')", "expected": true },
+      { "type": "text_match", "description": "验证该行状态变为禁用", "locator": null, "expected": "状态显示为禁用" },
+      { "type": "element_visible", "description": "验证操作按钮变为启用", "locator": "page.getByRole('button', { name: '启用' })", "expected": true }
+    ],
+    "page_elements": [
+      { "name": "禁用按钮", "locator": "page.getByRole('button', { name: '禁用' }).first()", "type": "button" },
+      { "name": "确认按钮", "locator": "page.getByRole('button', { name: /确定|确认|OK/ })", "type": "button" },
+      { "name": "启用按钮", "locator": "page.getByRole('button', { name: '启用' })", "type": "button" }
+    ],
+    "tags": ["P1", "状态切换测试", "禁用", "消息模板"]
+  },
+  {
+    "name": "TC-4-002: 启用已禁用的消息模板",
+    "description": "验证对已禁用的消息模板执行启用操作，弹出确认弹窗，确认后模板状态从禁用变为启用，操作按钮从启用变为禁用",
+    "priority": "medium",
+    "prerequisites": [
+      "已成功导航到消息管理页面（消息模板 Tab）",
+      "存在状态为禁用的消息模板（操作列显示启用按钮）",
+      "测试完成后需恢复

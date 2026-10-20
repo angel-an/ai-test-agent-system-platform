@@ -1,0 +1,365 @@
+[
+  {
+    "name": "会员查看详情",
+    "description": "验证在会员列表页面点击查看按钮可以成功查看会员详情",
+    "priority": "medium",
+    "prerequisites": [
+      "用户已登录营销云控制台",
+      "会员列表页面已加载",
+      "至少存在一个会员"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "navigate",
+        "description": "导航到会员列表页面",
+        "target": "会员列表页面",
+        "locator": null,
+        "data": "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/customer/memberlist"
+      },
+      {
+        "step_number": 2,
+        "action": "click",
+        "description": "点击第一个会员的查看链接",
+        "target": "查看链接",
+        "locator": "getByText('查看').first()",
+        "data": null
+      }
+    ],
+    "expected_result": "成功跳转到会员详情页面，显示该会员的详细信息",
+    "verification_points": [
+      {
+        "type": "element_visible",
+        "description": "验证会员详情页面已打开，显示会员详情内容",
+        "locator": "getByText('查看').first()",
+        "expected": true
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "查看链接",
+        "locator": "getByText('查看').first()",
+        "type": "link"
+      }
+    ],
+    "tags": ["member-management", "view", "detail"]
+  },
+  {
+    "name": "冻结会员",
+    "description": "验证通过更多菜单→冻结→确认弹窗，可以将会员状态变为冻结",
+    "priority": "medium",
+    "prerequisites": [
+      "用户已登录营销云控制台",
+      "会员列表页面已加载",
+      "至少存在一个正常状态的会员"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "navigate",
+        "description": "导航到会员列表页面",
+        "target": "会员列表页面",
+        "locator": null,
+        "data": "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/customer/memberlist"
+      },
+      {
+        "step_number": 2,
+        "action": "click",
+        "description": "点击第一行的更多按钮",
+        "target": "更多链接",
+        "locator": "page.getByRole('link', { name: '更多 图标: down' })",
+        "data": null
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "在下拉菜单中点击冻结",
+        "target": "冻结菜单",
+        "locator": "getByText('冻结')",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "在确认弹窗中点击确认",
+        "target": "确认按钮",
+        "locator": "getByRole('button', { name: '确认' })",
+        "data": null
+      }
+    ],
+    "expected_result": "会员状态变为冻结，页面显示操作成功提示且会员状态更新为'冻结'",
+    "verification_points": [
+      {
+        "type": "element_visible",
+        "description": "验证操作成功提示消息显示",
+        "locator": "getByText('操作成功')",
+        "expected": true
+      },
+      {
+        "type": "element_text",
+        "description": "验证会员状态显示为冻结",
+        "locator": "getByText('冻结')",
+        "expected": "冻结"
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "更多链接",
+        "locator": "page.getByRole('link', { name: '更多 图标: down' })",
+        "type": "link"
+      },
+      {
+        "name": "冻结菜单",
+        "locator": "getByText('冻结')",
+        "type": "menuitem"
+      },
+      {
+        "name": "确认按钮",
+        "locator": "getByRole('button', { name: '确认' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "freeze", "status-change"]
+  },
+  {
+    "name": "注销会员",
+    "description": "验证通过更多菜单→注销→确认弹窗，可以将会员状态变为已注销",
+    "priority": "medium",
+    "prerequisites": [
+      "用户已登录营销云控制台",
+      "会员列表页面已加载",
+      "至少存在一个正常状态的会员"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "navigate",
+        "description": "导航到会员列表页面",
+        "target": "会员列表页面",
+        "locator": null,
+        "data": "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/customer/memberlist"
+      },
+      {
+        "step_number": 2,
+        "action": "click",
+        "description": "点击第一行的更多按钮",
+        "target": "更多链接",
+        "locator": "page.getByRole('link', { name: '更多 图标: down' })",
+        "data": null
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "在下拉菜单中点击注销",
+        "target": "注销菜单",
+        "locator": "getByText('注销')",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "在确认弹窗中点击确认",
+        "target": "确认按钮",
+        "locator": "getByRole('button', { name: '确认' })",
+        "data": null
+      }
+    ],
+    "expected_result": "会员状态变为已注销，页面显示操作成功提示且会员状态更新为'已注销'",
+    "verification_points": [
+      {
+        "type": "element_visible",
+        "description": "验证操作成功提示消息显示",
+        "locator": "getByText('操作成功')",
+        "expected": true
+      },
+      {
+        "type": "element_text",
+        "description": "验证会员状态显示为已注销",
+        "locator": "getByText('已注销')",
+        "expected": "已注销"
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "更多链接",
+        "locator": "page.getByRole('link', { name: '更多 图标: down' })",
+        "type": "link"
+      },
+      {
+        "name": "注销菜单",
+        "locator": "getByText('注销')",
+        "type": "menuitem"
+      },
+      {
+        "name": "确认按钮",
+        "locator": "getByRole('button', { name: '确认' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "cancel", "status-change"]
+  },
+  {
+    "name": "取消冻结操作",
+    "description": "验证在冻结确认弹窗中点击取消，会员状态保持不变",
+    "priority": "medium",
+    "prerequisites": [
+      "用户已登录营销云控制台",
+      "会员列表页面已加载",
+      "至少存在一个正常状态的会员"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "navigate",
+        "description": "导航到会员列表页面",
+        "target": "会员列表页面",
+        "locator": null,
+        "data": "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/customer/memberlist"
+      },
+      {
+        "step_number": 2,
+        "action": "click",
+        "description": "点击第一行的更多按钮",
+        "target": "更多链接",
+        "locator": "page.getByRole('link', { name: '更多 图标: down' })",
+        "data": null
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "在下拉菜单中点击冻结",
+        "target": "冻结菜单",
+        "locator": "getByText('冻结')",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "在确认弹窗中点击取消",
+        "target": "取消按钮",
+        "locator": "getByRole('button', { name: '取消' })",
+        "data": null
+      }
+    ],
+    "expected_result": "会员状态不变，弹窗关闭，页面无状态变更提示",
+    "verification_points": [
+      {
+        "type": "element_visible",
+        "description": "验证确认弹窗已关闭不再显示",
+        "locator": "getByRole('button', { name: '确认' })",
+        "expected": false
+      },
+      {
+        "type": "element_visible",
+        "description": "验证未出现操作成功的提示消息",
+        "locator": "getByText('操作成功')",
+        "expected": false
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "更多链接",
+        "locator": "page.getByRole('link', { name: '更多 图标: down' })",
+        "type": "link"
+      },
+      {
+        "name": "冻结菜单",
+        "locator": "getByText('冻结')",
+        "type": "menuitem"
+      },
+      {
+        "name": "取消按钮",
+        "locator": "getByRole('button', { name: '取消' })",
+        "type": "button"
+      },
+      {
+        "name": "确认按钮",
+        "locator": "getByRole('button', { name: '确认' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "freeze", "cancel-operation"]
+  },
+  {
+    "name": "取消注销操作",
+    "description": "验证在注销确认弹窗中点击取消，会员状态保持不变",
+    "priority": "medium",
+    "prerequisites": [
+      "用户已登录营销云控制台",
+      "会员列表页面已加载",
+      "至少存在一个正常状态的会员"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "navigate",
+        "description": "导航到会员列表页面",
+        "target": "会员列表页面",
+        "locator": null,
+        "data": "https://console-uat.xysjg.com/front/dtcloud-console-web-pc/#/customer/memberlist"
+      },
+      {
+        "step_number": 2,
+        "action": "click",
+        "description": "点击第一行的更多按钮",
+        "target": "更多链接",
+        "locator": "page.getByRole('link', { name: '更多 图标: down' })",
+        "data": null
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "在下拉菜单中点击注销",
+        "target": "注销菜单",
+        "locator": "getByText('注销')",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "在确认弹窗中点击取消",
+        "target": "取消按钮",
+        "locator": "getByRole('button', { name: '取消' })",
+        "data": null
+      }
+    ],
+    "expected_result": "会员状态不变，弹窗关闭，页面无状态变更提示",
+    "verification_points": [
+      {
+        "type": "element_visible",
+        "description": "验证确认弹窗已关闭不再显示",
+        "locator": "getByRole('button', { name: '确认' })",
+        "expected": false
+      },
+      {
+        "type": "element_visible",
+        "description": "验证未出现操作成功的提示消息",
+        "locator": "getByText('操作成功')",
+        "expected": false
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "更多链接",
+        "locator": "page.getByRole('link', { name: '更多 图标: down' })",
+        "type": "link"
+      },
+      {
+        "name": "注销菜单",
+        "locator": "getByText('注销')",
+        "type": "menuitem"
+      },
+      {
+        "name": "取消按钮",
+        "locator": "getByRole('button', { name: '取消' })",
+        "type": "button"
+      },
+      {
+        "name": "确认按钮",
+        "locator": "getByRole('button', { name: '确认' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "cancel", "cancel-operation"]
+  }
+]

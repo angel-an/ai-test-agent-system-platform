@@ -1,0 +1,813 @@
+[
+  {
+    "name": "会员管理 - 默认加载列表",
+    "description": "验证页面加载后默认显示搜索区、列表数据（10条/页）和分页信息（共33条，4页）",
+    "priority": "high",
+    "prerequisites": [
+      "用户已登录系统",
+      "会员列表中存在至少33条数据"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "fill",
+        "description": "输入登录用户名",
+        "target": "登录用户名输入框",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "data": "admin"
+      },
+      {
+        "step_number": 2,
+        "action": "fill",
+        "description": "输入登录密码",
+        "target": "登录密码输入框",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "data": "password123"
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "点击登录按钮",
+        "target": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "点击营销云入口",
+        "target": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "data": null
+      },
+      {
+        "step_number": 5,
+        "action": "click",
+        "description": "点击用户菜单进入会员管理列表",
+        "target": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "data": null
+      },
+      {
+        "step_number": 6,
+        "action": "verify",
+        "description": "验证搜索区显示，手机号码搜索框可见",
+        "target": "手机号码搜索框",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "data": null
+      },
+      {
+        "step_number": 7,
+        "action": "verify",
+        "description": "验证列表默认显示10条数据",
+        "target": "会员列表",
+        "locator": "getByRole('row')",
+        "data": null
+      }
+    ],
+    "expected_result": "页面加载成功，搜索区完整显示，列表默认展示10条记录，分页显示共33条共4页",
+    "verification_points": [
+      {
+        "type": "element_visible",
+        "description": "验证手机号码搜索框可见",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "expected": true
+      },
+      {
+        "type": "element_visible",
+        "description": "验证搜索按钮可见",
+        "locator": "getByRole('button', { name: '搜索' })",
+        "expected": true
+      },
+      {
+        "type": "element_visible",
+        "description": "验证重置按钮可见",
+        "locator": "getByRole('button', { name: '重置' })",
+        "expected": true
+      },
+      {
+        "type": "element_count",
+        "description": "验证列表默认显示10条数据",
+        "locator": "getByRole('row')",
+        "expected": 10
+      },
+      {
+        "type": "element_visible",
+        "description": "验证分页组件显示",
+        "locator": "page.getByText('4')",
+        "expected": true
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "登录用户名",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录密码",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "type": "button"
+      },
+      {
+        "name": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "type": "text"
+      },
+      {
+        "name": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "type": "text"
+      },
+      {
+        "name": "手机号码搜索框",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "搜索按钮",
+        "locator": "getByRole('button', { name: '搜索' })",
+        "type": "button"
+      },
+      {
+        "name": "重置按钮",
+        "locator": "getByRole('button', { name: '重置' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "list", "default-load", "functional"]
+  },
+  {
+    "name": "会员管理 - 按手机号码搜索",
+    "description": "验证输入已知的手机号码后点击搜索，列表正确返回匹配的会员记录",
+    "priority": "high",
+    "prerequisites": [
+      "用户已登录系统",
+      "会员列表中存在已知手机号码的记录",
+      "已知手机号码：13800138000"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "fill",
+        "description": "输入登录用户名",
+        "target": "登录用户名输入框",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "data": "admin"
+      },
+      {
+        "step_number": 2,
+        "action": "fill",
+        "description": "输入登录密码",
+        "target": "登录密码输入框",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "data": "password123"
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "点击登录按钮",
+        "target": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "点击营销云入口",
+        "target": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "data": null
+      },
+      {
+        "step_number": 5,
+        "action": "click",
+        "description": "点击用户菜单进入会员管理列表",
+        "target": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "data": null
+      },
+      {
+        "step_number": 6,
+        "action": "fill",
+        "description": "在手机号码搜索框中输入已知手机号",
+        "target": "手机号码搜索框",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "data": "13800138000"
+      },
+      {
+        "step_number": 7,
+        "action": "click",
+        "description": "点击搜索按钮",
+        "target": "搜索按钮",
+        "locator": "getByRole('button', { name: '搜索' })",
+        "data": null
+      }
+    ],
+    "expected_result": "列表仅显示手机号码为13800138000的会员记录，搜索结果仅1条，分页仅1页",
+    "verification_points": [
+      {
+        "type": "element_count",
+        "description": "验证搜索结果仅为匹配的会员记录",
+        "locator": "getByRole('row')",
+        "expected": 1
+      },
+      {
+        "type": "element_text",
+        "description": "验证列表中显示的手机号与搜索条件匹配",
+        "locator": "getByRole('row').first()",
+        "expected": "13800138000"
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "登录用户名",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录密码",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "type": "button"
+      },
+      {
+        "name": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "type": "text"
+      },
+      {
+        "name": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "type": "text"
+      },
+      {
+        "name": "手机号码搜索框",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "搜索按钮",
+        "locator": "getByRole('button', { name: '搜索' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "search", "phone-number", "functional"]
+  },
+  {
+    "name": "会员管理 - 重置搜索",
+    "description": "验证搜索后点击重置按钮，搜索条件清空、列表恢复为默认加载状态",
+    "priority": "medium",
+    "prerequisites": [
+      "用户已登录系统",
+      "会员列表中存在至少33条数据"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "fill",
+        "description": "输入登录用户名",
+        "target": "登录用户名输入框",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "data": "admin"
+      },
+      {
+        "step_number": 2,
+        "action": "fill",
+        "description": "输入登录密码",
+        "target": "登录密码输入框",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "data": "password123"
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "点击登录按钮",
+        "target": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "点击营销云入口",
+        "target": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "data": null
+      },
+      {
+        "step_number": 5,
+        "action": "click",
+        "description": "点击用户菜单进入会员管理列表",
+        "target": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "data": null
+      },
+      {
+        "step_number": 6,
+        "action": "fill",
+        "description": "在手机号码搜索框中输入手机号",
+        "target": "手机号码搜索框",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "data": "13800138000"
+      },
+      {
+        "step_number": 7,
+        "action": "click",
+        "description": "点击搜索按钮获取搜索结果",
+        "target": "搜索按钮",
+        "locator": "getByRole('button', { name: '搜索' })",
+        "data": null
+      },
+      {
+        "step_number": 8,
+        "action": "click",
+        "description": "点击重置按钮",
+        "target": "重置按钮",
+        "locator": "getByRole('button', { name: '重置' })",
+        "data": null
+      }
+    ],
+    "expected_result": "搜索框内容被清空，列表恢复显示全部会员数据，分页恢复为共33条共4页",
+    "verification_points": [
+      {
+        "type": "element_text",
+        "description": "验证手机号码搜索框已清空",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "expected": ""
+      },
+      {
+        "type": "element_count",
+        "description": "验证列表恢复显示10条数据",
+        "locator": "getByRole('row')",
+        "expected": 10
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "登录用户名",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录密码",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "type": "button"
+      },
+      {
+        "name": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "type": "text"
+      },
+      {
+        "name": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "type": "text"
+      },
+      {
+        "name": "手机号码搜索框",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "搜索按钮",
+        "locator": "getByRole('button', { name: '搜索' })",
+        "type": "button"
+      },
+      {
+        "name": "重置按钮",
+        "locator": "getByRole('button', { name: '重置' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "reset", "search", "functional"]
+  },
+  {
+    "name": "会员管理 - 搜索无结果",
+    "description": "验证输入不存在的手机号码进行搜索，列表正确显示空状态",
+    "priority": "medium",
+    "prerequisites": [
+      "用户已登录系统",
+      "该手机号码在系统中不存在记录"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "fill",
+        "description": "输入登录用户名",
+        "target": "登录用户名输入框",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "data": "admin"
+      },
+      {
+        "step_number": 2,
+        "action": "fill",
+        "description": "输入登录密码",
+        "target": "登录密码输入框",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "data": "password123"
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "点击登录按钮",
+        "target": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "点击营销云入口",
+        "target": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "data": null
+      },
+      {
+        "step_number": 5,
+        "action": "click",
+        "description": "点击用户菜单进入会员管理列表",
+        "target": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "data": null
+      },
+      {
+        "step_number": 6,
+        "action": "fill",
+        "description": "在手机号码搜索框中输入不存在的手机号",
+        "target": "手机号码搜索框",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "data": "99999999999"
+      },
+      {
+        "step_number": 7,
+        "action": "click",
+        "description": "点击搜索按钮",
+        "target": "搜索按钮",
+        "locator": "getByRole('button', { name: '搜索' })",
+        "data": null
+      }
+    ],
+    "expected_result": "列表无数据，页面显示空状态提示信息（如'暂无数据'），分页区域不显示或显示0条",
+    "verification_points": [
+      {
+        "type": "element_visible",
+        "description": "验证空状态提示信息可见",
+        "locator": "getByText('暂无数据')",
+        "expected": true
+      },
+      {
+        "type": "element_count",
+        "description": "验证列表中没有数据行",
+        "locator": "getByRole('row')",
+        "expected": 0
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "登录用户名",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录密码",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "type": "button"
+      },
+      {
+        "name": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "type": "text"
+      },
+      {
+        "name": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "type": "text"
+      },
+      {
+        "name": "手机号码搜索框",
+        "locator": "getByRole('textbox', { name: '手机号码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "搜索按钮",
+        "locator": "getByRole('button', { name: '搜索' })",
+        "type": "button"
+      }
+    ],
+    "tags": ["member-management", "search", "no-result", "empty-state", "functional"]
+  },
+  {
+    "name": "会员管理 - 分页页码切换",
+    "description": "验证点击分页的第2、3、4页按钮可以正确切换页面并显示对应数据",
+    "priority": "high",
+    "prerequisites": [
+      "用户已登录系统",
+      "会员列表中存在至少33条数据，共4页"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "fill",
+        "description": "输入登录用户名",
+        "target": "登录用户名输入框",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "data": "admin"
+      },
+      {
+        "step_number": 2,
+        "action": "fill",
+        "description": "输入登录密码",
+        "target": "登录密码输入框",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "data": "password123"
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "点击登录按钮",
+        "target": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "点击营销云入口",
+        "target": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "data": null
+      },
+      {
+        "step_number": 5,
+        "action": "click",
+        "description": "点击用户菜单进入会员管理列表",
+        "target": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "data": null
+      },
+      {
+        "step_number": 6,
+        "action": "click",
+        "description": "点击分页第2页",
+        "target": "分页第2页",
+        "locator": "page.getByText('2')",
+        "data": null
+      },
+      {
+        "step_number": 7,
+        "action": "verify",
+        "description": "验证当前在第2页，列表显示第11~20条数据",
+        "target": "会员列表",
+        "locator": "getByRole('row')",
+        "data": null
+      },
+      {
+        "step_number": 8,
+        "action": "click",
+        "description": "点击分页第3页",
+        "target": "分页第3页",
+        "locator": "page.getByText('3')",
+        "data": null
+      },
+      {
+        "step_number": 9,
+        "action": "verify",
+        "description": "验证当前在第3页，列表显示第21~30条数据",
+        "target": "会员列表",
+        "locator": "getByRole('row')",
+        "data": null
+      },
+      {
+        "step_number": 10,
+        "action": "click",
+        "description": "点击分页第4页",
+        "target": "分页第4页",
+        "locator": "page.getByText('4')",
+        "data": null
+      },
+      {
+        "step_number": 11,
+        "action": "verify",
+        "description": "验证当前在第4页，列表显示第31~33条数据（共3条）",
+        "target": "会员列表",
+        "locator": "getByRole('row')",
+        "data": null
+      }
+    ],
+    "expected_result": "点击第2、3、4页均可成功切换页面，每页显示对应条数，第4页显示剩余3条数据",
+    "verification_points": [
+      {
+        "type": "element_count",
+        "description": "验证第2页显示10条数据",
+        "locator": "getByRole('row')",
+        "expected": 10
+      },
+      {
+        "type": "element_count",
+        "description": "验证第3页显示10条数据",
+        "locator": "getByRole('row')",
+        "expected": 10
+      },
+      {
+        "type": "element_count",
+        "description": "验证第4页显示3条数据",
+        "locator": "getByRole('row')",
+        "expected": 3
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "登录用户名",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录密码",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "type": "button"
+      },
+      {
+        "name": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "type": "text"
+      },
+      {
+        "name": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "type": "text"
+      },
+      {
+        "name": "分页页码2",
+        "locator": "page.getByText('2')",
+        "type": "text"
+      },
+      {
+        "name": "分页页码3",
+        "locator": "page.getByText('3')",
+        "type": "text"
+      },
+      {
+        "name": "分页页码4",
+        "locator": "page.getByText('4')",
+        "type": "text"
+      }
+    ],
+    "tags": ["member-management", "pagination", "page-switch", "functional"]
+  },
+  {
+    "name": "会员管理 - 每页条数切换",
+    "description": "验证切换每页显示条数后列表正确刷新显示对应数量的数据",
+    "priority": "medium",
+    "prerequisites": [
+      "用户已登录系统",
+      "会员列表中存在至少33条数据"
+    ],
+    "steps": [
+      {
+        "step_number": 1,
+        "action": "fill",
+        "description": "输入登录用户名",
+        "target": "登录用户名输入框",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "data": "admin"
+      },
+      {
+        "step_number": 2,
+        "action": "fill",
+        "description": "输入登录密码",
+        "target": "登录密码输入框",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "data": "password123"
+      },
+      {
+        "step_number": 3,
+        "action": "click",
+        "description": "点击登录按钮",
+        "target": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "data": null
+      },
+      {
+        "step_number": 4,
+        "action": "click",
+        "description": "点击营销云入口",
+        "target": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "data": null
+      },
+      {
+        "step_number": 5,
+        "action": "click",
+        "description": "点击用户菜单进入会员管理列表",
+        "target": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "data": null
+      },
+      {
+        "step_number": 6,
+        "action": "select",
+        "description": "切换每页显示条数为20条",
+        "target": "每页条数下拉框",
+        "locator": "getByRole('combobox', { name: '每页条数' })",
+        "data": "20"
+      },
+      {
+        "step_number": 7,
+        "action": "verify",
+        "description": "验证列表显示20条数据",
+        "target": "会员列表",
+        "locator": "getByRole('row')",
+        "data": null
+      },
+      {
+        "step_number": 8,
+        "action": "select",
+        "description": "切换每页显示条数为50条",
+        "target": "每页条数下拉框",
+        "locator": "getByRole('combobox', { name: '每页条数' })",
+        "data": "50"
+      },
+      {
+        "step_number": 9,
+        "action": "verify",
+        "description": "验证列表显示全部33条数据",
+        "target": "会员列表",
+        "locator": "getByRole('row')",
+        "data": null
+      }
+    ],
+    "expected_result": "切换每页条数为20时列表显示20条、分页变为2页；切换为50时列表显示33条(全部)、分页变为1页",
+    "verification_points": [
+      {
+        "type": "element_count",
+        "description": "验证每页20条时列表显示20条数据",
+        "locator": "getByRole('row')",
+        "expected": 20
+      },
+      {
+        "type": "element_count",
+        "description": "验证每页50条时列表显示全部33条数据",
+        "locator": "getByRole('row')",
+        "expected": 33
+      }
+    ],
+    "page_elements": [
+      {
+        "name": "登录用户名",
+        "locator": "getByRole('textbox', { name: '请输入用户名' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录密码",
+        "locator": "getByRole('textbox', { name: '请输入密码' })",
+        "type": "textbox"
+      },
+      {
+        "name": "登录按钮",
+        "locator": "getByRole('button', { name: '登 录' })",
+        "type": "button"
+      },
+      {
+        "name": "营销云入口",
+        "locator": "page.getByText('数盈·营销云').first()",
+        "type": "text"
+      },
+      {
+        "name": "用户菜单",
+        "locator": "page.getByText('用户').first()",
+        "type": "text"
+      },
+      {
+        "name": "每页条数下拉框",
+        "locator": "getByRole('combobox', { name: '每页条数' })",
+        "type": "combobox"
+      }
+    ],
+    "tags": ["member-management", "pagination", "page-size", "functional"]
+  }
+]

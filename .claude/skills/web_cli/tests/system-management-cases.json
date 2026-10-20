@@ -1,0 +1,297 @@
+[
+  {
+    "name": "TC-SM-001: 系统管理页面正常加载与子菜单导航验证",
+    "description": "验证系统管理页面通过侧边栏菜单点击后的加载，以及各子菜单项的可见性",
+    "priority": "high",
+    "prerequisites": ["用户已通过 BOC 控制台登录并进入营销云页面", "侧边栏菜单可见", "测试账号具有系统管理菜单可见权限"],
+    "steps": [
+      {"step_number": 1, "action": "navigate", "description": "通过 BOC 后台进入营销云，等待 iframe 加载完成", "target": "营销云 iframe 嵌入页", "locator": null, "data": null},
+      {"step_number": 2, "action": "click", "description": "点击侧边栏系统管理菜单项展开子菜单", "target": "系统管理菜单项", "locator": "getByRole('menuitem', { name: /System|系统(管理)?|Settings/ })", "data": null},
+      {"step_number": 3, "action": "wait", "description": "等待系统管理子菜单展开", "target": null, "locator": null, "data": null},
+      {"step_number": 4, "action": "verify", "description": "验证用户管理子菜单可见", "target": "用户管理子菜单", "locator": "getByRole('menuitem', { name: /User|用户/ }) 或 getByText(/User|用户管理/).first()", "data": null},
+      {"step_number": 5, "action": "verify", "description": "验证角色管理子菜单可见", "target": "角色管理子菜单", "locator": "getByRole('menuitem', { name: /Role|角色/ }) 或 getByText(/Role|角色管理/).first()", "data": null},
+      {"step_number": 6, "action": "verify", "description": "验证系统配置子菜单可见", "target": "系统配置子菜单", "locator": "getByRole('menuitem', { name: /Config|Setting|配置|设置/ })", "data": null},
+      {"step_number": 7, "action": "verify", "description": "验证操作日志子菜单可见", "target": "操作日志子菜单", "locator": "getByRole('menuitem', { name: /Log|日志|Audit/ })", "data": null}
+    ],
+    "expected_result": "系统管理菜单可展开，用户管理、角色管理、系统配置、操作日志四个子菜单项均可见",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证系统管理菜单可点击展开", "locator": "getByRole('menuitem', { name: /System|系统(管理)?|Settings/ })", "expected": true},
+      {"type": "element_visible", "description": "验证用户管理子菜单可见", "locator": "getByText(/User|用户管理/).first()", "expected": true},
+      {"type": "element_visible", "description": "验证角色管理子菜单可见", "locator": "getByText(/Role|角色管理/).first()", "expected": true},
+      {"type": "element_visible", "description": "验证操作日志子菜单可见", "locator": "getByText(/Operation Log|操作日志/).first()", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "系统管理菜单项", "locator": "getByRole('menuitem', { name: /System|系统(管理)?|Settings/ })", "type": "menuitem"},
+      {"name": "用户管理子菜单", "locator": "getByRole('menuitem', { name: /User|用户/ })", "type": "menuitem"},
+      {"name": "角色管理子菜单", "locator": "getByRole('menuitem', { name: /Role|角色/ })", "type": "menuitem"},
+      {"name": "系统配置子菜单", "locator": "getByRole('menuitem', { name: /Config|Setting|配置|设置/ })", "type": "menuitem"},
+      {"name": "操作日志子菜单", "locator": "getByRole('menuitem', { name: /Log|日志|Audit/ })", "type": "menuitem"}
+    ]
+  },
+  {
+    "name": "TC-SM-002: 用户管理列表页面正常加载与元素验证",
+    "description": "验证用户管理列表页面的正常加载，包括搜索框、搜索按钮、数据表格、分页信息等核心元素的存在性和可见性",
+    "priority": "high",
+    "prerequisites": ["用户已登录并进入系统管理页面", "系统中至少存在 3-5 个用户账号"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "点击用户管理子菜单进入用户管理列表页", "target": "用户管理子菜单", "locator": "getByRole('menuitem', { name: /User|用户/ }) 或 getByText(/User|用户管理/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待列表页面数据加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 3, "action": "verify", "description": "验证搜索输入框可见", "target": "搜索输入框", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "data": null},
+      {"step_number": 4, "action": "verify", "description": "验证搜索按钮可见", "target": "搜索按钮", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "data": null},
+      {"step_number": 5, "action": "verify", "description": "验证数据表格可见", "target": "用户列表表格", "locator": "locator('table')", "data": null},
+      {"step_number": 6, "action": "verify", "description": "验证分页信息可见", "target": "分页组件", "locator": "getByText(/Total.*items|total|共.*条/i)", "data": null}
+    ],
+    "expected_result": "用户管理页面正常加载，搜索输入框、搜索按钮、数据表格、分页信息均可见，表格中正确显示用户列表数据",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证搜索输入框可见", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "expected": true},
+      {"type": "element_visible", "description": "验证搜索按钮可见", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "expected": true},
+      {"type": "element_visible", "description": "验证数据表格可见", "locator": "locator('table')", "expected": true},
+      {"type": "element_visible", "description": "验证分页信息可见", "locator": "getByText(/Total.*items|total|共.*条/i)", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "搜索输入框", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "type": "textbox"},
+      {"name": "搜索按钮", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "type": "button"},
+      {"name": "用户列表表格", "locator": "locator('table')", "type": "table"},
+      {"name": "分页组件", "locator": "getByText(/Total.*items|total|共.*条/i)", "type": "text"}
+    ]
+  },
+  {
+    "name": "TC-SM-003: 按用户名或账号搜索已有用户",
+    "description": "验证在用户管理搜索框中输入系统中已存在的用户名或关键词，点击搜索后列表能正确过滤出匹配的用户",
+    "priority": "high",
+    "prerequisites": ["用户已登录并进入用户管理列表页", "系统中至少存在一个已知用户"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "进入用户管理列表页", "target": "用户管理子菜单", "locator": "getByText(/User|用户管理/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待页面加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 3, "action": "fill", "description": "在搜索输入框输入已知存在的用户名或关键词", "target": "搜索输入框", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "data": "<从表格第一行获取的用户名或预设关键词>"},
+      {"step_number": 4, "action": "click", "description": "点击搜索按钮触发搜索", "target": "搜索按钮", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "data": null},
+      {"step_number": 5, "action": "wait", "description": "等待搜索结果加载", "target": null, "locator": null, "data": null}
+    ],
+    "expected_result": "列表仅显示名称/账号匹配搜索条件的用户，搜索结果数量 >= 1，搜索结果行内容包含搜索关键词，分页信息正确更新",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证搜索后表格仍可见", "locator": "locator('table')", "expected": true},
+      {"type": "text_content", "description": "验证搜索结果行包含搜索关键词", "locator": "locator('table')", "expected": "包含搜索关键词"}
+    ],
+    "page_elements": [
+      {"name": "搜索输入框", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "type": "textbox"},
+      {"name": "搜索按钮", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "type": "button"},
+      {"name": "数据表格", "locator": "locator('table')", "type": "table"}
+    ]
+  },
+  {
+    "name": "TC-SM-004: 搜索不存在的用户",
+    "description": "验证在用户管理搜索框中输入不存在的用户名时，列表应显示空状态提示，且表格行数为 0",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入用户管理列表页"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "进入用户管理列表页", "target": "用户管理子菜单", "locator": "getByText(/User|用户管理/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待页面加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 3, "action": "fill", "description": "在搜索输入框输入不存在的用户信息", "target": "搜索输入框", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "data": "__NON_EXISTENT_USER_999__"},
+      {"step_number": 4, "action": "click", "description": "点击搜索按钮", "target": "搜索按钮", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "data": null},
+      {"step_number": 5, "action": "wait", "description": "等待搜索结果加载", "target": null, "locator": null, "data": null}
+    ],
+    "expected_result": "列表显示空状态提示（如 'No Data'/'暂无数据'），表格行数为 0，分页信息显示 0 条结果",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证空状态提示显示", "locator": "getByText(/No Data|暂无数据|No results/)", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "搜索输入框", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "type": "textbox"},
+      {"name": "搜索按钮", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "type": "button"},
+      {"name": "空状态提示", "locator": "getByText(/No Data|暂无数据|No results/)", "type": "text"}
+    ]
+  },
+  {
+    "name": "TC-SM-005: 角色管理列表页面正常加载与元素验证",
+    "description": "验证角色管理列表页面的正常加载，包括表格、创建按钮、编辑按钮等核心元素",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入系统管理页面", "系统中至少存在 2-3 个角色配置"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "点击系统管理菜单展开子菜单", "target": "系统管理菜单项", "locator": "getByRole('menuitem', { name: /System|系统(管理)?|Settings/ })", "data": null},
+      {"step_number": 2, "action": "click", "description": "点击角色管理子菜单进入角色管理列表页", "target": "角色管理子菜单", "locator": "getByText(/Role|角色管理/).first()", "data": null},
+      {"step_number": 3, "action": "wait", "description": "等待角色列表页面数据加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 4, "action": "verify", "description": "验证数据表格可见", "target": "角色列表表格", "locator": "locator('table')", "data": null},
+      {"step_number": 5, "action": "verify", "description": "验证创建/新增按钮可见", "target": "创建/新增按钮", "locator": "getByRole('button', { name: /Create|创建|New|新增/ })", "data": null}
+    ],
+    "expected_result": "角色管理页面正常加载，数据表格可见，创建/新增按钮可见，编辑等行操作按钮可见，分页信息可见",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证数据表格可见", "locator": "locator('table')", "expected": true},
+      {"type": "element_visible", "description": "验证创建/新增按钮可见", "locator": "getByRole('button', { name: /Create|创建|New|新增/ })", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "角色列表表格", "locator": "locator('table')", "type": "table"},
+      {"name": "创建/新增按钮", "locator": "getByRole('button', { name: /Create|创建|New|新增/ })", "type": "button"},
+      {"name": "编辑按钮", "locator": "getByRole('button', { name: /Edit|编辑/ }).first()", "type": "button"}
+    ]
+  },
+  {
+    "name": "TC-SM-006: 填写必填字段成功创建新角色",
+    "description": "验证使用合法数据创建新角色的正向流程，包括填写角色名称、选择权限等并成功保存",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入角色管理列表页", "测试账号具有角色创建权限"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "进入角色管理列表页", "target": "角色管理子菜单", "locator": "getByText(/Role|角色管理/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待页面加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 3, "action": "click", "description": "点击创建/新增按钮打开创建表单", "target": "创建/新增按钮", "locator": "getByRole('button', { name: /Create|创建|New|新增/ })", "data": null},
+      {"step_number": 4, "action": "wait", "description": "等待创建表单加载", "target": null, "locator": null, "data": null},
+      {"step_number": 5, "action": "fill", "description": "输入角色名称（含时间戳唯一标识）", "target": "角色名称输入框", "locator": "getByRole('textbox', { name: /Role|Name|角色|名称/ })", "data": "Test Role Auto_<timestamp>"},
+      {"step_number": 6, "action": "fill", "description": "输入角色描述", "target": "角色描述输入框", "locator": "getByRole('textbox', { name: /Description|描述/ })", "data": "Automated test role for system management"},
+      {"step_number": 7, "action": "click", "description": "勾选角色权限（选择第一个可用的权限复选框）", "target": "角色权限复选框", "locator": "getByRole('checkbox', { name: /Permission|权限|Auth/ }).first()", "data": null},
+      {"step_number": 8, "action": "click", "description": "点击保存按钮提交表单", "target": "保存按钮", "locator": "getByRole('button', { name: /Save|保存/ })", "data": null},
+      {"step_number": 9, "action": "wait", "description": "等待保存完成", "target": null, "locator": null, "data": null}
+    ],
+    "expected_result": "保存成功后显示成功提示（如 '创建成功'/'Saved Successfully'），返回列表页后新创建的角色显示在列表中",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证成功提示消息显示", "locator": "getByRole('alert')", "expected": true},
+      {"type": "element_visible", "description": "验证返回列表后表格可见", "locator": "locator('table')", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "创建/新增按钮", "locator": "getByRole('button', { name: /Create|创建|New|新增/ })", "type": "button"},
+      {"name": "角色名称输入框", "locator": "getByRole('textbox', { name: /Role|Name|角色|名称/ })", "type": "textbox"},
+      {"name": "角色描述输入框", "locator": "getByRole('textbox', { name: /Description|描述/ })", "type": "textbox"},
+      {"name": "角色权限复选框", "locator": "getByRole('checkbox', { name: /Permission|权限|Auth/ }).first()", "type": "checkbox"},
+      {"name": "保存按钮", "locator": "getByRole('button', { name: /Save|保存/ })", "type": "button"}
+    ]
+  },
+  {
+    "name": "TC-SM-007: 角色名称为空时创建校验",
+    "description": "验证在角色名称为空时点击保存，系统应提示角色名称不能为空，表单保持打开状态",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入角色管理列表页", "测试账号具有角色创建权限"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "进入角色管理列表页", "target": "角色管理子菜单", "locator": "getByText(/Role|角色管理/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待页面加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 3, "action": "click", "description": "点击创建/新增按钮打开创建表单", "target": "创建/新增按钮", "locator": "getByRole('button', { name: /Create|创建|New|新增/ })", "data": null},
+      {"step_number": 4, "action": "wait", "description": "等待创建表单加载", "target": null, "locator": null, "data": null},
+      {"step_number": 5, "action": "verify", "description": "保持角色名称为空", "target": "角色名称输入框", "locator": "getByRole('textbox', { name: /Role|Name|角色|名称/ })", "data": null},
+      {"step_number": 6, "action": "click", "description": "点击保存按钮", "target": "保存按钮", "locator": "getByRole('button', { name: /Save|保存/ })", "data": null},
+      {"step_number": 7, "action": "wait", "description": "等待校验反馈", "target": null, "locator": null, "data": null}
+    ],
+    "expected_result": "保存失败，表单未关闭，角色名称字段下方或附近显示校验提示信息，保存按钮仍然可见",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证保存按钮仍然可见（表单未关闭）", "locator": "getByRole('button', { name: /Save|保存/ })", "expected": true},
+      {"type": "element_visible", "description": "验证校验提示信息出现", "locator": "locator('[class*=\"validation\"], [class*=\"error\"], [class*=\"help-text\"], [class*=\"message\"]')", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "创建/新增按钮", "locator": "getByRole('button', { name: /Create|创建|New|新增/ })", "type": "button"},
+      {"name": "角色名称输入框", "locator": "getByRole('textbox', { name: /Role|Name|角色|名称/ })", "type": "textbox"},
+      {"name": "保存按钮", "locator": "getByRole('button', { name: /Save|保存/ })", "type": "button"}
+    ]
+  },
+  {
+    "name": "TC-SM-008: 系统配置页面加载与参数项查看",
+    "description": "验证系统配置页面的正常加载和配置参数的显示",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入系统管理页面", "系统配置中存在可供查看的参数项"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "点击系统管理菜单展开子菜单", "target": "系统管理菜单项", "locator": "getByRole('menuitem', { name: /System|系统(管理)?|Settings/ })", "data": null},
+      {"step_number": 2, "action": "click", "description": "点击系统配置子菜单", "target": "系统配置子菜单", "locator": "getByText(/Config|Setting|配置|设置|System Config/).first()", "data": null},
+      {"step_number": 3, "action": "wait", "description": "等待系统配置页面加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 4, "action": "verify", "description": "验证页面中存在配置参数内容", "target": "配置参数区域", "locator": "locator('table') 或 locator('[class*=\"config\"], [class*=\"setting\"]')", "data": null}
+    ],
+    "expected_result": "系统配置页面正常加载，显示系统配置参数列表或表单，各配置参数的名称和当前值正确显示",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证配置参数区域可见", "locator": "locator('table')", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "系统配置子菜单", "locator": "getByText(/Config|Setting|配置|设置/).first()", "type": "menuitem"},
+      {"name": "配置参数区域", "locator": "locator('table')", "type": "table"}
+    ]
+  },
+  {
+    "name": "TC-SM-009: 操作日志页面正常加载与日志列表查看",
+    "description": "验证操作日志页面的正常加载，日志列表表格的显示以及分页信息的可见性",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入系统管理页面", "系统中已有操作日志记录"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "点击系统管理菜单展开子菜单", "target": "系统管理菜单项", "locator": "getByRole('menuitem', { name: /System|系统(管理)?|Settings/ })", "data": null},
+      {"step_number": 2, "action": "click", "description": "点击操作日志子菜单", "target": "操作日志子菜单", "locator": "getByText(/Operation Log|操作日志|Log|日志/).first()", "data": null},
+      {"step_number": 3, "action": "wait", "description": "等待操作日志页面数据加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 4, "action": "verify", "description": "验证日志列表表格可见", "target": "日志表格", "locator": "locator('table')", "data": null},
+      {"step_number": 5, "action": "verify", "description": "验证分页信息可见", "target": "分页组件", "locator": "getByText(/Total.*items|total|共.*条/i)", "data": null}
+    ],
+    "expected_result": "操作日志页面正常加载，日志列表表格可见，分页信息可见",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证日志表格可见", "locator": "locator('table')", "expected": true},
+      {"type": "element_visible", "description": "验证分页信息可见", "locator": "getByText(/Total.*items|total|共.*条/i)", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "操作日志子菜单", "locator": "getByText(/Operation Log|操作日志/).first()", "type": "menuitem"},
+      {"name": "日志表格", "locator": "locator('table')", "type": "table"},
+      {"name": "分页组件", "locator": "getByText(/Total.*items|total|共.*条/i)", "type": "text"}
+    ]
+  },
+  {
+    "name": "TC-SM-010: 按操作类型筛选操作日志",
+    "description": "验证通过操作类型筛选下拉框选择操作类型，列表能正确过滤出对应类型的日志记录",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入操作日志列表页", "系统中存在多种类型的操作日志记录"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "进入操作日志列表页", "target": "操作日志子菜单", "locator": "getByText(/Operation Log|操作日志/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待页面加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 3, "action": "wait", "description": "等待表格加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 4, "action": "click", "description": "点击操作类型筛选下拉框展开选项", "target": "操作类型筛选下拉框", "locator": "getByRole('combobox', { name: /Type|类型|Action/ })", "data": null},
+      {"step_number": 5, "action": "click", "description": "选择一个操作类型选项", "target": "操作类型选项", "locator": "getByRole('option').first()", "data": null},
+      {"step_number": 6, "action": "wait", "description": "等待筛选结果加载", "target": null, "locator": null, "data": null}
+    ],
+    "expected_result": "筛选下拉框可正常展开和选择，列表仅显示对应操作类型的日志，分页信息正确更新",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证筛选后表格可见", "locator": "locator('table')", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "操作类型筛选下拉框", "locator": "getByRole('combobox', { name: /Type|类型|Action/ })", "type": "combobox"},
+      {"name": "日志表格", "locator": "locator('table')", "type": "table"}
+    ]
+  },
+  {
+    "name": "TC-SM-011: 查看操作日志详情",
+    "description": "验证点击日志的查看/详情按钮后，系统正确显示该条日志的完整详情信息",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入操作日志列表页", "列表中至少存在一条日志记录"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "进入操作日志列表页", "target": "操作日志子菜单", "locator": "getByText(/Operation Log|操作日志/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待页面加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 3, "action": "wait", "description": "等待表格加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 4, "action": "click", "description": "点击第一条日志的详情/查看按钮", "target": "日志详情按钮", "locator": "getByRole('button', { name: /Detail|详情|View/ }).first()", "data": null},
+      {"step_number": 5, "action": "wait", "description": "等待详情信息加载", "target": null, "locator": null, "data": null},
+      {"step_number": 6, "action": "verify", "description": "验证详情信息完整显示", "target": "日志详情弹窗/区域", "locator": "getByRole('dialog') 或 locator('[class*=\"detail\"], [class*=\"modal\"]')", "data": null}
+    ],
+    "expected_result": "点击详情按钮后弹出详情弹窗或展开详情区域，详情信息完整显示，弹窗可正常关闭",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证详情弹窗可见", "locator": "getByRole('dialog')", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "操作日志子菜单", "locator": "getByText(/Operation Log|操作日志/).first()", "type": "menuitem"},
+      {"name": "日志详情按钮", "locator": "getByRole('button', { name: /Detail|详情|View/ }).first()", "type": "button"},
+      {"name": "日志详情弹窗", "locator": "getByRole('dialog')", "type": "dialog"}
+    ]
+  },
+  {
+    "name": "TC-SM-012: 搜索无匹配的日志记录",
+    "description": "验证在操作日志中搜索不存在的记录时，列表应显示空状态提示",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入操作日志列表页"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "进入操作日志列表页", "target": "操作日志子菜单", "locator": "getByText(/Operation Log|操作日志/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待页面加载完成", "target": null, "locator": null, "data": null},
+      {"step_number": 3, "action": "fill", "description": "在搜索输入框输入不存在的关键词", "target": "搜索输入框", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "data": "__NON_EXISTENT_LOG_999__"},
+      {"step_number": 4, "action": "click", "description": "点击搜索按钮", "target": "搜索按钮", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "data": null},
+      {"step_number": 5, "action": "wait", "description": "等待搜索结果加载", "target": null, "locator": null, "data": null}
+    ],
+    "expected_result": "搜索无结果时显示空状态提示，表格行数为 0，分页信息显示 0 条结果",
+    "verification_points": [
+      {"type": "element_visible", "description": "验证空状态提示显示", "locator": "getByText(/No Data|暂无数据|No results/)", "expected": true}
+    ],
+    "page_elements": [
+      {"name": "搜索输入框", "locator": "getByRole('textbox', { name: /Search|搜索|Query|查询/ })", "type": "textbox"},
+      {"name": "搜索按钮", "locator": "getByRole('button', { name: /Search|搜索|Query|查询/ })", "type": "button"},
+      {"name": "空状态提示", "locator": "getByText(/No Data|暂无数据|No results/)", "type": "text"}
+    ]
+  },
+  {
+    "name": "TC-SM-013: 编辑现有角色的基本信息和权限",
+    "description": "验证编辑已有角色的名称、描述和权限配置，编辑表单正确回显当前值且修改后可正常保存",
+    "priority": "medium",
+    "prerequisites": ["用户已登录并进入角色管理列表页", "系统中至少存在一个角色用于编辑"],
+    "steps": [
+      {"step_number": 1, "action": "click", "description": "进入角色管理列表页", "target": "角色管理子菜单", "locator": "getByText(/Role|角色管理/).first()", "data": null},
+      {"step_number": 2, "action": "wait", "description": "等待表格加载完成", "
