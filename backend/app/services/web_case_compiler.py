@@ -201,7 +201,89 @@ from app.services.web_upload_fixtures import (
 #:     initialization`` ⇒ 两条 required_error 全 blocked ⇒ 硬失败闸把 TR-762 拒掉
 #:     （blocked=2 视为结构性失败，这是设计行为——恰好把回归挡在了门外）。改为直接读
 #:     ``fieldDefs[check.field]``。
-COMPILER_REV = "rev146"
+#:   - rev147（2026-10-21，回执键改名）：``pending_locator_count`` →
+#:     ``locator_depended_assertion_count``（实义是「依赖定位器的断言数」，原名与
+#:     ``skipped_assertion_count`` 并排易读反成「待定位」。manifest 发射新键；执行器
+#:     模板读新键并回退旧键（旧产物 manifest 无新键时 ``?? 0`` 兜底）；link_service
+#:     回执同步改名 + 回退。``COMPILED_COVERAGE.pending_locator``（运行期输出键）不变。
+#:   - rev148（2026-10-21，第二批通道能力三合一）：
+#:     ① ``list_checks[].action``：行内操作（更多菜单/直点 + Popconfirm/Modal 确认，
+#:        操作后重按搜索回读列表，以回读结果判 expect；操作面扫描含数据行独立第二行 tr）；
+#:     ② ``list_checks[].readonly``：查看只读（进入查看页后统计 input/textarea/select
+#:        禁用率，全禁用才 pass，READONLY_TRACE 留现场）；
+#:     ③ ``export_checks`` 独立导出通道（更多菜单→导出明细弹窗→空时间段校验 toast→
+#:        antd v3 日历选"倒数第二天~最后一天"→确认→导出中心轮询已完成→下载落盘
+#:        →xlsx 极简 zip 解压做列名**出现性**校验，不校验列序；EXPORT_TRACE/
+#:        EXPORT_EVIDENCE 留证据）。交互配方来自人工探针 xy_p1b/p2/p8 实测。
+#:     诚实边界：解压失败/轮询超时/下载缺失一律 unverified，不判缺陷不判通过。
+#:   - rev149（2026-10-21，rev148 导出通道重构收尾）：
+#:     ① 下载监听前置——``waitForEvent('download')`` 必须在点确认**之前**挂上
+#:        （注册晚了会错过 download 事件，实测该 SUT 确认即触发 exportDetail 下载）；
+#:     ② 直下/导出中心双路收敛为单一 ``saveAndInspect``（合并 saveAs+fs 落盘+zip 列名
+#:        校验），消除旧 step7 的重复 ``dl``/``columns`` 声明（TS 编译会炸）；
+#:     ③ 直下成功后**跳过**导出中心轮询（否则轮询超时误报"无匹配记录"）；
+#:     ④ ``toastAfter`` 在确认后采集（EXPORT_TRACE 取证引用）。
+#:   - rev150（2026-10-21，列表/导出通道 hash 直链）：
+#:     ``resolveListUrl``——配置可写 ``#/x`` 形式的列表直链，运行期以**当前页**
+#:     origin+path+search（保留 per-session accessToken）还原成完整 URL 再 goto。
+#:     背景：门户卡片式应用的应用 URL 带 per-session token，写死整链必失效；
+#:     表单阶段结束后页面停在新增路由，必须 hash 导航回列表路由才能执行列表/导出通道。
+#:   - rev151（2026-10-21，TR-764 挂死根因）：
+#:     ① ``appPageForNav``——门户卡片式应用**新开标签页**，fixture 的 ``page`` 是控制台首页；
+#:        列表/导出阶段改锚定 ``anyScope``（应用作用域）→ 非控制台页兜底 → ``page`` 兜底，
+#:        ``resolveListUrl`` 一并按目标页解析 origin（否则还原成控制台 origin，goto 后挂死）；
+#:     ② ``phaseWatchdog``——列表 180s / 导出 240s 硬上限，超时记 PHASE_WATCHDOG 并继续，
+#:        不再让 evaluate 永不返回把整轮预算（28min）烧光。
+#:   - rev152（2026-10-21）：列表阶段 ``LIST_STAGE`` 埋点（nav_page / goto_begin / goto_done /
+#:     root_ready / scan_done）——跨标签页导航卡住时必须能分清卡在 goto 还是 evaluate。
+#:   - rev153（2026-10-21，TR-765 实测）：列表页是异步 SPA，固定等 5s 采到 **0 行** ⇒
+#:     ① ``waitRows`` 有界轮询到出现行（列表/导出两阶段 goto 后各 30s，搜索后 20s）；
+#:     ② 导出通道入口未打开（row_not_found/entry_not_found）时**跳过**导出中心轮询，
+#:        不再白等 180s 并产出"导出中心无匹配记录"的伪结论。
+#:   - rev154（2026-10-21，TR-766 + 探针实测）：下拉菜单条目改用 ``clickDropdownItem``
+#:     （真实鼠标点击优先）——``evaluate`` 的 ``.click()`` 不触发该框架的菜单处理器，
+#:     表现为"点导出明细毫无反应"（无弹窗/无请求/无 toast）；改鼠标点击后正常弹出
+#:     「导出明细 / 选择时间 ~ / 取 消 确 定」。另：弹窗未出现且未配导出中心 URL 时
+#:     不再轮询导出中心（``centerWorth`` 门控），避免 180s 白等与伪结论。
+#:   - rev155（2026-10-21，TR-768 + 探针实测）：**操作列在右侧固定列的克隆 tbody 里**——
+#:     整页是「10 个数据行 + 10 个操作行」，数据行与操作行**不相邻**（TR-768 导出
+#:     menu_not_found 的根因）。新增 ``rowWithOps``：按「同 tbody 内行序号对齐」取出
+#:     该数据行对应的操作行；action / readonly / export 三处统一改用它。
+#:   - rev156（2026-10-21，TR-769 + DOM 实测）：本 SUT 的操作项**随行状态变化**——
+#:     有的行是「查看/编辑/启用/更多」，有的行是「查看/复制/删除/导出明细」（无「更多」）。
+#:     ① ``list_checks[].action.labels``：候选标签数组，按序取第一个真实存在的
+#:        （启用/禁用互换时同一份配置可复用）；
+#:     ② 导出通道：配置了 ``menu`` 但该行没有「更多」时，**退回直点标签**
+#:        （stage='clicked_direct'），不再直接判 menu_not_found。
+#:   - rev157（2026-10-21，rev157 探针三连实测）：导出通道三个「假自证」全部堵掉——
+#:     ① **任务名 ≠ 文件名**：导出中心任务名 `调查问卷-XY..-2026-10-21 10:31:24`（无后缀），
+#:        下载文件名 `..10_31_24.xlsx`（有后缀）。此前拿 `filename_regex`（要求 `.xlsx`）
+#:        去匹配任务名，恒不命中，导致轮询 90s 空转记 unverified。新增 `center_name_regex`
+#:        （默认 `调查问卷-|問卷調查-`），`filename_regex` 只做下载取证。
+#:     ② **选时间必须点两次且回读**：RangePicker 只点一次时输入框仍为空，点确定被前端
+#:        校验拦截、导出请求根本不发出，而旧代码无条件置 `datesPicked=true`。改为
+#:        点「当月首日 + 当月末日」后**回读弹窗输入框**，两个值都非空才算选上。
+#:     ③ **只认本轮新任务**：历史行同样满足「已完成 + 名称前缀」，会假阳性。记点确认
+#:        时刻，要求命中行「创建时间」不早于确认时刻减 `fresh_tolerance_s`（默认 180s）；
+#:        未命中时把同名候选数与前 3 行写进断言，避免下次只能靠猜。
+#:   - rev158（2026-10-21，TR-771 实测 `EXPORT_STAGE rows:2` + `row_not_found`）：
+#:     列表页会**保留上一阶段的搜索条件**——`goto` 与当前完全相同的 hash 是 no-op，
+#:     SPA 不重新加载，表格里只剩上次搜索命中的 2 行，导出目标行（另一个 value）必然找不到。
+#:     导出阶段定位行前先按本次 `value` 重新检索（`#title` / placeholder 候选），
+#:     检索后重新 ``pickRoot``（表格重渲染会换 frame/节点），并埋 `EXPORT_STAGE searched`。
+#:   - rev159（2026-10-21，TR-772 实测 9/9 列名全 missing）：本 SUT 导出的 xlsx 把中文写成
+#:     **HTML 数字实体**（`&#22635;&#20889;…` = 填写…），`indexOf('填写渠道')` 恒不命中。
+#:     列名校验前统一解码实体（十/十六进制 + 命名字符），并把解压文本、原始 latin1、
+#:     原始 utf8 三路拼接后一起解码（兼顾 deflate 与 store 两种写入方式）。
+#:   - rev160（2026-10-21，TR-772 实测）：**行内操作失败曾被判 pass**——配置了 action
+#:     但 ``step1.ok=false``（候选标签都不在当前行状态的操作项里），旧逻辑只把它写进 note，
+#:     ``found``（搜索命中）仍为 true ⇒ 记 pass。改为：动作或确认框任一步没走通即记
+#:     **unverified**，文案带候选标签与 trace 锚点，避免「通道没验证」被当成通过。
+#:   - rev161（2026-10-21，TR-773 实测：列名仍 9/9 missing）：``zipText`` 改**读中央目录**。
+#:     旧实现顺序扫 local file header 并在 ``csize=0`` 时 break，而本 SUT 导出的 xlsx
+#:     **每个成员都是 data descriptor**（flag 0x0808）⇒ 首个成员就中断、抽出文本长度 0。
+#:     实测对比：旧 0/9 命中、新 9/9 命中（text 5130 字符）。
+COMPILER_REV = "rev161"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -1162,6 +1244,30 @@ def parse_list_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                                 "detail": f"index={index}"})
                 continue
             phs = _as_str_list(entry.get("search_placeholder"))
+            # rev148：行内操作 / 查看只读（可选，配置了才生效；畸形结构整体丢弃该子项）
+            action_raw = entry.get("action")
+            action = None
+            # rev156：操作项随行状态变化（启用/禁用互换），允许给**候选标签数组** `labels`；
+            # `label` 仍必填（=首选标签），`labels` 只用来在多状态下行间复用同一份配置。
+            if isinstance(action_raw, dict) and str(action_raw.get("label") or "").strip():
+                _labels = [str(x).strip() for x in (action_raw.get("labels") or [])
+                           if str(x or "").strip()]
+                action = {
+                    "label": str(action_raw["label"]).strip(),
+                    "labels": _labels,
+                    "menu": str(action_raw.get("menu") or ""),
+                    "confirm": str(action_raw.get("confirm") or ""),
+                    "post_value": str(action_raw.get("post_value") or ""),
+                }
+            ro_raw = entry.get("readonly")
+            readonly = None
+            if isinstance(ro_raw, dict) and ro_raw.get("expect_all_disabled") is not False:
+                readonly = {
+                    "view_label": str(ro_raw.get("view_label") or "查看|檢視"),
+                    "view_menu": str(ro_raw.get("view_menu") or ""),
+                }
+            elif ro_raw is True:
+                readonly = {"view_label": "查看|檢視", "view_menu": ""}
             items.append({
                 "name": str(entry.get("name") or f"list_visible:{value}"),
                 "value": value,
@@ -1169,9 +1275,134 @@ def parse_list_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                 "list_url": str(entry.get("list_url") or ""),
                 "search_placeholder": phs,
                 "max_pages": max(1, _as_int(entry.get("max_pages"), 3)),
+                "action": action,
+                "readonly": readonly,
                 "case_id": str(entry.get("case_id") or ""),
                 "rule_id": str(entry.get("rule_id") or ""),
                 "rule_ref": str(entry.get("rule_ref") or "列表可见"),
+            })
+            seen.add(key)
+        except Exception as exc:  # noqa: BLE001  配置畸形不得阻断编译
+            rejects.append({"value": "", "reason": "检查解析异常",
+                            "detail": f"{type(exc).__name__}: {exc}"[:200]})
+    return items, rejects
+
+
+# ==========================================================================
+# 「导出」独立通道（``extra_config.export_checks``，rev148 新增）
+# ==========================================================================
+# 背景（2026-10-20 需求追溯实测）：导出 11 列走表单字段通道，天生无 required/options
+# → 全被生成门槛丢掉；「更多菜单 → 导出明细弹窗 → 空时间段校验 → 选时间段 → 导出中心
+# 完成 → 下载落盘 → 列名」此前只有人工探针（xy_p2/p8 系列）承接，不在回归里。
+#
+# ★ 诚实边界（写进判定，不冒充）：
+#   * ``expect_columns`` 是**出现性校验**（xlsx 解压后全文包含该列名），不校验列序；
+#   * zip 解压失败（本地文件头无尺寸/流式写入）时列名校验如实 unverified；
+#   * 导出中心轮询超时 = unverified（任务可能排队），不判缺陷、不判通过。
+EXPORT_CHECK_DEFAULTS: dict[str, Any] = {
+    "menu": "更多",
+    "label": "导出明细",
+    "validate_empty_time": True,
+    "validation_toast": "请选择时间|請選擇時間|请选择|請選擇",
+    "pick_dates": True,
+    "confirm_label": "导出|確定|确定|確認|确认",
+    "status_text": "已完成|完成",
+    "filename_regex": "调查问卷-.*\\.xlsx|問卷調查-.*\\.xlsx",
+    #: rev157：导出中心**任务名称**与**下载文件名**是两个不同的字符串，不能共用一个正则。
+    #: 实测（2026-10-21 10:31）：任务名 ``调查问卷-XY..-2026-10-21 10:31:24``（无后缀、冒号保留），
+    #: 下载文件名 ``调查问卷-XY..-2026-10-21 10_31_24.xlsx``（有 .xlsx、冒号换成下划线）。
+    #: 之前拿 ``filename_regex``（要求 ``\.xlsx``）去匹配任务名 ⇒ 恒不命中 ⇒ 轮询 90s 空转。
+    "center_name_regex": "调查问卷-|問卷調查-",
+    #: 命中行必须是**本轮新生成**的任务：行内「创建时间」需晚于点确定时刻减该容差。
+    #: 否则历史行会让「导出没真发出」的情况被判成通过（假阳性）。
+    "fresh_tolerance_s": 180,
+    "timeout_ms": 180000,
+    "poll_ms": 6000,
+    "download": True,
+    "max_wait_download_ms": 30000,
+}
+
+
+def parse_export_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """解析 ``extra_config.export_checks``，返回 ``(可用检查, 被拒检查)``。
+
+    单条配置字段：
+      ``name``            断言名（缺省 ``export:<label>``）
+      ``value``           可选：先按此值检索定位目标行（缺省取第一行）
+      ``list_url``        列表页直链（缺省回退 ``locators.list_url``；两者都空 → 拒绝）
+      ``menu``            入口下拉文案（缺省「更多」；空串＝工具条直点 ``label``）
+      ``label``           菜单项文案（缺省「导出明细」）
+      ``validate_empty_time``  先空时间段点确认、期待校验 toast（缺省 True）
+      ``validation_toast``     空时间段校验 toast 的正则
+      ``pick_dates``      有时间选择器时自动选「倒数第二天 ~ 最后一天」（缺省 True）
+      ``confirm_label``   弹窗确认按钮文案正则（缺省 导出|确定）
+      ``export_center``   ``{url, status_text, timeout_ms, poll_ms}``（url 空＝点页面内「导出」入口）
+      ``filename_regex``  下载文件名应匹配的正则
+      ``expect_columns``  列名出现性校验（数组；空＝跳过列校验）
+      ``download``        是否点击下载并落盘（缺省 True）
+      ``case_id`` / ``rule_id``  证据归属
+    """
+    if raw is None or raw == "":
+        return [], []
+    if not isinstance(raw, list):
+        return [], [{"value": "", "reason": "export_checks 必须是数组",
+                     "detail": type(raw).__name__}]
+
+    items: list[dict[str, Any]] = []
+    rejects: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(raw):
+        try:
+            if not isinstance(entry, dict):
+                rejects.append({"value": "", "reason": "检查必须是对象",
+                                "detail": f"index={index}"})
+                continue
+            label = str(entry.get("label") or EXPORT_CHECK_DEFAULTS["label"])
+            key = label
+            if key in seen:
+                rejects.append({"value": label, "reason": "同一 label 重复",
+                                "detail": f"index={index}"})
+                continue
+            center = entry.get("export_center") or {}
+            center = center if isinstance(center, dict) else {}
+            columns = [str(c).strip() for c in (entry.get("expect_columns") or [])
+                       if str(c).strip()]
+            items.append({
+                "name": str(entry.get("name") or f"export:{label}"),
+                "value": str(entry.get("value") or ""),
+                "list_url": str(entry.get("list_url") or ""),
+                "menu": str(entry.get("menu", EXPORT_CHECK_DEFAULTS["menu"])),
+                "label": label,
+                "validate_empty_time": bool(entry.get(
+                    "validate_empty_time", EXPORT_CHECK_DEFAULTS["validate_empty_time"])),
+                "validation_toast": str(entry.get(
+                    "validation_toast", EXPORT_CHECK_DEFAULTS["validation_toast"])),
+                "pick_dates": bool(entry.get("pick_dates", EXPORT_CHECK_DEFAULTS["pick_dates"])),
+                "confirm_label": str(entry.get(
+                    "confirm_label", EXPORT_CHECK_DEFAULTS["confirm_label"])),
+                "export_center": {
+                    "url": str(center.get("url") or ""),
+                    "status_text": str(center.get(
+                        "status_text", EXPORT_CHECK_DEFAULTS["status_text"])),
+                    "timeout_ms": max(10000, int(center.get(
+                        "timeout_ms", EXPORT_CHECK_DEFAULTS["timeout_ms"]) or 180000)),
+                    "poll_ms": max(2000, int(center.get(
+                        "poll_ms", EXPORT_CHECK_DEFAULTS["poll_ms"]) or 6000)),
+                },
+                "filename_regex": str(entry.get(
+                    "filename_regex", EXPORT_CHECK_DEFAULTS["filename_regex"])),
+                "center_name_regex": str(entry.get(
+                    "center_name_regex", EXPORT_CHECK_DEFAULTS["center_name_regex"])),
+                "fresh_tolerance_s": max(0, int(entry.get(
+                    "fresh_tolerance_s", EXPORT_CHECK_DEFAULTS["fresh_tolerance_s"]) or 180)),
+                "expect_columns": columns,
+                "download": bool(entry.get("download", EXPORT_CHECK_DEFAULTS["download"])),
+                "max_wait_download_ms": max(5000, int(entry.get(
+                    "max_wait_download_ms", EXPORT_CHECK_DEFAULTS["max_wait_download_ms"])
+                    or 30000)),
+                "case_id": str(entry.get("case_id") or ""),
+                "rule_id": str(entry.get("rule_id") or ""),
+                "rule_ref": str(entry.get("rule_ref") or "导出明细"),
             })
             seen.add(key)
         except Exception as exc:  # noqa: BLE001  配置畸形不得阻断编译
@@ -1370,7 +1601,7 @@ def compile_cases(cases: Iterable[Any]) -> dict[str, Any]:
         "field_labels": field_labels,
         "assertion_count": locator_assertions + soft_assertions,
         "soft_assertion_count": soft_assertions,
-        "pending_locator_count": locator_assertions,
+        "locator_depended_assertion_count": locator_assertions,
     }
 
 
@@ -1434,7 +1665,7 @@ def render_coverage_snippet(*, scope_var: str = "appScope",
     dangling_rule_ids: {manifest_var}.dangling_rule_ids.length,
     assertions: {manifest_var}.assertion_count,
     form_executable_checks: {int(form_executable_checks)},
-    pending_locator: Math.max(0, {manifest_var}.pending_locator_count - {int(assertion_checks)}),
+    pending_locator: Math.max(0, ({manifest_var}.locator_depended_assertion_count ?? {manifest_var}.pending_locator_count ?? 0) - {int(assertion_checks)}),
     soft_label_checks: {manifest_var}.soft_assertion_count,
     field_labels_found: __labelHits,
     field_labels_total: {manifest_var}.field_labels.length,
@@ -2281,10 +2512,39 @@ def build_form_plan(
             "list_url": item["list_url"] or str(loc.get("list_url") or ""),
             "search_placeholder": item["search_placeholder"],
             "max_pages": item["max_pages"],
+            # rev148：行内操作 / 查看只读（配置了才生效，缺省走纯可见性）
+            "action": item.get("action"),
+            "readonly": item.get("readonly"),
             "rule": item["rule_ref"],
             "case_id": item["case_id"],
             "rule_id": item["rule_id"],
             # 配置驱动：与 default_selected 同口径，单独归类，避免被读成"本该有归属却没有"
+            "source": "locator_config",
+        })
+
+    # 「导出」独立通道（rev148）：菜单 → 弹窗 → 时间段 → 导出中心 → 下载 → 列名。
+    # 与 list_checks 同形：配置驱动、独立阶段、被拒不静默（[export-skip] 运行期可见）。
+    export_checks, export_check_rejects = parse_export_checks(loc.get("export_checks"))
+    for item in export_checks:
+        checks.append({
+            "type": "export_check",
+            "name": item["name"],
+            "value": item["value"],
+            "list_url": item["list_url"] or str(loc.get("list_url") or ""),
+            "menu": item["menu"],
+            "label": item["label"],
+            "validate_empty_time": item["validate_empty_time"],
+            "validation_toast": item["validation_toast"],
+            "pick_dates": item["pick_dates"],
+            "confirm_label": item["confirm_label"],
+            "export_center": item["export_center"],
+            "filename_regex": item["filename_regex"],
+            "expect_columns": item["expect_columns"],
+            "download": item["download"],
+            "max_wait_download_ms": item["max_wait_download_ms"],
+            "rule": item["rule_ref"],
+            "case_id": item["case_id"],
+            "rule_id": item["rule_id"],
             "source": "locator_config",
         })
 
@@ -2381,13 +2641,15 @@ def build_form_plan(
         #  资产审计里也没有 skipped_assertions，只剩一句"无定位器"无从下手）。
         # 这里返回一个 executable=False 的计划：调用方据此**不注入执行器**（避免为 0 条检查
         # 打开表单、把环境问题变成硬失败），但审计与运行期现场仍然完整。
-        if not skipped and not negative_scenario_rejects and not list_check_rejects:
+        if (not skipped and not negative_scenario_rejects
+                and not list_check_rejects and not export_check_rejects):
             return None
         return {"locators": plan_locators, "checks": [], "skipped": skipped,
                 "check_count": 0, "skipped_count": len(skipped),
                 "assertion_check_count": 0, "executable": False,
                 "negative_scenarios": [], "negative_scenario_rejects": negative_scenario_rejects,
                 "list_checks": [], "list_check_rejects": list_check_rejects,
+                "export_check_rejects": export_check_rejects,
                 **plan_extras}
     return {"locators": plan_locators, "checks": checks, "skipped": skipped,
             "check_count": len(checks), "skipped_count": len(skipped),
@@ -2397,6 +2659,7 @@ def build_form_plan(
             "negative_scenario_rejects": negative_scenario_rejects,
             "list_checks": list_checks,
             "list_check_rejects": list_check_rejects,
+            "export_check_rejects": export_check_rejects,
             **plan_extras}
 
 
@@ -3891,7 +4154,7 @@ _FORM_EXECUTOR_TS = r"""
     for (const check of FORM_PLAN.checks) {
       checkIndex += 1;
       if (check.type === 'upload_file') continue;   // 由独立阶段处理（见下）
-      if (check.type === 'list_visible') continue;  // 由独立阶段处理（runListChecks，写入之后）
+      if (check.type === 'list_visible' || check.type === 'export_check') continue;  // 由独立阶段处理（runListChecks / runExportChecks，写入之后）
       const name = `${check.type}:${check.field}${check.option ? '=' + check.option : ''}${check.data ? ' [' + check.data + ']' : ''}`;
       currentRuleId = (check as any).rule_id || '';
       currentCaseId = (check as any).case_id || '';
@@ -4966,6 +5229,9 @@ _FORM_EXECUTOR_TS = r"""
     //: 「列表可见」阶段计数（2026-10-16）：与 submit_phase / negative_scenario_phase **分开计数**——
     //: 它验证的是"写入后记录是否可检索"，既不是字段级校验，也不是服务端受理判定。
     const listStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
+    //: 「导出」独立阶段计数（rev148）：与 list_phase 分开计数——验证的是
+    //: 「菜单 → 弹窗 → 时间段 → 导出中心 → 下载 → 列名」整链，不是记录可见性。
+    const exportStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
     async function runNegativeScenarios(): Promise<void> {
       const scenarios: any[] = Array.isArray(FORM_PLAN.negative_scenarios)
         ? FORM_PLAN.negative_scenarios : [];
@@ -5726,7 +5992,93 @@ _FORM_EXECUTOR_TS = r"""
     //       list 阶段位于整批末尾，记 blocked 会把无关用例一起拖成硬失败；
     //       而"没检索到"是**负证据**，同样如实记 unverified 并输出 LIST_VISIBLE_TRACE，
     //       由人复核是"真不可见"还是"查询条件/分页限制"。
+    // rev150/rev151：列表/导出阶段的**目标页**与 URL 解析。
+    // ① 目标页：门户卡片式应用点卡片会**新开标签页**，测试 fixture 的 ``page``
+    //    是控制台首页；在控制台上 goto 应用路由会把 SPA 带进无效路由并挂死
+    //    （实测 TR-764：列表阶段 12 分钟无任何 trace）。优先 ``anyScope``（应用作用域），
+    //    其次取上下文里第一个非控制台页，最后才回退 ``page``。
+    // ② URL 解析：应用 URL 带 per-session accessToken（query），列表直链写死必失效；
+    //    配置只写 '#/x' 形式，运行期以**目标页**的 origin+path+search 还原。
+    const appPageForNav = (): any => {
+      try {
+        const sc: any = (typeof anyScope !== 'undefined') ? anyScope : null;
+        if (sc) {
+          if (typeof sc.goto === 'function') return sc;
+          if (typeof sc.page === 'function') {
+            const p = sc.page();
+            if (p) return p;
+          }
+        }
+        const ps: any[] = page.context().pages();
+        const hit = ps.find((p: any) => !/dtcloud-console/.test(String(p.url())));
+        if (hit) return hit;
+      } catch { /* 回退 */ }
+      return page;
+    };
+    const resolveListUrl = (raw: string, pg: any): string => {
+      if (!raw.startsWith('#')) return raw;
+      try {
+        const u = new URL(pg.url());
+        return u.origin + u.pathname + u.search + raw;
+      } catch { return raw; }
+    };
+    // rev153：列表页是异步加载的 SPA——固定等 5s 后采样会读到 0 行
+    // （实测 TR-765：列表/导出两阶段都是 rows:0，判定全落 unverified）。
+    // 改成"有界轮询到出现行"：最多等 ms，出现行即返回，超时如实返回 0。
+    const waitRows = async (pg: any, ms: number): Promise<number> => {
+      const deadline = Date.now() + ms;
+      let n = 0;
+      while (Date.now() < deadline) {
+        n = Number(await pg.evaluate(
+          () => document.querySelectorAll('.ant-table-tbody tr, .ant-table-row').length,
+        ).catch(() => 0));
+        if (n > 0) return n;
+        await pg.waitForTimeout(1500);
+      }
+      return n;
+    };
+
+    // rev154：更多菜单里的条目必须用**真实鼠标点击**——``evaluate`` 的 ``.click()``
+    // 不触发该框架的下拉处理器（实测：导出明细 evaluate 点击后无任何浮层/请求/toast；
+    // locator 点击则正常弹出「导出明细 / 选择时间」弹窗）。先鼠标、失败再退回 evaluate。
+    const clickDropdownItem = async (pg: any, text: string): Promise<any> => {
+      const lbl = String(text || '');
+      if (lbl) {
+        try {
+          const loc = pg.locator('.ant-dropdown:not(.ant-dropdown-hidden) li, .ant-dropdown-menu-item')
+            .filter({hasText: lbl}).first();
+          if (await loc.count()) {
+            await loc.click({timeout: 8000});
+            return {ok: true, stage: 'menu_item_clicked', via: 'mouse'};
+          }
+        } catch { /* 退回 evaluate */ }
+      }
+      return pg.evaluate((tt: string) => {
+        const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+        const items2 = Array.from(document.querySelectorAll(
+          '.ant-dropdown:not(.ant-dropdown-hidden) li, '
+          + '.ant-dropdown:not(.ant-dropdown-hidden) a, .ant-dropdown-menu-item'))
+          .filter((e: any) => e.offsetParent !== null);
+        const hit = items2.find((e: any) => norm(e.innerText) === tt)
+          || items2.find((e: any) => norm(e.innerText).indexOf(tt) >= 0);
+        if (hit) { (hit as any).click(); return {ok: true, stage: 'menu_item_clicked', via: 'evaluate'}; }
+        return {ok: false, why: 'menu_item_not_found',
+                items: items2.map((e: any) => norm(e.innerText)).slice(0, 10)};
+      }, lbl);
+    };
+
     async function runListChecks(): Promise<void> {
+      const page = appPageForNav();   // rev151：列表阶段作用于应用标签页
+      // rev152：阶段埋点——跨标签页导航一旦卡住，必须能从日志看出卡在**哪一步**
+      // （TR-764/765 只见 PHASE_WATCHDOG，无法区分 goto / evaluate / 搜索 / 扫描）。
+      const stageMark = (st: string, extra: any = {}) => {
+        try {
+          console.log('LIST_STAGE ' + JSON.stringify({
+            stage: st, url: String(page.url() || '').slice(0, 110), ...extra,
+          }));
+        } catch { /* 页面已销毁 */ }
+      };
+      stageMark('nav_page', {kind: String((page as any)?.constructor?.name || '')});
       const items: any[] = (FORM_PLAN.checks || []).filter((c: any) => c.type === 'list_visible');
       listStat.configured = items.length;
       for (const rej of (FORM_PLAN.list_check_rejects || []).slice(0, 20)) {
@@ -5745,8 +6097,11 @@ _FORM_EXECUTOR_TS = r"""
                    '未配置列表页 URL（list_checks[].list_url 或 locators.list_url）');
             continue;
           }
-          await page.goto(url, {timeout: 30000, waitUntil: 'domcontentloaded'}).catch(() => undefined);
-          await page.waitForTimeout(5000);
+          stageMark('goto_begin', {target: resolveListUrl(url, page).slice(0, 120)});
+          await page.goto(resolveListUrl(url, page), {timeout: 30000, waitUntil: 'domcontentloaded'}).catch(() => undefined);
+          stageMark('goto_done');
+          const waitedRows = await waitRows(page, 30000);
+          stageMark('rows_present', {rows: waitedRows});
           const pickRoot = async (): Promise<any> => {
             let best: any = null, bn = -1;
             const cands: any[] = [page, ...page.frames()];
@@ -5793,10 +6148,12 @@ _FORM_EXECUTOR_TS = r"""
               if (await btn.count().catch(() => 0)) {
                 await btn.click({timeout: 8000}).catch(() => undefined);
               }
-              await page.waitForTimeout(3000);
+              await page.waitForTimeout(1500);
+              await waitRows(page, 20000);
               searched = true;
             }
           }
+          stageMark('root_ready', {rows: rowCount});
           const scan = async (): Promise<any> => (root ? await root.evaluate((v: string) => {
             const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
             const rows = Array.from(document.querySelectorAll('.ant-table-row, .ant-table-tbody tr'));
@@ -5806,6 +6163,7 @@ _FORM_EXECUTOR_TS = r"""
           }, val).catch((e: any) => ({rows: -1, hits: -1, err: String(e).slice(0, 80)}))
             : {rows: 0, hits: 0});
           let res: any = await scan();
+          stageMark('scan_done', {rows: res ? res.rows : -1, hits: res ? res.hits : -1});
           const maxPages = Math.max(1, Number(check.max_pages) || 3);
           let pages = 1;
           while (res && res.hits === 0 && pages < maxPages) {
@@ -5821,17 +6179,233 @@ _FORM_EXECUTOR_TS = r"""
             pages += 1;
             res = await scan();
           }
-          const found = !!(res && res.hits > 0);
+          let found = !!(res && res.hits > 0);
           console.log('LIST_VISIBLE_TRACE ' + JSON.stringify({
             value: val, url: url.slice(0, 90), rows: res ? res.rows : -1, pages,
             searched, search: searchNote, expect: String(check.expect || 'found'),
             found, sample: (res && res.sample) || '',
           }));
+          // ===== rev148：行内操作（更多菜单 / 直点 + Popconfirm 确认）=====
+          // 实测口径（xy_p1b/p2 探针）：①行操作可能渲染在数据行的**独立第二行 tr**，
+          // 必须同时扫数据行与其后一行；②antd 确认框有 Popover 与 Modal 两种形态，
+          // 确认定位必须**同时**采样 .ant-popover:not(.ant-popover-hidden) 与
+          // .ant-modal-confirm——只查一种会把「弹了气泡确认」误判成找不到；
+          // ③操作后重按搜索回读列表，以回读结果作为 expect 判定。
+          let actionNote = '';
+          // rev160（TR-772 实测）：配置了 action 但没点成功时，旧逻辑仅把它写进 note，
+          // 而 found（搜索命中）仍为 true ⇒ 判 **pass** —— 「行内操作通道没跑通」被掩盖。
+          // 配置了动作就必须真点到（且确认框真命中），否则记 unverified，不判通过。
+          let actionFailed = '';
+          const act = check.action;
+          if (act && found && root) {
+            const clickInRow = (val0: string, target: string, menu0: string): any => root.evaluate(
+              ({value: vv, label: tt, menu: mm}: any) => {
+                const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+                const rows = Array.from(document.querySelectorAll('.ant-table-tbody tr, .ant-table-row'))
+                  .filter((r: any) => r.offsetParent !== null);
+                const idx = rows.findIndex((r: any) => norm(r.innerText).indexOf(vv) >= 0);
+                if (idx < 0) return {ok: false, why: 'row_not_found'};
+                // rev155：操作列在右侧固定列的**克隆 tbody** 里（整页 10 数据行 + 10 操作行，
+                // 数据行与操作行并不相邻）。按「同 tbody 内行序号对齐」取出对应操作行。
+                const rowWithOps = (row0: any) => {
+                  const out: any[] = [row0];
+                  const tb0: any = row0.parentElement;
+                  const ri = Array.prototype.indexOf.call(tb0.children, row0);
+                  Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'),
+                    (t2: any) => {
+                      const cand = t2.children[ri];
+                      if (cand && cand !== row0) out.push(cand);
+                    });
+                  return out;
+                };
+                const scopes = rowWithOps(rows[idx]);
+                if (mm) {
+                  for (const sc of scopes) {
+                    const more = Array.from(sc.querySelectorAll('a,button,span'))
+                      .filter((e: any) => e.offsetParent !== null)
+                      .find((a: any) => norm(a.innerText) === mm);
+                    if (more) { (more as any).click(); return {ok: true, stage: 'menu_opened'}; }
+                  }
+                  return {ok: false, why: 'menu_not_found'};
+                }
+                for (const sc of scopes) {
+                  const hit = Array.from(sc.querySelectorAll('a,button,span'))
+                    .filter((e: any) => e.offsetParent !== null)
+                    .find((a: any) => norm(a.innerText) === tt);
+                  if (hit) { (hit as any).click(); return {ok: true, stage: 'clicked'}; }
+                }
+                return {ok: false, why: 'action_not_found'};
+              }, {value: val0, label: target, menu: menu0});
+            // rev156：候选标签逐个尝试（行状态不同 → 可点项不同）
+            const actLabels: string[] = (Array.isArray(act.labels) && act.labels.length)
+              ? act.labels.map((s: any) => String(s))
+              : [String(act.label || '')];
+            let step1: any = null;
+            let usedLabel = actLabels[0];
+            for (const lb of actLabels) {
+              if (!lb) continue;
+              step1 = await clickInRow(val, lb, String(act.menu || ''));
+              if (step1 && step1.ok) { usedLabel = lb; break; }
+            }
+            if (step1 && step1.ok && step1.stage === 'menu_opened') {
+              await page.waitForTimeout(1200);
+              step1 = await clickDropdownItem(page, usedLabel);
+            }
+            await page.waitForTimeout(1000);
+            let conf: any = {ok: false, why: act.confirm ? 'confirm_pending' : 'no_confirm'};
+            if (step1 && step1.ok && act.confirm) {
+              conf = await root.evaluate((cc: string) => {
+                const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+                const pops = Array.from(document.querySelectorAll(
+                  '.ant-popover:not(.ant-popover-hidden), .ant-modal-confirm'))
+                  .filter((p: any) => p.offsetParent !== null || p.className.includes('ant-modal-confirm'));
+                for (const p of pops) {
+                  const btns = Array.from((p as any).querySelectorAll('button'))
+                    .filter((b: any) => b.offsetParent !== null);
+                  const hit = btns.find((b: any) => norm(b.innerText) === cc)
+                    || btns.find((b: any) => /确\s*定|確\s*定|OK/i.test(norm(b.innerText)));
+                  if (hit) {
+                    const out = {ok: true, clicked: norm((hit as any).innerText),
+                                 text: norm((p as any).innerText).slice(0, 90)};
+                    (hit as any).click();
+                    return out;
+                  }
+                }
+                return {ok: false, why: 'confirm_not_found', visible: pops.length};
+              }, String(act.confirm));
+            }
+            await page.waitForTimeout(2500);
+            // 操作后回读：重按搜索（输入框仍保留关键词），以回读为准
+            if (step1 && step1.ok && root) {
+              const btn2 = root.locator('button')
+                .filter({hasText: /搜\s*索|查\s*詢|查\s*询/i}).first();
+              if (await btn2.count().catch(() => 0)) {
+                await btn2.click({timeout: 8000}).catch(() => undefined);
+              }
+              await page.waitForTimeout(3000);
+              res = await scan();
+              const postVal = String(act.post_value || val);
+              found = !!(res && res.hits > 0);
+              actionNote = `action=${step1.stage}/${step1.why || 'ok'}`
+                + `,confirm=${conf.ok ? conf.clicked : conf.why || conf.why}`
+                + `,post_found=${found}`;
+              // rev160：动作或确认框任一步没走通，本轮不能算通过
+              if (!step1.ok) actionFailed = String(step1.why || 'action_failed');
+              else if (act.confirm && !conf.ok) actionFailed = String(conf.why || 'confirm_failed');
+              console.log('LIST_ACTION_TRACE ' + JSON.stringify({
+                value: val, label: act.label, menu: act.menu, confirm: act.confirm,
+                step1, confirm: conf, post: {rows: res ? res.rows : -1, hits: res ? res.hits : -1},
+                post_value: postVal, found, action_failed: actionFailed,
+              }));
+            } else {
+              actionFailed = step1 ? String(step1.why || 'action_failed') : 'no_root';
+              actionNote = `action_failed=${actionFailed}`;
+              console.log('LIST_ACTION_TRACE ' + JSON.stringify({value: val, step1}));
+            }
+          }
+          // ===== rev148：查看只读（查看页全部输入控件应禁用）=====
+          if (check.readonly && found && root) {
+            const ro = check.readonly;
+            const vm = String(ro.view_menu || '');
+            let opened: any = await root.evaluate(({value: vv, label: tt, menu: mm}: any) => {
+              const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+              const rows = Array.from(document.querySelectorAll('.ant-table-tbody tr, .ant-table-row'))
+                .filter((r: any) => r.offsetParent !== null);
+              const idx = rows.findIndex((r: any) => norm(r.innerText).indexOf(vv) >= 0);
+              if (idx < 0) return {ok: false, why: 'row_not_found'};
+              // rev155：操作列在右侧固定列的克隆 tbody 里，按行序号对齐（同 action/export）
+              const rowWithOps = (row0: any) => {
+                const out: any[] = [row0];
+                const tb0: any = row0.parentElement;
+                const ri = Array.prototype.indexOf.call(tb0.children, row0);
+                Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'),
+                  (t2: any) => {
+                    const cand = t2.children[ri];
+                    if (cand && cand !== row0) out.push(cand);
+                  });
+                return out;
+              };
+              const scopes = rowWithOps(rows[idx]);
+              const want = (sc: any, text: string) => Array.from(sc.querySelectorAll('a,button,span'))
+                .filter((e: any) => e.offsetParent !== null)
+                .find((a: any) => norm(a.innerText) === text);
+              if (mm) {
+                for (const sc of scopes) {
+                  const more = want(sc, mm);
+                  if (more) { (more as any).click(); return {ok: true, stage: 'menu_opened'}; }
+                }
+                return {ok: false, why: 'menu_not_found'};
+              }
+              for (const sc of scopes) {
+                const hit = want(sc, tt) || Array.from(sc.querySelectorAll('a,button,span'))
+                  .filter((e: any) => e.offsetParent !== null)
+                  .find((a: any) => tt.split('|').some((t: string) => norm(a.innerText) === t));
+                if (hit) { (hit as any).click(); return {ok: true, stage: 'clicked'}; }
+              }
+              return {ok: false, why: 'view_not_found'};
+            }, {value: val, label: String(ro.view_label || '查看'), menu: vm});
+            if (opened && opened.ok && opened.stage === 'menu_opened') {
+              await page.waitForTimeout(1200);
+              opened = await root.evaluate((tt: string) => {
+                const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+                const items = Array.from(document.querySelectorAll(
+                  '.ant-dropdown:not(.ant-dropdown-hidden) li, '
+                  + '.ant-dropdown:not(.ant-dropdown-hidden) a, .ant-dropdown-menu-item'))
+                  .filter((e: any) => e.offsetParent !== null);
+                const hit = items.find((e: any) => tt.split('|').some(
+                  (t: string) => norm(e.innerText) === t));
+                if (hit) { (hit as any).click(); return {ok: true, stage: 'menu_item_clicked'}; }
+                return {ok: false, why: 'view_menu_item_not_found'};
+              }, String(ro.view_label || '查看'));
+            }
+            await page.waitForTimeout(3500);
+            const roState: any = await page.evaluate(() => {
+              const vis = (e: any) => e.offsetParent !== null;
+              const inputs = Array.from(document.querySelectorAll('input, textarea')).filter(vis);
+              const selects = Array.from(document.querySelectorAll('.ant-select')).filter(vis);
+              return {
+                url: String(location.hash || location.href).slice(0, 90),
+                inputs_total: inputs.length,
+                inputs_disabled: inputs.filter((i: any) => i.disabled || i.readOnly).length,
+                selects_total: selects.length,
+                selects_disabled: selects.filter((s: any) =>
+                  s.className.includes('ant-select-disabled')).length,
+              };
+            });
+            const allDisabled = roState.inputs_total > 0
+              && roState.inputs_disabled === roState.inputs_total
+              && roState.selects_disabled === roState.selects_total;
+            console.log('READONLY_TRACE ' + JSON.stringify({value: val, opened, ...roState, allDisabled}));
+            const roObs = `查看只读：输入 ${roState.inputs_disabled}/${roState.inputs_total} 禁用，`
+              + `下拉 ${roState.selects_disabled}/${roState.selects_total} 禁用`
+              + `（${opened && opened.ok ? '已进入' : '进入失败:' + (opened && opened.why)}）`;
+            if (allDisabled && opened && opened.ok) {
+              listStat.pass += 1;
+              recAll(check, nm, 'pass', roObs);
+            } else {
+              listStat.unverified += 1;
+              recAll(check, nm, 'unverified',
+                     allDisabled ? roObs : `${roObs}——存在可编辑控件或未进入查看页`);
+            }
+            // 返回列表，恢复现场
+            await page.keyboard.press('Escape').catch(() => undefined);
+            await page.waitForTimeout(800);
+            continue;
+          }
           if (String(check.expect || 'found') === 'found') {
-            if (found) {
+            if (found && actionFailed) {
+              // rev160：列表可见成立，但配置的行内动作没真执行 —— 通道能力未被验证，
+              // 不能记为通过（TR-772 的 action_not_found 曾被 pass 掩盖）。
+              listStat.unverified += 1;
+              recAll(check, nm, 'unverified',
+                     `列表可见但行内操作未完成（${actionFailed}）：`
+                     + `候选标签 ${JSON.stringify((check.action || {}).labels || [])} 均未命中当前行状态，`
+                     + `动作与确认框链路未被验证；${actionNote}`);
+            } else if (found) {
               listStat.pass += 1;
               recAll(check, nm, 'pass',
-                     `列表可见：${res.rows} 行中命中 ${res.hits} 行（search=${searched ? 'on' : 'off'}，翻 ${pages} 页）`);
+                     `列表可见：${res.rows} 行中命中 ${res.hits} 行（search=${searched ? 'on' : 'off'}，翻 ${pages} 页）`
+                     + (actionNote ? `；${actionNote}` : ''));
             } else {
               listStat.unverified += 1;
               recAll(check, nm, 'unverified',
@@ -5853,6 +6427,482 @@ _FORM_EXECUTOR_TS = r"""
         }
       }
       console.log('LIST_PHASE ' + JSON.stringify(listStat));
+    }
+
+    // ===== 「导出」独立通道（rev148）：更多菜单 → 导出明细弹窗 → 空时间段校验 →
+    // 选时间段 → 确认 → 导出中心轮询 → 下载落盘 → 列名出现性校验 =====
+    // 交互配方来自人工探针 xy_p2/p8（实测可用）；判定口径见 parse_export_checks 注释。
+    async function runExportChecks(): Promise<void> {
+      const page = appPageForNav();   // rev151：导出阶段同样作用于应用标签页
+      const items: any[] = (FORM_PLAN.checks || []).filter((c: any) => c.type === 'export_check');
+      exportStat.configured = items.length;
+      for (const rej of (FORM_PLAN.export_check_rejects || []).slice(0, 20)) {
+        console.log('[export-skip] ' + JSON.stringify(rej));
+      }
+      if (!items.length) return;
+      // Node 内建模块（zip 解压 / 落盘）；拿不到就如实降级，不冒充通过
+      const __req = (m: string): any => { try { return require(m); } catch { return null; } };
+      const fsMod: any = __req('fs');
+      const zlibMod: any = __req('zlib');
+      const pathMod: any = __req('path');
+      // 极简 zip 文本抽取：xlsx = zip(sharedStrings.xml 等 deflate 成员)。
+      // 局限：本地文件头无尺寸（流式 data descriptor）时停止解析 → 列校验如实 unverified。
+      // rev159（TR-772 实测）：本 SUT 导出的 xlsx 把中文写成 **HTML 数字实体**
+      // （``&#22635;&#20889;…`` = 填写…），直接 indexOf 中文永远不命中（9/9 列全 missing）。
+      // 校验前统一解码实体（十进制 / 十六进制 / 五个命名字符），再比对列名。
+      const decodeEntities = (s: string): string => String(s)
+        .replace(/&#x([0-9a-fA-F]+);/g, (_m: string, h: string) =>
+          String.fromCodePoint(parseInt(h, 16)))
+        .replace(/&#(\d+);/g, (_m: string, d: string) => String.fromCodePoint(parseInt(d, 10)))
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+        .replace(/&amp;/g, '&');
+      // rev161（TR-773 实测：列名 9/9 仍 missing，text 长度 0）：改为**读中央目录**。
+      // 旧实现顺序扫 local file header，遇 ``csize=0`` 直接 ``break``；而本 SUT 导出的
+      // xlsx **每个成员都是 data descriptor**（general flag 0x0808，local header 尺寸为 0）
+      // ⇒ 第一个成员就 break，抽出文本长度为 0，任何列名都不可能命中。
+      // 中央目录里有真实 ``csize`` 与 local header offset，据此取数据才可靠。
+      const zipText = (buf: any): string => {
+        try {
+          const parts: string[] = [];
+          let eocd = -1;
+          for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
+            if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+          }
+          if (eocd < 0) return '';
+          const count = buf.readUInt16LE(eocd + 10);
+          let off = buf.readUInt32LE(eocd + 16);
+          for (let k = 0; k < count; k++) {
+            if (off + 46 > buf.length || buf.readUInt32LE(off) !== 0x02014b50) break;
+            const method = buf.readUInt16LE(off + 10);
+            const csize = buf.readUInt32LE(off + 20);
+            const nameLen = buf.readUInt16LE(off + 28);
+            const extraLen = buf.readUInt16LE(off + 30);
+            const commentLen = buf.readUInt16LE(off + 32);
+            const localOff = buf.readUInt32LE(off + 42);
+            // local header 的 name/extra 长度可能与中央目录不同，dataStart 必须按 local 取
+            const lNameLen = buf.readUInt16LE(localOff + 26);
+            const lExtraLen = buf.readUInt16LE(localOff + 28);
+            const dataStart = localOff + 30 + lNameLen + lExtraLen;
+            if (csize && dataStart + csize <= buf.length) {
+              const data = buf.slice(dataStart, dataStart + csize);
+              try {
+                if (method === 0) parts.push(data.toString('utf8'));
+                else if (method === 8 && zlibMod) {
+                  parts.push(zlibMod.inflateRawSync(data).toString('utf8'));
+                }
+              } catch { /* 单成员失败不影响其它 */ }
+            }
+            off += 46 + nameLen + extraLen + commentLen;
+          }
+          return parts.join('\n');
+        } catch { return ''; }
+      };
+      const pickRoot = async (): Promise<any> => {
+        let best: any = null, bn = -1;
+        const cands: any[] = [page, ...page.frames()];
+        for (const f of cands) {
+          try {
+            const n = Number(await f.evaluate(
+              () => document.querySelectorAll('.ant-table-row, .ant-table-tbody tr').length));
+            if (n > bn) { bn = n; best = f; }
+          } catch { /* 跨域 */ }
+        }
+        return best;
+      };
+      const toastOf = async (): Promise<string> => String(await page.evaluate(
+        () => Array.from(document.querySelectorAll('.ant-message span, .ant-notification-notice'))
+          .map((e: any) => String(e.innerText || '').trim()).filter(Boolean).join(' | ')
+      ).catch(() => ''));
+      const modalJs = () => {
+        const m: any = document.querySelector(
+          '.ant-modal-wrap:not([style*="display: none"]) .ant-modal-content')
+          || document.querySelector('.ant-modal-content');
+        if (!m) return null;
+        return {
+          present: true,
+          text: String(m.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+          pickers: m.querySelectorAll('.ant-calendar-picker, .ant-picker').length,
+          btns: Array.from(m.querySelectorAll('button'))
+            .filter((b: any) => b.offsetParent !== null)
+            .map((b: any) => String(b.innerText || '').trim()).filter(Boolean),
+        };
+      };
+      for (const check of items) {
+        const nm = String(check.name || ('export:' + check.label));
+        const t0 = Date.now();
+        exportStat.executed += 1;
+        const problems: string[] = [];
+        try {
+          const url = String(check.list_url || '');
+          if (!url) {
+            exportStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '未配置列表页 URL（export_checks[].list_url 或 locators.list_url）');
+            continue;
+          }
+          await page.goto(resolveListUrl(url, page), {timeout: 30000, waitUntil: 'domcontentloaded'}).catch(() => undefined);
+          const waitedRows = await waitRows(page, 30000);
+          console.log('EXPORT_STAGE ' + JSON.stringify({stage: 'rows_present', rows: waitedRows,
+            url: String(page.url() || '').slice(0, 100)}));
+          const root: any = await pickRoot();
+          // step1：打开入口（可选先按 value 检索定位行；缺省第一行）
+          const val = String(check.value || '');
+          const label = String(check.label || '导出明细');
+          const menu = String(check.menu || '');
+          // rev158（TR-771 实测 rows:2 → row_not_found 根因）：列表页会**保留上一阶段的搜索
+          // 条件**——goto 与当前完全相同的 hash 是 no-op，SPA 不重新加载，表格里只剩上次
+          // 搜索命中的那几行（上一阶段搜的是别的 value）。因此导出行定位前必须**先按本次
+          // value 重新检索**，检索后重新 pickRoot（表格重渲染会换 frame/节点）。
+          let rootUsed: any = root;
+          if (val && root) {
+            const phs2: string[] = (() => {
+              const sp: any = (FORM_PLAN.locators as any).search_placeholder;
+              return Array.isArray(sp) ? sp.map((s: any) => String(s))
+                : (sp ? [String(sp)] : []);
+            })();
+            const filled2: any = await root.evaluate(({src, value}: any) => {
+              const phs = String(src).split('|').filter(Boolean);
+              const inputs = Array.from(document.querySelectorAll('input'))
+                .filter((e: any) => e.offsetParent !== null);
+              const t: any = inputs.find((i: any) => phs.some(
+                (p: string) => String(i.placeholder || '').indexOf(p) >= 0))
+                || document.querySelector('#title')
+                || (inputs.length === 1 ? inputs[0] : null);
+              if (!t) return {ok: false, why: 'no_search_input'};
+              t.focus();
+              const setter: any = Object.getOwnPropertyDescriptor(
+                HTMLInputElement.prototype, 'value');
+              if (setter && setter.set) setter.set.call(t, value);
+              else t.value = value;
+              t.dispatchEvent(new Event('input', {bubbles: true}));
+              t.dispatchEvent(new Event('change', {bubbles: true}));
+              return {ok: true, ph: String(t.placeholder || '')};
+            }, {src: phs2.join('|'), value: val})
+              .catch((e: any) => ({ok: false, err: String(e).slice(0, 80)}));
+            if (filled2 && filled2.ok) {
+              const btn2 = page.locator('button')
+                .filter({hasText: /搜\s*索|查\s*詢|查\s*询|Search/i}).first();
+              const clicked2 = !!(await btn2.count().catch(() => 0));
+              if (clicked2) await btn2.click({timeout: 8000}).catch(() => undefined);
+              await page.waitForTimeout(1500);
+              const n2 = await waitRows(page, 20000);
+              console.log('EXPORT_STAGE ' + JSON.stringify({
+                stage: 'searched', value: val, filled: filled2, btn: clicked2, rows: n2}));
+              rootUsed = await pickRoot();
+            } else {
+              console.log('EXPORT_STAGE ' + JSON.stringify({stage: 'search_skipped', filled: filled2}));
+            }
+          }
+          let opened: any = rootUsed ? await rootUsed.evaluate(({value: vv, menu: mm, label: tt}: any) => {
+            const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+            const rows = Array.from(document.querySelectorAll('.ant-table-tbody tr, .ant-table-row'))
+              .filter((r: any) => r.offsetParent !== null);
+            // rev155：操作列在右侧固定列的**克隆 tbody** 里（整页 10 数据行 + 10 操作行，
+            // 数据行与操作行并不相邻）。按「同 tbody 内行序号对齐」取出对应操作行。
+            const rowWithOps = (row0: any) => {
+              const out: any[] = [row0];
+              const tb0: any = row0.parentElement;
+              const ri = Array.prototype.indexOf.call(tb0.children, row0);
+              Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'),
+                (t2: any) => {
+                  const cand = t2.children[ri];
+                  if (cand && cand !== row0) out.push(cand);
+                });
+              return out;
+            };
+            let scopes: any[] = [];
+            if (vv) {
+              const idx = rows.findIndex((r: any) => norm(r.innerText).indexOf(vv) >= 0);
+              if (idx < 0) return {ok: false, why: 'row_not_found', rows: rows.length};
+              scopes = rowWithOps(rows[idx]);
+            } else {
+              const first = rows.find((r: any) => r.querySelector('a,button,span'));
+              if (!first) return {ok: false, why: 'no_rows', rows: rows.length};
+              scopes = rowWithOps(first);
+            }
+            if (mm) {
+              for (const sc of scopes) {
+                const more = Array.from(sc.querySelectorAll('a,button,span'))
+                  .filter((e: any) => e.offsetParent !== null)
+                  .find((a: any) => norm(a.innerText) === mm);
+                if (more) { (more as any).click(); return {ok: true, stage: 'menu_opened'}; }
+              }
+              // rev156：本 SUT 操作项随状态变化——有的行「导出明细」直挂、无「更多」。
+              // 菜单找不到时退回**直点标签**（多一条交互路径，不改判定口径）。
+              for (const sc of scopes) {
+                const direct = Array.from(sc.querySelectorAll('a,button,span'))
+                  .filter((e: any) => e.offsetParent !== null)
+                  .find((a: any) => norm(a.innerText) === tt);
+                if (direct) { (direct as any).click(); return {ok: true, stage: 'clicked_direct'}; }
+              }
+              return {ok: false, why: 'menu_not_found'};
+            }
+            for (const sc of scopes) {
+              const hit = Array.from(sc.querySelectorAll('a,button,span'))
+                .filter((e: any) => e.offsetParent !== null)
+                .find((a: any) => norm(a.innerText) === tt);
+              if (hit) { (hit as any).click(); return {ok: true, stage: 'clicked'}; }
+            }
+            return {ok: false, why: 'entry_not_found'};
+          }, {value: val, menu, label}) : {ok: false, why: 'no_root'};
+          if (opened.ok && opened.stage === 'menu_opened') {
+            await page.waitForTimeout(1200);
+            opened = await clickDropdownItem(page, label);
+          }
+          if (!opened.ok) problems.push(`入口未打开(${opened.why})`);
+          await page.waitForTimeout(2500);
+          // step2：弹窗结构
+          const dlg: any = await page.evaluate(modalJs).catch(() => null);
+          // step3：空时间段校验（先点确认，期待校验 toast）
+          let validation: any = {checked: false, ok: false, toast: ''};
+          if (dlg && dlg.present && check.validate_empty_time) {
+            await page.evaluate((rx: string) => {
+              const m: any = document.querySelector('.ant-modal-content');
+              if (!m) return null;
+              const re = new RegExp(rx);
+              const btns = Array.from(m.querySelectorAll('button'))
+                .filter((b: any) => b.offsetParent !== null);
+              const hit = btns.find((b: any) => re.test(String(b.innerText || '').trim()));
+              if (hit) { (hit as any).click(); return String(hit.innerText || '').trim(); }
+              return null;
+            }, String(check.confirm_label || '导出|确定'));
+            await page.waitForTimeout(2000);
+            validation.toast = await toastOf();
+            validation.ok = new RegExp(String(check.validation_toast || '请选择')).test(validation.toast);
+            validation.checked = true;
+            if (!validation.ok) problems.push('空时间段未拦截');
+          }
+          // step4：选时间段（antd v3 RangePicker）
+          // 实测（2026-10-21 10:29 / 10:31 两轮探针）：
+          //   ① 面板是**两个月并排**（.ant-calendar-range-part ≥2，各 42 天），
+          //      left 面板含上月尾 + 当月，right 含当月尾 + 下月；
+          //   ② RangePicker **必须点两次**——只点一次输入框仍为空，点确定会被前端
+          //      校验拦截，导出请求根本不发出（此时仍判 datesPicked=true 就是假自证）；
+          //   ③ 2026-10-21 直接取全量 tds 末尾 = 12-04~12-06（未来区间）⇒ 导出空表。
+          // 因此：取 left 面板内「当月」的首日与末日（排除 last-month/next-month/disabled），
+          // 点两次后**回读弹窗输入框**，两个值都非空才算选上。
+          let datesPicked = false;
+          let pickNote = '';
+          if (dlg && dlg.present && Number(dlg.pickers) > 0 && check.pick_dates) {
+            const clickDayInPanel = (which: string): any => page.evaluate((w: string) => {
+              const cellOk = (e: any) => {
+                if (e.offsetParent === null) return false;
+                const td: any = e.closest('td') || e.parentElement;
+                const cls = String((td && td.className) || '') + ' ' + String(e.className || '');
+                if (/last-month|next-month|disabled-cell/.test(cls)) return false;
+                const v = Number(String(e.innerText || '').trim());
+                return Number.isFinite(v) && v >= 1 && v <= 31;
+              };
+              const parts = Array.from(document.querySelectorAll('.ant-calendar-range-part'));
+              const scope: any = parts.length ? parts[0] : document;
+              const ds = Array.from(scope.querySelectorAll('.ant-calendar-date')).filter(cellOk);
+              if (!ds.length) return {ok: false, n: 0};
+              const t: any = w === 'last' ? ds[ds.length - 1] : ds[0];
+              (t as any).click();
+              return {ok: true, val: String(t.innerText || '').trim(), n: ds.length};
+            }, which);
+            const readRange = (): any => page.evaluate(() => Array.from(
+              document.querySelectorAll('.ant-modal-content input'))
+              .filter((e: any) => e.offsetParent !== null)
+              .map((e: any) => String(e.value || '')).filter((v: string) => v.length > 0));
+            try {
+              const picker = page.locator('.ant-modal-content .ant-calendar-picker, '
+                + '.ant-modal-content .ant-picker').first();
+              if (await picker.count().catch(() => 0)) {
+                await picker.click({timeout: 8000});
+                await page.waitForTimeout(1200);
+                const d1: any = await clickDayInPanel('first');
+                await page.waitForTimeout(900);
+                const d2: any = await clickDayInPanel('last');
+                await page.waitForTimeout(1200);
+                const range: string[] = await readRange().catch(() => []);
+                datesPicked = range.length >= 2;
+                pickNote = JSON.stringify({first: d1 && d1.val, last: d2 && d2.val,
+                                           n: d1 && d1.n, range});
+              }
+            } catch { datesPicked = false; }
+            if (!datesPicked) {
+              problems.push(`时间段未选上（输入框无值，导出请求不会被发出）${pickNote}`);
+            }
+          }
+          // (step6a 前置) 下载监听必须在点确认**之前**挂上——事件注册晚了会错过 download
+          const dl: any = {clicked: false, saved: '', bytes: 0, suggested: '', via: ''};
+          const columns: any = {checked: false, found: [], missing: []};
+          const dlPromise: any = check.download
+            ? page.waitForEvent('download', {
+              timeout: Number(check.max_wait_download_ms) || 30000,
+            }).catch(() => null) : null;
+          // step5：确认导出
+          // rev157：记下点击确认的时刻——导出中心里**历史行**同样满足「已完成 + 任务名前缀」，
+          // 不卡时间就会把「本次导出没真发出」判成通过（假阳性）。
+          const confirmAt = Date.now();
+          const confirmClicked: any = dlg && dlg.present
+            ? await page.evaluate((rx: string) => {
+              const m: any = document.querySelector('.ant-modal-content');
+              if (!m) return null;
+              const re = new RegExp(rx);
+              const btns = Array.from(m.querySelectorAll('button'))
+                .filter((b: any) => b.offsetParent !== null);
+              const hit = btns.find((b: any) => re.test(String(b.innerText || '').trim()));
+              if (hit) { (hit as any).click(); return String(hit.innerText || '').trim(); }
+              return null;
+            }, String(check.confirm_label || '导出|确定')) : null;
+          if (!confirmClicked && dlg && dlg.present) problems.push('确认未点击');
+          // 确认后的 toast（成功提示或校验提示，供 EXPORT_TRACE 取证）
+          const toastAfter: string = await toastOf();
+          const saveAndInspect = async (d: any): Promise<void> => {
+            dl.suggested = String(d.suggestedFilename() || '');
+            // rev157：filename_regex 只用于**下载文件名**取证，不参与导出中心轮询。
+            dl.name_matched = new RegExp(String(check.filename_regex || '.')).test(dl.suggested);
+            if (!fsMod) { problems.push('运行环境无 fs 模块，未落盘'); return; }
+            try {
+              const dir = 'downloads';
+              try { fsMod.mkdirSync(dir, {recursive: true}); } catch { /* 已存在 */ }
+              const p = pathMod
+                ? pathMod.join(dir, `export_${Date.now()}_${dl.suggested}`)
+                : `${dir}/export_${Date.now()}_${dl.suggested}`;
+              await d.saveAs(p);
+              dl.saved = p;
+              const buf = fsMod.readFileSync(p);
+              dl.bytes = buf.length;
+              const want: string[] = Array.isArray(check.expect_columns)
+                ? check.expect_columns.map((c: any) => String(c)) : [];
+              if (want.length) {
+                // rev159：解压文本 + 原始 latin1 + 原始 utf8 三路拼接后统一解码实体，
+                // 兼顾 deflate/存储两种写入方式与「中文写成数字实体」的导出实现。
+                const text = decodeEntities(zipText(buf) + buf.toString('latin1')
+                  + buf.toString('utf8'));
+                for (const c of want) {
+                  (text.indexOf(c) >= 0 ? columns.found : columns.missing).push(c);
+                }
+                columns.checked = true;
+                if (columns.missing.length) {
+                  problems.push(`列名缺失:${columns.missing.join(',')}`);
+                }
+              }
+            } catch (e: any) {
+              dl.error = String(e).slice(0, 120);
+              if (check.expect_columns && check.expect_columns.length) {
+                problems.push('文件解析失败，列名校验未执行');
+              }
+            }
+          };
+          const directDl: any = await dlPromise;
+          if (directDl) {
+            dl.via = 'direct';
+            await saveAndInspect(directDl);
+          }
+          // (step6b) 未直下 → 导出中心轮询（页面内路由或新标签页都可能）
+          const ec = check.export_center || {};
+          let center = {found: false, row: '', waited_ms: 0, page_url: ''};
+          // rev153/154：只有"确实还有下一步可走"时才轮询导出中心——
+          // 入口没打开（row_not_found）、或弹窗没出现且没配导出中心 URL 时，
+          // 轮询只会白等 timeout 并产出"导出中心无匹配记录"的伪结论（TR-765/766 实测）。
+          const centerWorth = !!String(ec.url || '') || !!(dlg && dlg.present);
+          if (!directDl && !centerWorth) {
+            problems.push('未出现导出弹窗且未配置导出中心 URL——下载与列名校验无法继续');
+          }
+          if (!directDl && opened.ok && centerWorth) {
+            if (String(ec.url || '')) {
+              await page.goto(resolveListUrl(String(ec.url), page), {timeout: 30000, waitUntil: 'domcontentloaded'})
+                .catch(() => undefined);
+            } else {
+              // 无独立 URL：点「导出」导航进入导出中心
+              await page.evaluate(() => {
+                const els = Array.from(document.querySelectorAll('a,span,div,li'))
+                  .filter((e: any) => e.offsetParent !== null
+                    && String(e.innerText || '').trim() === '导出');
+                if (els.length) (els[els.length - 1] as any).click();
+              });
+            }
+            await page.waitForTimeout(4000);
+            const pages = page.context().pages();
+            const centerPage: any = pages[pages.length - 1] || page;
+            center.page_url = String(centerPage.url() || '').slice(0, 90);
+            const rxStatus = new RegExp(String(ec.status_text || '已完成'));
+            // rev157：任务名称 ≠ 下载文件名，分开用两个正则（详见 EXPORT_CHECK_DEFAULTS 注释）。
+            const rxName = new RegExp(String(check.center_name_regex || '.'));
+            const tolerance = Number(check.fresh_tolerance_s || 180) * 1000;
+            // 行内「创建时间」形如 2026-10-21 10:31:24；操作行（只有「下载」）解析失败返回 0。
+            const rowTimeMs = (s: string): number => {
+              const m = String(s).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+              if (!m) return 0;
+              return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+                              Number(m[4]), Number(m[5]), Number(m[6])).getTime();
+            };
+            const deadline = Date.now() + Number(ec.timeout_ms || 180000);
+            center.fresh_after = confirmAt;
+            while (Date.now() < deadline) {
+              const rows: string[] = await centerPage.evaluate(
+                () => Array.from(document.querySelectorAll('.ant-table-tbody tr'))
+                  .filter((r: any) => r.offsetParent !== null)
+                  .map((r: any) => String(r.innerText || '').replace(/\s+/g, ' ').trim())
+                  .slice(0, 10)).catch(() => []);
+              const named = rows.filter((r: string) => rxStatus.test(r) && rxName.test(r));
+              const hit = named.find((r: string) => rowTimeMs(r) >= confirmAt - tolerance);
+              center.candidates = named.length;
+              center.sample = rows.slice(0, 3);
+              center.waited_ms = Date.now() - (deadline - Number(ec.timeout_ms || 180000));
+              if (hit) {
+                center.found = true;
+                center.row = hit.slice(0, 110);
+                center.row_time_ms = rowTimeMs(hit);
+                break;
+              }
+              if (Date.now() + (Number(ec.poll_ms) || 6000) > deadline) break;
+              await centerPage.waitForTimeout(Number(ec.poll_ms) || 6000);
+            }
+            if (!center.found) {
+              problems.push(`导出中心 ${Math.round(Number(ec.timeout_ms || 180000) / 1000)}s 内`
+                + `无「本轮新生成且已完成」的记录（同名候选 ${center.candidates || 0} 条，`
+                + `前 3 行：${(center.sample || []).join(' / ').slice(0, 200)}）`);
+            }
+            // step7：从导出中心下载落盘 + 列名出现性校验
+            if (center.found && check.download) {
+              const dlPromise = centerPage.waitForEvent('download', {
+                timeout: Number(check.max_wait_download_ms) || 30000,
+              }).catch(() => null);
+              dl.clicked = !!await centerPage.evaluate(() => {
+                const els = Array.from(document.querySelectorAll('a,button,span'))
+                  .filter((e: any) => e.offsetParent !== null
+                    && String(e.innerText || '').trim() === '下载');
+                if (els.length) { (els[0] as any).click(); return true; }
+                return false;
+              }).catch(() => false);
+              const d: any = await dlPromise;
+              if (d) { dl.via = 'center'; await saveAndInspect(d); }
+              else { problems.push('未捕获下载'); }
+            }
+          }
+          console.log('EXPORT_TRACE ' + JSON.stringify({
+            name: nm, label, opened, dialog: dlg, validation, datesPicked, pick: pickNote,
+            confirmClicked, toastAfter, center, dl, columns, ms: Date.now() - t0,
+          }));
+          console.log('EXPORT_EVIDENCE ' + JSON.stringify({
+            name: nm, filename: dl.suggested, name_matched: dl.name_matched,
+            saved: dl.saved, bytes: dl.bytes,
+            columns_found: columns.found, columns_missing: columns.missing,
+            validation_ok: validation.ok, duration_ms: Date.now() - t0,
+          }));
+          if (!problems.length) {
+            exportStat.pass += 1;
+            recAll(check, nm, 'pass',
+                   `导出全链通过：入口→弹窗${dlg && dlg.present ? '' : '(未见弹窗)'}`
+                   + `→空时间段校验${validation.checked ? (validation.ok ? '生效' : '未生效') : '未配置'}`
+                   + `→导出中心完成(${center.waited_ms}ms)`
+                   + (dl.saved ? `→已下载 ${dl.bytes}B` : '')
+                   + (columns.checked ? `→列名 ${columns.found.length}/${columns.found.length + columns.missing.length} 命中` : ''));
+          } else {
+            exportStat.unverified += 1;
+            recAll(check, nm, 'unverified', `导出链路未完全走通：${problems.join('；')}——现场见 EXPORT_TRACE`);
+          }
+        } catch (error) {
+          exportStat.unverified += 1;
+          recAll(check, nm, 'unverified', `导出检查异常：${String(error).slice(0, 200)}`);
+        }
+      }
+      console.log('EXPORT_PHASE ' + JSON.stringify(exportStat));
     }
     await runNegativeScenarios();
 
@@ -5888,7 +6938,20 @@ _FORM_EXECUTOR_TS = r"""
     // ===== 「列表可见」阶段：排在最后（写阶段全部结束后才回列表页检索）=====
     // 位置理由：它会 `page.goto` 到列表页，放在任何还需要"表单/弹窗现场"的阶段之前
     // 会把那些阶段的现场破坏掉；放在最后则只影响 summary 输出之外的收尾动作（无）。
-    await runListChecks();
+    //
+    // rev151 看门狗：这两个阶段要跨标签页导航，一旦页面被带进无效路由，
+    // ``evaluate`` 可能永不返回（实测 TR-764 列表阶段挂死 12 分钟、只烧预算不出任何 trace）。
+    // 因此各自给硬上限：超时即记 PHASE_WATCHDOG 并继续（summary 照常产出，结果如实 unverified）。
+    const phaseWatchdog = async (work: Promise<void>, ms: number, phase: string): Promise<void> => {
+      let timer: any = null;
+      const guard = new Promise<null>((res) => { timer = setTimeout(() => res(null), ms); });
+      const done: any = await Promise.race([work, guard]);
+      if (timer) clearTimeout(timer);
+      if (done === null) console.log('PHASE_WATCHDOG ' + JSON.stringify({phase, ms}));
+    };
+    await phaseWatchdog(runListChecks(), 180000, 'list');
+    // rev148：导出独立通道（在列表检查之后——两者都各自 goto，互不复用现场）
+    await phaseWatchdog(runExportChecks(), 240000, 'export');
 
     const summary = {
       total: formResults.length,
@@ -5913,6 +6976,11 @@ _FORM_EXECUTOR_TS = r"""
       list_phase: {
         ...listStat,
         rejected_at_plan: (FORM_PLAN.list_check_rejects || []).length,
+      },
+      // 「导出」独立阶段（rev148）：菜单→弹窗→时间段→导出中心→下载→列名，分开计数。
+      export_phase: {
+        ...exportStat,
+        rejected_at_plan: (FORM_PLAN.export_check_rejects || []).length,
       },
       skipped_no_locator: FORM_PLAN.skipped_count,
       // 只有一个数字无法复核："跳过 9 条"到底是哪几类原因
@@ -6066,6 +7134,8 @@ def render_form_executor(plan: dict[str, Any], *, default_phone: str = "18320101
          # 都必须在这个白名单里显式登记，否则执行器读到 undefined 且毫无提示）。
          "pre_actions": plan.get("pre_actions") or [],
          "pre_action_rejects": plan.get("pre_action_rejects") or [],
+         # rev148：导出独立通道的被拒配置同样要运行期可见（[export-skip]）
+         "export_check_rejects": plan.get("export_check_rejects") or [],
          # rev142：提交层 toast 归因要用「定位器键 → 页面别名」反查
          #（toast「题目 11：请输入标题」含页面标签「标题」而非字段名「题目标题」）。
          "field_alias_applied": plan.get("field_alias_applied") or [],

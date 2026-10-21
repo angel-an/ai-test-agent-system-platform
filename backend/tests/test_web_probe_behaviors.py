@@ -224,7 +224,7 @@ class TestLabelMatchBehavior:
                 "field_labels": labels,
                 "case_count": 1, "rule_case_count": 1, "narrative_case_count": 0,
                 "dangling_rule_ids": [], "assertion_count": 5,
-                "pending_locator_count": 0, "soft_assertion_count": 0, "rule_ids": ["R1"],
+                "locator_depended_assertion_count": 0, "soft_assertion_count": 0, "rule_ids": ["R1"],
             }, ensure_ascii=False)
             + ";\n"
             "const appScope: any = {\n"

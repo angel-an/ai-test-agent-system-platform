@@ -62,7 +62,7 @@ class TestCompileManifest:
         assert manifest["rule_ids"] == ["FR-1", "FR-1", "FR-2", "RQ-9"]
         assert manifest["field_labels"] == ["企业账户充值金额", "会员手机号"]
         # 3 条需要定位器 + 1 条软校验（visibility）
-        assert manifest["pending_locator_count"] == 3
+        assert manifest["locator_depended_assertion_count"] == 3
         assert manifest["soft_assertion_count"] == 1
         assert manifest["assertion_count"] == 4
 
@@ -95,8 +95,8 @@ class TestRenderBlocks:
         for key in ("pending_locator", "soft_label_checks", "form_executable_checks",
                     "field_labels_found"):
             assert key in snippet
-        # 已由表单执行器执行的断言不得再计入 pending_locator
-        assert "COMPILED_CASES.pending_locator_count - 19" in snippet
+        # 已由表单执行器执行的断言不得再计入 pending_locator（rev147：新键 + 旧键回退）
+        assert "COMPILED_CASES.locator_depended_assertion_count ?? COMPILED_CASES.pending_locator_count ?? 0) - 19" in snippet
 
 
 class TestScriptInjection:
@@ -190,7 +190,7 @@ class TestScriptInjection:
         summary = WebCaseLinkService._manifest_summary(compile_cases(RULE_CASES))
         assert summary["case_count"] == 3
         assert summary["rule_case_count"] == 3
-        assert summary["pending_locator_count"] == 3
+        assert summary["locator_depended_assertion_count"] == 3
         assert summary["executed_assertion_count"] == 1
         assert summary["case_identifiers"] == ["TC-1", "TC-2", "TC-3"]
         assert summary["rule_ids"] == ["FR-1", "FR-1", "FR-2"]
@@ -256,14 +256,14 @@ class TestFormPlan:
         from_locators = sum(1 for c in plan["checks"]
                             if c["type"] in {"visibility", "visible_now", "default_selected"})
         assert plan["assertion_check_count"] == plan["check_count"] - from_locators
-        assert plan["assertion_check_count"] <= manifest["pending_locator_count"]
+        assert plan["assertion_check_count"] <= manifest["locator_depended_assertion_count"]
         snippet = render_coverage_snippet(
             form_executable_checks=plan["check_count"],
             assertion_checks=plan["assertion_check_count"],
         )
         assert "executed_assertions" not in snippet     # 旧口径（软校验冒充已执行）不得回归
         assert "soft_label_checks" in snippet
-        assert f"Math.max(0, COMPILED_CASES.pending_locator_count - {plan['assertion_check_count']})" in snippet
+        assert f"Math.max(0, (COMPILED_CASES.locator_depended_assertion_count ?? COMPILED_CASES.pending_locator_count ?? 0) - {plan['assertion_check_count']})" in snippet
 
     def test_unknown_field_stays_pending(self):
         cases = self.CASES + [_case("TC-9", "字段X-必填", rule_id="FR-x", field="文档里才有的字段",

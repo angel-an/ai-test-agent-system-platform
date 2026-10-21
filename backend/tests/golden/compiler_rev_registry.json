@@ -156,6 +156,90 @@
       "digest": "7d6cfdd460b8",
       "date": "2026-10-21",
       "summary": ""
+    },
+    {
+      "rev": "rev147",
+      "digest": "00ddf74683af",
+      "date": "2026-10-21",
+      "summary": "回执键改名：pending_locator_count -> locator_depended_assertion_count（manifest 发射新键；执行器模板读新键回退旧键；link_service 回执同步改名 + 回退；COMPILED_COVERAGE.pending_locator 不变）"
+    },
+    {
+      "rev": "rev148",
+      "digest": "58a4f2d97b6e",
+      "date": "2026-10-21",
+      "summary": "第二批通道能力：list_checks[].action 行内操作+Popconfirm/Modal 确认、list_checks[].readonly 查看只读、export_checks 独立导出通道（弹窗/空时间段校验/导出中心轮询/下载落盘/列名出现性校验）"
+    },
+    {
+      "rev": "rev149",
+      "digest": "bcd3ffd95dc7",
+      "date": "2026-10-21",
+      "summary": "rev148 导出通道重构收尾：下载监听前置（确认前挂 waitForEvent）、直下/导出中心双路收敛 saveAndInspect（消除重复声明）、直下成功跳过导出中心轮询、toastAfter 取证"
+    },
+    {
+      "rev": "rev150",
+      "digest": "f0a85898dbf2",
+      "date": "2026-10-21",
+      "summary": "列表/导出通道 hash 直链：resolveListUrl 以当前页 origin+path+search 还原 #/x 形式列表 URL（应用 URL 带 per-session accessToken 不可写死）"
+    },
+    {
+      "rev": "rev151",
+      "digest": "57fdada27a03",
+      "date": "2026-10-21",
+      "summary": "列表/导出阶段锚定应用标签页（appPageForNav：anyScope→非控制台页→page），resolveListUrl 按目标页还原 origin；phaseWatchdog 列表180s/导出240s 硬上限"
+    },
+    {
+      "rev": "rev152",
+      "digest": "123edb43c38c",
+      "date": "2026-10-21",
+      "summary": "列表阶段 LIST_STAGE 埋点（nav_page/goto_begin/goto_done/root_ready/scan_done），用于定位跨标签页导航卡点"
+    },
+    {
+      "rev": "rev153",
+      "digest": "c3af624e5cd7",
+      "date": "2026-10-21",
+      "summary": "waitRows 有界轮询等到表格行（列表/导出 goto 后 30s、搜索后 20s）；导出入口未打开时跳过导出中心轮询（避免 180s 白等与伪结论）"
+    },
+    {
+      "rev": "rev154",
+      "digest": "3229a11c55a4",
+      "date": "2026-10-21",
+      "summary": "clickDropdownItem：下拉菜单条目改真实鼠标点击（evaluate .click 不触发菜单处理器）；导出弹窗未出现且未配导出中心时跳过轮询（centerWorth 门控）"
+    },
+    {
+      "rev": "rev155",
+      "digest": "ef471a66bf07",
+      "date": "2026-10-21",
+      "summary": "rowWithOps：操作列在右侧固定列克隆 tbody 中按行序号对齐（数据行与操作行不相邻），action/readonly/export 三处统一"
+    },
+    {
+      "rev": "rev156",
+      "digest": "c8db09bc30cb",
+      "date": "2026-10-21",
+      "summary": "action.labels 候选标签（启用/禁用互换可复用）；导出菜单缺失时直点标签回退（clicked_direct）"
+    },
+    {
+      "rev": "rev157",
+      "digest": "684baff5c1eb",
+      "date": "2026-10-21",
+      "summary": "导出中心改用 center_name_regex 匹配任务名（filename_regex 只做下载取证）；选时间改为当月首末两天+回读输入框（只点一次时请求根本不发，旧代码仍置 datesPicked=true）；只认本轮新任务（创建时间 >= 点确认时刻-180s），防历史行假阳性"
+    },
+    {
+      "rev": "rev158",
+      "digest": "3a26c1cccec2",
+      "date": "2026-10-21",
+      "summary": "导出阶段定位行前先按本次 value 重新检索：列表页保留上一阶段搜索条件（goto 同 hash 是 no-op 不重载），TR-771 因此只剩 2 行 → row_not_found；检索后重新 pickRoot 并埋 EXPORT_STAGE searched"
+    },
+    {
+      "rev": "rev160",
+      "digest": "e3c4055b22c5",
+      "date": "2026-10-21",
+      "summary": "① 列名校验前解码 HTML 数字实体（本 SUT 导出 xlsx 把中文写成 &#22635; 形式，否则 9/9 列名恒 missing），解压文本+原始 latin1+原始 utf8 三路拼接；② 行内操作失败不再判 pass —— 配置了 action 但候选标签都没点到（或确认框未命中）记 unverified，文案带候选标签与 trace 锚点。（rev159 的实体解码与 rev160 的判定修正同批提交，digest 取最终态）"
+    },
+    {
+      "rev": "rev161",
+      "digest": "30b70d3f6129",
+      "date": "2026-10-21",
+      "summary": "zipText 改读中央目录（EOCD + 0x02014b50）：本 SUT 导出 xlsx 每个成员都是 data descriptor（local header 尺寸为 0），旧顺序扫在首个成员即 break、抽出文本长度 0 ⇒ 列名恒 missing；实测旧 0/9、新 9/9 命中"
     }
   ]
 }
