@@ -499,6 +499,112 @@ def render_column_diag(columns_json: str = "null") -> str:
     return _COLUMN_DIAG_TEMPLATE.replace("@@COLUMNS_JSON@@", columns_json or "null")
 
 
+#: P2 配置 lint（2026-10-21）：最近几轮真实翻车的故障模式全部是**配置错误在运行期才暴露**
+#: （center_name_regex 缺失、row_pick 状态配错、空 value 假通过、{{RUN_TAG}} 缺失撞唯一约束），
+#: 每条都要跑一次 3-4 分钟的 TR 才能发现。这里在**编译回执期**就拦下同类形态。
+#: 原则：**只写零误报的高精度规则**——宁可少报，不制造「配置明明是对的却被警告」的噪音。
+_CONFIG_LINT_TRAD_SIMP = str.maketrans({
+    # 问卷 SUT 常见繁体字 → 简体（行状态/动作文案匹配用；只做包含关系判定，不做语言转换）
+    "啟": "启", "動": "动", "刪": "删", "確": "确", "認": "认", "驗": "验",
+    "號": "号", "碼": "码", "編": "编", "錄": "录", "詢": "询", "訂": "订",
+    "單": "单", "項": "项", "態": "态", "檢": "检", "視": "视", "鎖": "锁",
+    "儲": "储", "費": "费", "賣": "卖", "購": "购", "貨": "货", "匯": "汇",
+    "關": "关", "閉": "闭", "開": "开", "復": "复", "製": "制", "訊": "讯",
+})
+
+
+def _config_lint_normalize(text: Any) -> str:
+    """lint 用的文本归一化：去空白 + 常用繁转简（仅用于包含关系判定）。"""
+    return str(text or "").translate(_CONFIG_LINT_TRAD_SIMP).replace(" ", "").strip()
+
+
+def config_lint_warnings(form_plan: dict[str, Any] | None) -> list[dict[str, str]]:
+    """编译期配置 lint：从 form_plan 里检出「能解析、但大概率跑不通/会假通过」的配置。
+
+    返回结构化条目 ``{rule, target, message}``；全部命中以下真实事故（2026-10-21 前实测）：
+    - rev157：``center_name_regex`` 缺失，拿要求 ``.xlsx`` 的 ``filename_regex`` 去匹配
+      导出中心**任务名**（无后缀）⇒ 轮询 90s 空转；
+    - rev157 前身：``validate_empty_time: true`` 但 ``validation_toast`` 缺失 ⇒
+      负路径没判据，``validation_ok`` 恒 false；
+    - TR-773：``row_pick`` 选到的行状态根本不提供所配 ``action`` 文案 ⇒ action_not_found，
+      且动作会推进状态、污染后续样本；
+    - rev127：编号/标题类字段没写 ``{{RUN_TAG}}`` ⇒ 固定值随快照进产物，重跑撞唯一约束，
+      ``expect_accept`` 通道判成「疑似缺陷坐实」= 平台自产假缺陷单。
+    """
+    plan = form_plan if isinstance(form_plan, dict) else {}
+    out: list[dict[str, str]] = []
+
+    # R1/R2：export_checks —— 任务名/文件名正则缺失、空时间段负路径无判据
+    for item in plan.get("export_checks") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("label") or "export")
+        if item.get("download", True):
+            if not str(item.get("center_name_regex") or "").strip():
+                out.append({
+                    "rule": "export_center_name_regex_empty",
+                    "target": name,
+                    "message": "center_name_regex 为空：导出中心任务名匹配会退化为恒真"
+                               "（任务名与下载文件名是两个字符串，见 rev157）。",
+                })
+            if not str(item.get("filename_regex") or "").strip():
+                out.append({
+                    "rule": "export_filename_regex_empty",
+                    "target": name,
+                    "message": "filename_regex 为空：下载后不断言文件名，"
+                               "下载成败只剩「是否有文件落盘」一个弱信号。",
+                })
+        if item.get("validate_empty_time") and not str(
+                item.get("validation_toast") or "").strip():
+            out.append({
+                "rule": "export_empty_time_no_toast",
+                "target": name,
+                "message": "validate_empty_time 开着但 validation_toast 为空："
+                           "空时间段负路径没有判据，validation_ok 恒 false（白跑一次）。",
+            })
+
+    # R3：list_checks —— row_pick 选中的行状态与 action 文案零重叠（TR-773 形态）
+    for item in plan.get("list_checks") or []:
+        if not isinstance(item, dict):
+            continue
+        pick = item.get("row_pick") if isinstance(item.get("row_pick"), dict) else None
+        action = item.get("action") if isinstance(item.get("action"), dict) else None
+        if not pick or not action:
+            continue
+        statuses = [_config_lint_normalize(s) for s in (pick.get("in") or [])]
+        labels = [_config_lint_normalize(x) for x in
+                  ([action.get("label")] + list(action.get("labels") or []))]
+        labels = [x for x in labels if x]
+        if not statuses or not labels:
+            continue
+        overlap = any(
+            (st and lb) and (st.find(lb) >= 0 or lb.find(st) >= 0)
+            for st in statuses for lb in labels
+        )
+        if not overlap:
+            out.append({
+                "rule": "list_row_pick_action_no_overlap",
+                "target": str(item.get("name") or item.get("value") or "list"),
+                "message": "row_pick 的状态候选 %s 与 action 文案 %s 零重叠："
+                           "选中的行很可能不提供该操作（TR-773 实测会 action_not_found，"
+                           "且动作会推进状态、污染后续样本）。请人工核对。" % (
+                               pick.get("in"), [action.get("label")] + list(action.get("labels") or [])),
+            })
+
+    # R4：{{RUN_TAG}} 缺口（rev127：重跑撞唯一约束 → expect_accept 判「缺陷坐实」= 假缺陷单）
+    gaps = list(plan.get("run_tag_gap") or [])
+    if gaps:
+        fields = "、".join(str(g.get("field") or g) for g in gaps[:6])
+        out.append({
+            "rule": "run_tag_gap",
+            "target": fields,
+            "message": "真实落库但值固定的字段（未写 {{RUN_TAG}}）：%s。"
+                       "固定值随快照进产物，重跑会撞唯一约束 ⇒ expect_accept 通道可能"
+                       "把「重跑失败」判成「疑似缺陷坐实」（平台自产假缺陷单）。" % fields,
+        })
+    return out
+
+
 def _case_sort_key(case: TestCase) -> tuple[str, str]:
     """业务无关的确定性排序键：created_at（ISO 文本，避免 naive/aware 混比）→ identifier。"""
     created = getattr(case, "created_at", None)
@@ -1243,6 +1349,10 @@ class WebCaseLinkService:
                 + "、".join("%s→%s" % (d.get("from"), d.get("to"))
                            for d in dangling_aliases[:6])
             )
+        # P2 配置 lint（2026-10-21）：高精度规则，只报「大概率跑不通/会假通过」的配置形态。
+        lint = config_lint_warnings(form_plan)
+        for w in lint:
+            warnings.append("[%s] %s：%s" % (w["rule"], w["target"], w["message"]))
         return {
             "form_locator_source": locator_source,
             "executable": bool(checks) or bool(scenarios),
@@ -1266,6 +1376,7 @@ class WebCaseLinkService:
                 "locator_depended_assertion_count", (manifest or {}).get("pending_locator_count", 0)
             ),
             "allow_upload_checks": bool(allow_upload_checks),
+            "config_warnings": lint,
             "warnings": warnings,
         }
 

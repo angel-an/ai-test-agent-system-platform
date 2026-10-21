@@ -346,3 +346,51 @@ def test_config_only_counts_by_source_not_case_id():
     blk = ts[i:i + 400]
     assert "c.source === 'locator_config'," in blk
     assert "case_id" not in blk.split(").length")[0]
+
+
+# ---------- P2 配置 lint（2026-10-21，web_case_link_service 侧，不涉 COMPILER_REV） ----------
+
+def _lint(plan):
+    from app.services.web_case_link_service import config_lint_warnings
+    return config_lint_warnings(plan)
+
+
+def test_config_lint_detects_rev157_shape():
+    """rev157 形态：center_name_regex 空（任务名匹配退化恒真）+ 空时间段无判据。"""
+    plan = {"export_checks": [{"name": "export:导出明细", "download": True,
+            "center_name_regex": "", "filename_regex": r"\.xlsx$",
+            "validate_empty_time": True, "validation_toast": ""}]}
+    rules = {w["rule"] for w in _lint(plan)}
+    assert "export_center_name_regex_empty" in rules
+    assert "export_filename_regex_empty" not in rules
+    assert "export_empty_time_no_toast" in rules
+
+
+def test_config_lint_detects_tr773_overlap_and_passes_real_config():
+    """TR-773 形态：row_pick 状态候选与 action 文案零重叠；正确配置（含繁体）不误报。"""
+    bad = {"list_checks": [{"row_pick": {"column": "状态", "in": ["待启用"],
+            "value_column": "问卷标题"}, "action": {"label": "删除", "labels": ["刪除"]}}]}
+    assert "list_row_pick_action_no_overlap" in {w["rule"] for w in _lint(bad)}
+    ok = {"list_checks": [{"row_pick": {"column": "状态",
+            "in": ["待启用", "待啟用"], "value_column": "问卷标题"},
+            "action": {"label": "启用", "labels": ["启用", "禁用"]}}]}
+    assert _lint(ok) == []
+
+
+def test_config_lint_surfaces_run_tag_gap():
+    """rev127 形态：expect_accept 场景里固定唯一编码没写 {{RUN_TAG}}。"""
+    plan = {"run_tag_gap": [{"scenario_id": "s1", "field": "问卷标题",
+                             "value": "XY1021161147G3Z", "hint": "x"}]}
+    ws = _lint(plan)
+    assert any(w["rule"] == "run_tag_gap" and "问卷标题" in w["target"] for w in ws)
+
+
+def test_compile_receipt_includes_config_warnings():
+    """回执必须携带结构化 config_warnings，并把 lint 行并入 warnings 文本。"""
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "app", "services", "web_case_link_service.py")
+    with open(path, encoding="utf-8") as f:
+        svc = f.read()
+    assert "config_lint_warnings(form_plan)" in svc
+    assert '"config_warnings": lint' in svc
