@@ -1114,7 +1114,12 @@ class WebCaseLinkService:
             "rule_case_count": manifest.get("rule_case_count", 0),
             "assertion_count": manifest.get("assertion_count", 0),
             "executed_assertion_count": manifest.get("soft_assertion_count", 0),
-            "pending_locator_count": manifest.get("pending_locator_count", 0),
+            # rev147 改名：pending_locator_count -> locator_depended_assertion_count
+            # （实义是「依赖定位器的断言数」，与 skipped_assertion_count 并排；
+            # 兼容回退读旧 key，旧产物 manifest 仍可解析）
+            "locator_depended_assertion_count": manifest.get(
+                "locator_depended_assertion_count", manifest.get("pending_locator_count", 0)
+            ),
             # 四指标口径：生成用例数(case_count) / 规则用例数(rule_case_count) /
             # 编译断言数(assertion_count) / 实际执行资产数（运行侧聚合），
             # 另加"不可编译用例"逐条状态，避免被读成"已自动验证"。
@@ -1257,7 +1262,9 @@ class WebCaseLinkService:
                  "scope": s.get("scope") or "form", "reason": s.get("reason")}
                 for s in skipped[:20]
             ],
-            "pending_locator_count": (manifest or {}).get("pending_locator_count", 0),
+            "locator_depended_assertion_count": (manifest or {}).get(
+                "locator_depended_assertion_count", (manifest or {}).get("pending_locator_count", 0)
+            ),
             "allow_upload_checks": bool(allow_upload_checks),
             "warnings": warnings,
         }

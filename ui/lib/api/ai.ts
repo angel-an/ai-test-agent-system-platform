@@ -211,7 +211,7 @@ export interface WebCompileReceipt {
   negative_scenario_count?: number;
   assertion_check_count?: number;
   skipped_assertion_count?: number;
-  pending_locator_count?: number;
+  locator_depended_assertion_count?: number;
   allow_upload_checks?: boolean;
   warnings?: string[];
 }

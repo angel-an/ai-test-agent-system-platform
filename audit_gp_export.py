@@ -161,7 +161,7 @@ def main() -> None:
     for c in cases:
         if c["verdict"] == "SKIPPED_NO_CHECK":
             ws4.append([LABEL[c["module"]], c["case"], c["priority"] or "",
-                        "编译期无检查", f"pending={c['pending_locator_count']} skipped={c['skipped_assertion_count']}"])
+                        "编译期无检查", f"pending={c['locator_depended_assertion_count']} skipped={c['skipped_assertion_count']}"])
     for mod, ident, name, prio, dup, dlen in no_asset:
         if dup:
             continue

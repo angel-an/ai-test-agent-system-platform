@@ -195,7 +195,7 @@ def main() -> None:
     for r, cr in no_check:
         print(f"    {fam(r[1])} {r[0]:<10}{cr.get('status'):<22}"
               f"checks={cr.get('form_executable_checks')} "
-              f"pending={cr.get('pending_locator_count')} skip={cr.get('skipped_assertion_count')} "
+              f"pending={cr.get('locator_depended_assertion_count')} skip={cr.get('skipped_assertion_count')} "
               f"{r[2][:36]}")
 
     # ---------- 落盘 ----------

@@ -124,7 +124,7 @@ def main() -> None:
             "priority": cr.get("priority") or er.get("priority"),
             "compile_status": cr.get("status") or "NOT_COMPILED_THIS_ROUND",
             "form_executable_checks": cr.get("form_executable_checks"),
-            "pending_locator_count": cr.get("pending_locator_count"),
+            "locator_depended_assertion_count": cr.get("locator_depended_assertion_count"),
             "skipped_assertion_count": cr.get("skipped_assertion_count"),
             "verdict": er.get("verdict") or ("SKIPPED_NO_CHECK" if cr.get("status") and cr["status"] != "EXECUTABLE" else "NOT_RUN"),
             "reason": er.get("reason"),
@@ -220,7 +220,7 @@ def main() -> None:
     for m in merged:
         if m["verdict"] == "SKIPPED_NO_CHECK":
             print(f"  {MODULE_LABEL[m['module']]:<14} {m['case']:<14} {m['compile_status']:<24} "
-                  f"pending={m['pending_locator_count']} skipped={m['skipped_assertion_count']} "
+                  f"pending={m['locator_depended_assertion_count']} skipped={m['skipped_assertion_count']} "
                   f"warn={(m['warnings'] or [''])[0][:60]}")
 
     out = OUT / "gp_summary.json"

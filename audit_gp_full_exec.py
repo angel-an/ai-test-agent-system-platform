@@ -214,7 +214,7 @@ async def compile_one(client: httpx.AsyncClient, item: dict, sem: asyncio.Semaph
         data = r.json().get("data") or {}
         rc = data.get("compile_receipt") or {}
         checks = rc.get("form_executable_checks") or 0
-        pending = rc.get("pending_locator_count") or 0
+        pending = rc.get("locator_depended_assertion_count") or 0
         skipped = rc.get("skipped_assertion_count") or 0
         if checks > 0:
             status = "EXECUTABLE"
@@ -228,7 +228,7 @@ async def compile_one(client: httpx.AsyncClient, item: dict, sem: asyncio.Semaph
             "phase": "compile", "module": item["module"], "case": item["case"],
             "asset": item["asset"], "priority": item["priority"], "source": item["source"],
             "status": status, "form_executable_checks": checks,
-            "pending_locator_count": pending, "skipped_assertion_count": skipped,
+            "locator_depended_assertion_count": pending, "skipped_assertion_count": skipped,
             "assertion_check_count": rc.get("assertion_check_count"),
             "negative_scenario_count": rc.get("negative_scenario_count"),
             "locator_source": rc.get("form_locator_source"),
@@ -256,7 +256,7 @@ async def run_compile(items: list[dict], concurrency: int) -> None:
                     f.write(json.dumps(res, ensure_ascii=False) + "\n")
                 n += 1
                 print(f"[{n}/{len(items)}] {res['module']} {res['case']} -> {res['status']} "
-                      f"checks={res.get('form_executable_checks')} pending={res.get('pending_locator_count')}",
+                      f"checks={res.get('form_executable_checks')} pending={res.get('locator_depended_assertion_count')}",
                       flush=True)
         await asyncio.gather(*(worker(it) for it in items))
 

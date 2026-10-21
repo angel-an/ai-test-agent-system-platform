@@ -102,7 +102,7 @@ def main() -> None:
         known = field in fields_cfg or aliases.get(field) in fields_cfg
 
         print(f"{cid:<11}{mod:<8}{field:<16}{compiled.get('compile_status',''):<12}"
-              f"{len(checks):>6}{manifest.get('pending_locator_count',0):>8}"
+              f"{len(checks):>6}{manifest.get('locator_depended_assertion_count',0):>8}"
               f"{len(executable):>7}  {'是' if known else '否'}")
 
         results.append({
@@ -110,7 +110,7 @@ def main() -> None:
             "compile_status": compiled.get("compile_status"),
             "checks": len(checks),
             "executable": len(executable),
-            "pending": manifest.get("pending_locator_count"),
+            "pending": manifest.get("locator_depended_assertion_count"),
             "field_configured": known,
             "plan_sample": checks[:2],
         })

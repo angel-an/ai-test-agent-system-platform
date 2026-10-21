@@ -75,7 +75,7 @@ function formatCompileReceipt(receipt: WebCompileReceipt | null | undefined): st
     `可执行检查 ${receipt.form_executable_checks ?? 0} 条` +
     ` · 负路径场景 ${receipt.negative_scenario_count ?? 0} 个` +
     ` · 跳过断言 ${receipt.skipped_assertion_count ?? 0} 条` +
-    ` · 待定定位 ${receipt.pending_locator_count ?? 0} 处`;
+    ` · 依赖定位断言 ${receipt.locator_depended_assertion_count ?? receipt.pending_locator_count ?? 0} 条`;
   if (!warns.length && receipt.executable !== false) return null;
   return [summary, ...warns].join("\n");
 }
