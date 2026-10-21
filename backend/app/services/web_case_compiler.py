@@ -326,7 +326,11 @@ from app.services.web_upload_fixtures import (
 #:     在白名单登记**）。② ``choice_options`` 补 reject 分支——非法值不在勾选组里
 #:     应判 pass（与 radio_options 同语义）；TR-785「不存在的枚举值」在 外卖/自提/堂食
 #:     里不存在却报 unverified，是判向反了。
-COMPILER_REV = "rev168"
+#:   - rev169（2026-10-21，P4 窄口径落地）：``compiler_source_digest`` import 期预热。
+#:     lru_cache 只把重算压到每进程一次，「首次调用」仍可能落在编辑窗口（linecache 按
+#:     mtime 重读半截文件 → ast.parse 500）。预热 = digest 随进程启动固化，在途请求
+#:     永不读源码；撞上编辑也是启动即崩（当场可见），不再中途 500。
+COMPILER_REV = "rev169"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -429,6 +433,14 @@ def _link_service_template_parts() -> list[str]:
 #: 需要页面定位器才能执行断言的类型（本版不执行，仅统计）
 LOCATOR_DEPENDENT_KINDS = {"required", "enum", "default", "boundary", "precision",
                            "max_length", "max_count", "file_format", "file_size"}
+
+#: P4 窄口径（rev169，2026-10-21）：**import 期预热 digest**。lru_cache 把重算压到
+#: 每进程一次，但「首次调用」仍可能落在编辑窗口内——``inspect.getsource`` 走 linecache，
+#: mtime 变了就重读半截文件 ⇒ ``ast.parse`` 抛 ``EOF in multi-line string``（运行期 500，
+#: 2026-10-20 实测）。预热后 digest 在进程启动时固化，在途请求永不触发源码重读；
+#: 就算启动恰好撞上编辑，也是启动即崩（当场可见），不会变成中途 500。
+compiler_source_digest()
+
 #: 无需定位器、可做软校验的类型
 SOFT_CHECK_KINDS = {"visibility"}
 

@@ -35,7 +35,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev168"' in src
+    assert 'COMPILER_REV = "rev169"' in src
     ast.parse(src)
 
 
@@ -437,3 +437,13 @@ def test_payload_whitelist_carries_default_covered_and_choice_reject():
     assert "startsWith('reject')" in blk
     assert "竟出现在勾选组里" in blk
     assert "用户无法勾选非法值" in blk
+
+
+def test_digest_warmed_at_import():
+    """P4 窄口径（rev169）：import 期预热 digest——在途请求永不触发源码重读。"""
+    src = _py()
+    assert "compiler_source_digest()" in src
+    i = src.index("#: P4 窄口径（rev169")
+    j = src.index("compiler_source_digest()", i)
+    # 预热调用必须紧跟注释、在函数定义之后（模块级）
+    assert "def compiler_source_digest" in src[:j]

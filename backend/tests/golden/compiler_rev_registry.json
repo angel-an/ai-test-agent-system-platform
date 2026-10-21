@@ -282,6 +282,12 @@
       "digest": "0a9db8d17483",
       "date": "2026-10-21",
       "summary": "render_form_executor 白名单补 default_covered_assertions（TR-785 对账恒 0 同 TR-748 型）；choice_options 补 reject 分支（非法值不可勾选=pass，与 radio_options 同语义）"
+    },
+    {
+      "rev": "rev169",
+      "digest": "fec94279864a",
+      "date": "2026-10-21",
+      "summary": "P4 窄口径：compiler_source_digest import 期预热——digest 随进程启动固化，在途请求永不重读源码（消编辑窗口 ast.parse 500）"
     }
   ]
 }
