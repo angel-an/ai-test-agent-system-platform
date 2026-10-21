@@ -283,7 +283,21 @@ from app.services.web_upload_fixtures import (
 #:     旧实现顺序扫 local file header 并在 ``csize=0`` 时 break，而本 SUT 导出的 xlsx
 #:     **每个成员都是 data descriptor**（flag 0x0808）⇒ 首个成员就中断、抽出文本长度 0。
 #:     实测对比：旧 0/9 命中、新 9/9 命中（text 5130 字符）。
-COMPILER_REV = "rev161"
+#:   - rev162（2026-10-21，P0 数据自消耗）：``list_checks`` 支持 ``row_pick`` ——
+#:     按列文本（缺省「状态」）筛行、取命中行的指定列当 value，``value`` 随之变成可选。
+#:     根因：动作通道会推进状态（待启用→启用→禁用终态），写死 value 的配置跑 2–3 次
+#:     必然找不到目标行（TR-773→775：FCZ 走完一轮换 PFG，PFG 本轮又进「启用」）。
+#:     匹配**精确优先**（否则 in=["启用"] 会命中「待启用」）；未命中记 unverified
+#:     并带 cells 样本，不再静默滑向下一个断言。
+#:   - rev163（2026-10-21，TR-776 实测两处）：
+#:     ① ``build_form_plan`` 漏传 ``row_pick``/``pick_label`` ⇒ plan 里根本没有选择器，
+#:        执行器拿到的 value 是空串；
+#:     ② 空 value 会**匹配任意行**（scan 恒 hits>0、动作点到第一行），日志上像成功
+#:        实际目标行没被选中 —— 空 value 一律记 unverified，不进搜索/扫描/动作链路。
+#:   - rev164（2026-10-21，TR-777 实测 pick 只看到 1 行）：pick 前**清空搜索并重新查询**。
+#:     列表页会保留上一检查项的搜索条件（同 hash goto 是 no-op、SPA 不重载），
+#:     上一个 readonly 断言按自己的 value 搜过之后只剩 1 行 ⇒ row_pick 必然 no_row_matched。
+COMPILER_REV = "rev164"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -308,6 +322,10 @@ _DIGEST_FUNCTIONS: tuple[str, ...] = (
     # rev137：前置动作的解析规则（次数/等待上限、labels 归一化）在这里，
     # 它直接决定运行期点几下 ⇒ 必须纳入 digest，否则"改了判据而产物不变指纹"。
     "parse_pre_actions",
+    # rev162：``row_pick`` 的解析语义（精确优先 / value 取自哪一列 / 缺省列名）直接
+    # 决定运行期选哪一行 ⇒ 与 rev137 的 parse_pre_actions 同源，必须纳入 digest。
+    "parse_row_pick",
+    "parse_list_checks",
     "render_form_executor",
 )
 
@@ -1201,12 +1219,51 @@ def parse_columns(locators: dict[str, Any] | None) -> tuple[dict[str, Any] | Non
 LIST_CHECK_EXPECTS: frozenset[str] = frozenset({"found", "absent"})
 
 
+def parse_row_pick(raw: Any) -> dict[str, Any] | None:
+    """解析 ``row_pick``：按「列文本」筛行，取命中行的指定列当 value。
+
+    为什么需要（rev162，2026-10-21）：动作通道会**推进数据状态**
+    （``待启用 --启用--> 启用 --禁用--> 禁用（终态）``），写死 ``value`` 的配置
+    跑 2–3 次必然找不到目标行 —— TR-773→775 实测：``XY1021011339FCZ`` 走完一轮
+    被推到禁用终态后换成 ``XY1021101756PFG``，后者本轮又被启用。把「选哪一行」
+    交给运行时按状态列筛，配置才能跨运行复用，不再随数据状态漂移。
+
+    配置形态::
+
+        "row_pick": {"column": "状态", "in": ["待启用", "待啟用"],
+                     "value_column": "问卷标题"}
+
+    * ``column``       判断用的列**表头文案**（缺省「状态」）
+    * ``in``           期望的列文本（字符串或数组）。先做**精确**匹配，全部无精确
+                       命中才退化为包含匹配 —— 否则 ``"启用"`` 会命中 ``"待启用"``
+    * ``value_column`` 取哪一列的文本当 value（缺省取该行第一个单元格）
+    * ``pick``         目前只支持 ``first``（命中行的第一行）
+    """
+    if not isinstance(raw, dict):
+        return None
+    column = str(raw.get("column") or "状态").strip()
+    want = _as_str_list(raw.get("in"))
+    if not want:
+        single = str(raw.get("in") or "").strip()
+        if single:
+            want = [single]
+    if not want:
+        return None
+    return {
+        "column": column,
+        "in": want,
+        "value_column": str(raw.get("value_column") or "").strip(),
+        "pick": "first",
+    }
+
+
 def parse_list_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """解析 ``extra_config.list_checks``，返回 ``(可用检查, 被拒检查)``。
 
     单条配置字段：
       ``name``                断言名（缺省由 value 生成）
-      ``value``               **必填**：要在列表里检索到的记录标识（如店鋪編號/商品編碼）
+      ``value``               要检索的记录标识（如店鋪編號/商品編碼）；与 ``row_pick`` 二选一
+      ``row_pick``            rev162：按列文本筛行、取命中行指定列当 value（见 parse_row_pick）
       ``list_url``            列表页直链（缺省回退 ``locators.list_url``；两者都空 → 拒绝）
       ``search_placeholder``  搜索框 placeholder 候选（数组或字符串；可空 → 退化为翻页扫描）
       ``expect``              ``found``（缺省）/ ``absent``
@@ -1229,8 +1286,11 @@ def parse_list_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                                 "detail": f"index={index}"})
                 continue
             value = str(entry.get("value") or "").strip()
-            if not value:
-                rejects.append({"value": "", "reason": "缺少 value（要检索的记录标识）",
+            # rev162：``value`` 与 ``row_pick`` 二选一 —— 后者让「选哪一行」由运行期
+            # 按状态列决定，避免动作通道推进状态后配置失效（见 parse_row_pick 注释）。
+            row_pick = parse_row_pick(entry.get("row_pick"))
+            if not value and not row_pick:
+                rejects.append({"value": "", "reason": "缺少 value 或 row_pick（要定位的记录）",
                                 "detail": f"index={index}"})
                 continue
             expect = str(entry.get("expect") or "found").strip().lower()
@@ -1238,7 +1298,7 @@ def parse_list_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                 rejects.append({"value": value, "reason": "expect 非法",
                                 "detail": f"{expect!r}，允许：{sorted(LIST_CHECK_EXPECTS)}"})
                 continue
-            key = (value, expect)
+            key = (value or f"row_pick:{row_pick['column']}={','.join(row_pick['in'])}", expect)
             if key in seen:
                 rejects.append({"value": value, "reason": "同一 value+expect 重复",
                                 "detail": f"index={index}"})
@@ -1268,9 +1328,14 @@ def parse_list_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                 }
             elif ro_raw is True:
                 readonly = {"view_label": "查看|檢視", "view_menu": ""}
+            # 断言名：value 为空（纯 row_pick 模式）时用「列∈[值]」描述，避免出现空名。
+            pick_label = (f"{row_pick['column']}∈[{'/'.join(row_pick['in'])}]"
+                          if row_pick else "")
             items.append({
-                "name": str(entry.get("name") or f"list_visible:{value}"),
+                "name": str(entry.get("name") or f"list_visible:{value or pick_label}"),
                 "value": value,
+                "row_pick": row_pick,
+                "pick_label": pick_label,
                 "expect": expect,
                 "list_url": str(entry.get("list_url") or ""),
                 "search_placeholder": phs,
@@ -2515,6 +2580,11 @@ def build_form_plan(
             # rev148：行内操作 / 查看只读（配置了才生效，缺省走纯可见性）
             "action": item.get("action"),
             "readonly": item.get("readonly"),
+            # rev162：按列筛行的选择器。**必须透传** —— 漏传时 value 为空串，
+            # 而空串会匹配任意行（scan 恒 hits>0、动作点到第一行），TR-776 实测就是这么
+            # 记成 pass 的：看日志像「点到了」，实际目标行根本没被选中。
+            "row_pick": item.get("row_pick"),
+            "pick_label": item.get("pick_label"),
             "rule": item["rule_ref"],
             "case_id": item["case_id"],
             "rule_id": item["rule_id"],
@@ -6086,8 +6156,8 @@ _FORM_EXECUTOR_TS = r"""
       }
       if (!items.length) return;
       for (const check of items) {
-        const nm = String(check.name || ('list_visible:' + check.value));
-        const val = String(check.value || '');
+        const nm = String(check.name || ('list_visible:' + (check.value || check.pick_label || '')));
+        let val = String(check.value || '');
         listStat.executed += 1;
         try {
           const url = String(check.list_url || '');
@@ -6122,6 +6192,139 @@ _FORM_EXECUTOR_TS = r"""
             root = await pickRoot();
             rowCount = root ? Number(await root.evaluate(
               () => document.querySelectorAll('.ant-table-row, .ant-table-tbody tr').length).catch(() => 0)) : 0;
+          }
+          // ===== rev162：row_pick —— 按列文本筛行，取命中行的指定列当 value =====
+          // 动机：动作通道会推进数据状态（待启用→启用→禁用终态），写死 value 的配置
+          // 跑 2–3 次必然找不到目标行（TR-773→775 实测：FCZ 走完一轮换 PFG）。
+          // 改为运行期按状态列筛行，配置与具体数据解耦；pick 出 value 后仍走原
+          // 「搜索 → 扫描 → 动作」路径，后续判定逻辑一律不变。
+          const rp = check.row_pick;
+          let pickInfo: any = null;
+          if (rp) {
+            // rev164（TR-777 实测 cells:["禁用"] 只有 1 行）：列表页会**保留上一检查项的
+            // 搜索条件**（同 hash 的 goto 是 no-op、SPA 不重载）⇒ 上一个 readonly 断言
+            // 刚按自己的 value 搜过，这里就只看得到那一行。pick 前必须先清空搜索并
+            // 重新查询，把整页数据找回来。
+            const phs0 = (Array.isArray(check.search_placeholder) && check.search_placeholder.length)
+              ? check.search_placeholder.map((s: any) => String(s))
+              : ['搜索问卷标题', 'Search'];
+            let resetNote: any = {ok: false, why: 'no_root'};
+            if (root) {
+              resetNote = await root.evaluate((src: string) => {
+                const rx = new RegExp(src, 'i');
+                const ins = Array.from(document.querySelectorAll('input')) as any[];
+                const t = ins.find((i: any) => i.type !== 'hidden' && rx.test(String(i.placeholder || '')));
+                if (!t) {
+                  return {ok: false, why: 'no_search_box',
+                          phs: ins.map((i: any) => String(i.placeholder || '')).filter(Boolean).slice(0, 10)};
+                }
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+                const before = String(t.value || '');
+                t.focus(); setter.call(t, '');
+                t.dispatchEvent(new Event('input', {bubbles: true}));
+                t.dispatchEvent(new Event('change', {bubbles: true}));
+                return {ok: true, before};
+              }, phs0.join('|')).catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 80)}));
+              if (resetNote && resetNote.ok) {
+                const btn0 = root.locator('button')
+                  .filter({hasText: /搜\s*索|查\s*詢|查\s*询|Search/i}).first();
+                if (await btn0.count().catch(() => 0)) {
+                  await btn0.click({timeout: 8000}).catch(() => undefined);
+                }
+                await page.waitForTimeout(1200);
+                await waitRows(page, 20000);
+              }
+            }
+            console.log('LIST_PICK_RESET ' + JSON.stringify({
+              name: nm, before_value: resetNote && resetNote.before, reset: resetNote,
+            }));
+            const spec = {
+              column: String(rp.column || '状态'),
+              in: (rp.in || []).map((s: any) => String(s)),
+              valueColumn: String(rp.value_column || ''),
+            };
+            const pk: any = root ? await root.evaluate((sp: any) => {
+              const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+              // 固定列会克隆出「每行只有 1 个 td」的 tbody，混在一起数下标必然错位：
+              // 取 td 数最多的那一组作为数据行。
+              let dataRows: any[] = [], bestCols = 0;
+              Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'), (tb: any) => {
+                const rs = Array.prototype.filter.call(tb.children, (tr: any) =>
+                  tr.querySelector('td') && tr.offsetParent !== null);
+                if (!rs.length) return;
+                const n = rs[0].querySelectorAll('td').length;
+                if (n > bestCols) { bestCols = n; dataRows = rs; }
+              });
+              if (!dataRows.length) return {ok: false, why: 'no_rows'};
+              // 表头优先取与数据行列数一致的；否则取 th 最多的 —— 数据行末尾「操作」
+              // 被拆到克隆 tbody 时列数差 1，但状态列在操作列之前，索引仍对齐。
+              let heads: string[] = [];
+              Array.prototype.forEach.call(document.querySelectorAll('.ant-table-thead'), (th: any) => {
+                const hs = Array.prototype.map.call(th.querySelectorAll('th'),
+                  (e: any) => norm(e.innerText));
+                if (hs.length === bestCols) heads = hs;
+              });
+              if (!heads.length) {
+                Array.prototype.forEach.call(document.querySelectorAll('.ant-table-thead'), (th: any) => {
+                  const hs = Array.prototype.map.call(th.querySelectorAll('th'),
+                    (e: any) => norm(e.innerText));
+                  if (hs.length > heads.length) heads = hs;
+                });
+              }
+              if (!heads.length) return {ok: false, why: 'no_header'};
+              const ci = heads.indexOf(sp.column);
+              if (ci < 0) return {ok: false, why: 'column_not_found', column: sp.column, heads};
+              const vci = sp.valueColumn ? heads.indexOf(sp.valueColumn) : -1;
+              const cells = dataRows.map((tr: any) => {
+                const t = tr.querySelectorAll('td')[ci];
+                return t ? norm(t.innerText) : '';
+              });
+              // 精确优先：否则 in=["启用"] 会把「待启用」也算命中（状态机里两者相邻）
+              let hit = -1, mode = '';
+              cells.forEach((c: string, i: number) => {
+                if (hit < 0 && sp.in.indexOf(c) >= 0) { hit = i; mode = 'exact'; }
+              });
+              if (hit < 0) {
+                cells.forEach((c: string, i: number) => {
+                  if (hit < 0 && sp.in.some((w: string) => w && c.indexOf(w) >= 0)) {
+                    hit = i; mode = 'contains';
+                  }
+                });
+              }
+              if (hit < 0) {
+                return {ok: false, why: 'no_row_matched', column: sp.column,
+                        want: sp.in, cells: cells.slice(0, 12), heads};
+              }
+              const tds = dataRows[hit].querySelectorAll('td');
+              const pi = vci >= 0 ? vci : 0;
+              const t0 = tds[pi];
+              return {ok: true, rowIndex: hit, status: cells[hit], matchMode: mode,
+                      value: t0 ? norm(t0.innerText) : '',
+                      row: norm(dataRows[hit].innerText).slice(0, 120),
+                      rows: dataRows.length, heads};
+            }, spec).catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 100)}))
+              : {ok: false, why: 'no_root'};
+            pickInfo = pk;
+            console.log('LIST_PICK_TRACE ' + JSON.stringify({name: nm, spec, result: pk}));
+            if (!pk || !pk.ok || !String(pk.value || '')) {
+              listStat.unverified += 1;
+              recAll(check, nm, 'unverified',
+                     `row_pick 未命中（列「${spec.column}」期望 ${JSON.stringify(spec.in)}）：`
+                     + `${(pk && pk.why) || 'no_value'}`
+                     + '，需按当前数据状态调整配置，或该状态已无可用行');
+              continue;
+            }
+            val = String(pk.value);
+          }
+          // rev163：空 value 绝对不能进入「搜索 → 扫描 → 动作」链路 ——
+          // 空串会匹配到任意行（rows 全成 hits），于是 found 恒真、动作点到第一行，
+          // 日志上像成功、实际目标行没被选中（TR-776 实证：value="" 却 pass）。
+          if (!val) {
+            listStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '未取到记录标识（value 为空且 row_pick 未配置/未命中）：'
+                   + '空串会匹配任意行，不能据此判定可见或执行行内操作');
+            continue;
           }
           const phs: string[] = Array.isArray(check.search_placeholder)
             ? check.search_placeholder.map((s: any) => String(s)).filter(Boolean) : [];
@@ -6184,6 +6387,8 @@ _FORM_EXECUTOR_TS = r"""
             value: val, url: url.slice(0, 90), rows: res ? res.rows : -1, pages,
             searched, search: searchNote, expect: String(check.expect || 'found'),
             found, sample: (res && res.sample) || '',
+            picked: pickInfo ? {rowIndex: pickInfo.rowIndex, status: pickInfo.status,
+                                value: pickInfo.value, matchMode: pickInfo.matchMode} : null,
           }));
           // ===== rev148：行内操作（更多菜单 / 直点 + Popconfirm 确认）=====
           // 实测口径（xy_p1b/p2 探针）：①行操作可能渲染在数据行的**独立第二行 tr**，

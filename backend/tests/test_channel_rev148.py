@@ -35,7 +35,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev161"' in src
+    assert 'COMPILER_REV = "rev164"' in src
     ast.parse(src)
 
 
@@ -220,3 +220,78 @@ def test_action_failure_is_not_pass():
     assert "if (found && actionFailed) {" in ts
     assert "列表可见但行内操作未完成" in ts
     assert "else if (act.confirm && !conf.ok) actionFailed" in ts
+
+
+# ---------- rev162：row_pick（数据自消耗） ----------
+
+def test_row_pick_parse_and_label():
+    """动作会推进状态（待启用→启用→禁用终态），写死 value 跑几次就失效 ⇒ 支持按列筛行。"""
+    from app.services.web_case_compiler import parse_row_pick
+    rp = parse_row_pick({"column": "状态", "in": "待启用", "value_column": "问卷标题"})
+    assert rp == {"column": "状态", "in": ["待启用"],
+                  "value_column": "问卷标题", "pick": "first"}
+    # 缺省列名/缺省取首列
+    assert parse_row_pick({"in": ["待启用"]})["column"] == "状态"
+    assert parse_row_pick({"in": ["待启用"]})["value_column"] == ""
+    # 没有 in ⇒ 不是有效 row_pick（不能退化成「随便取一行」）
+    assert parse_row_pick({}) is None
+    assert parse_row_pick("状态") is None
+
+
+def test_list_checks_accepts_row_pick_without_value():
+    """value 与 row_pick 二选一；都没有才拒绝。"""
+    items, rejects = parse_list_checks([
+        {"row_pick": {"column": "状态", "in": ["待启用"], "value_column": "问卷标题"},
+         "action": {"label": "启用", "labels": ["启用", "禁用"], "confirm": "确 定"}},
+    ])
+    assert not rejects, rejects
+    assert items[0]["value"] == ""
+    assert items[0]["row_pick"]["in"] == ["待启用"]
+    assert items[0]["pick_label"] == "状态∈[待启用]"
+    assert items[0]["name"] == "list_visible:状态∈[待启用]"
+    assert items[0]["action"]["labels"] == ["启用", "禁用"]
+
+    _, rej2 = parse_list_checks([{"expect": "found"}])
+    assert rej2 and "value 或 row_pick" in rej2[0]["reason"]
+
+
+def test_row_pick_executor_prefers_exact_match():
+    """in=["启用"] 不能命中「待启用」—— 状态机里两者相邻，包含匹配会选错行。"""
+    ts = _ts()
+    assert "LIST_PICK_TRACE" in ts
+    assert "sp.in.indexOf(c) >= 0" in ts              # 精确优先
+    assert "mode = 'exact'" in ts
+    assert "mode = 'contains'" in ts                  # 精确全无才退化
+    assert "no_row_matched" in ts                     # 未命中要留 cells 样本
+    assert "val = String(pk.value);" in ts            # 命中后仍走原「搜索→扫描→动作」路径
+
+
+def test_row_pick_ignores_cloned_fixed_column_body():
+    """固定列会克隆出「每行只有 1 个 td」的 tbody，混在一起数下标会错位。"""
+    ts = _ts()
+    assert "bestCols" in ts
+    assert "if (n > bestCols) { bestCols = n; dataRows = rs; }" in ts
+
+
+def test_row_pick_reaches_form_plan():
+    """parse 产出 row_pick 但 build_form_plan 不透传 ⇒ 执行器拿到空 value（TR-776 实证）。"""
+    src = _py()
+    i = src.index('"type": "list_visible"')
+    blk = src[i:i + 1400]
+    assert '"row_pick": item.get("row_pick")' in blk
+    assert '"pick_label": item.get("pick_label")' in blk
+
+
+def test_empty_value_never_reaches_scan():
+    """空串会匹配任意行：found 恒真、动作点到第一行 —— 必须拦在搜索之前。"""
+    ts = _ts()
+    assert "if (!val) {" in ts
+    assert "空串会匹配任意行" in ts
+
+
+def test_row_pick_clears_previous_search_first():
+    """列表保留上一检查项的搜索条件（goto 同 hash 是 no-op）⇒ pick 前必须清空重查。"""
+    ts = _ts()
+    assert "LIST_PICK_RESET" in ts
+    assert "t.focus(); setter.call(t, '');" in ts
+    assert "no_search_box" in ts

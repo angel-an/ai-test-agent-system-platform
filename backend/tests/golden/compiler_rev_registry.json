@@ -240,6 +240,24 @@
       "digest": "30b70d3f6129",
       "date": "2026-10-21",
       "summary": "zipText 改读中央目录（EOCD + 0x02014b50）：本 SUT 导出 xlsx 每个成员都是 data descriptor（local header 尺寸为 0），旧顺序扫在首个成员即 break、抽出文本长度 0 ⇒ 列名恒 missing；实测旧 0/9、新 9/9 命中"
+    },
+    {
+      "rev": "rev162",
+      "digest": "4a1d98b15330",
+      "date": "2026-10-21",
+      "summary": "list_checks 支持 row_pick：按列文本（缺省「状态」）筛行、取命中行指定列当 value，value 变可选；精确优先（in=[\"启用\"] 不命中「待启用」），未命中记 unverified 带 cells 样本。根因：动作通道推进状态（待启用→启用→禁用终态），写死 value 跑 2–3 次即失效（TR-773→775）"
+    },
+    {
+      "rev": "rev163",
+      "digest": "fbb9bbd94be3",
+      "date": "2026-10-21",
+      "summary": "build_form_plan 补透传 row_pick/pick_label（漏传⇒执行器 value 为空串）；空 value 拦在搜索之前记 unverified —— 空串匹配任意行会让 found 恒真、动作点到第一行（TR-776 实证）"
+    },
+    {
+      "rev": "rev164",
+      "digest": "af9313b3c9e0",
+      "date": "2026-10-21",
+      "summary": "row_pick 前清空搜索并重新查询：列表页保留上一检查项的搜索条件（同 hash goto 是 no-op），上一 readonly 断言搜过后只剩 1 行 ⇒ pick 必 no_row_matched（TR-777 实证 cells:[\"禁用\"]）"
     }
   ]
 }
