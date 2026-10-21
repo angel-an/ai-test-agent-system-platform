@@ -258,6 +258,12 @@
       "digest": "af9313b3c9e0",
       "date": "2026-10-21",
       "summary": "row_pick 前清空搜索并重新查询：列表页保留上一检查项的搜索条件（同 hash goto 是 no-op），上一 readonly 断言搜过后只剩 1 行 ⇒ pick 必 no_row_matched（TR-777 实证 cells:[\"禁用\"]）"
+    },
+    {
+      "rev": "rev165",
+      "digest": "d3a3d05a5739",
+      "date": "2026-10-21",
+      "summary": "required_error 增加校验时机判定：清空后不 blur 先读提示（onChange），拿不到新提示再 blur（onBlur）；清空前记提示基线识别残留、防伪 pass；提交层已给结论的客户端过程态 unverified 不再重复计入 total（新增 emitted_raw/deferred_superseded）"
     }
   ]
 }

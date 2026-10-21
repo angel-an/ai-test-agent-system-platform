@@ -22,7 +22,7 @@ def _py() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev164"' in src
+    assert 'COMPILER_REV = "rev165"' in src
     ast.parse(src)  # 语法完好
 
 
@@ -42,8 +42,11 @@ def test_anchored_error_detection_exists():
 
 def test_client_layer_uses_anchored_detection():
     ts = _ts()
-    # required_error 客户端层
-    assert "const hasError = await itemHasErrorCtl(page, modal, check.field, def);" in ts
+    # required_error 客户端层：rev165 起先按「时机」读锚定文案（itemErrorTexts 与
+    # itemHasErrorCtl 同一套 ancestor 锚定），只有全无文案时才退回布尔检测兜底。
+    assert "async function itemErrorTexts(" in ts
+    assert "const errBase = await itemErrorTexts(modal, check.field, def);" in ts
+    assert "if (timing === 'none' && await itemHasErrorCtl(page, modal, check.field, def, 0)) timing = 'flag';" in ts
     # input_validation 边界检测
     assert "const invalid = await itemHasErrorCtl(page, modal, check.field, def);" in ts
     # 旧的裸 itemHasError 客户端调用不再出现（提交层 observe/guardOk 也应换掉）

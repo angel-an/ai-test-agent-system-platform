@@ -297,7 +297,16 @@ from app.services.web_upload_fixtures import (
 #:   - rev164（2026-10-21，TR-777 实测 pick 只看到 1 行）：pick 前**清空搜索并重新查询**。
 #:     列表页会保留上一检查项的搜索条件（同 hash goto 是 no-op、SPA 不重载），
 #:     上一个 readonly 断言按自己的 value 搜过之后只剩 1 行 ⇒ row_pick 必然 no_row_matched。
-COMPILER_REV = "rev164"
+#:   - rev165（2026-10-21，P1 必填校验时机探针，`probe_req_timing*` 两次实测）：
+#:     ① **时机必须分开采样**：清空后**不 blur** 先读提示（onChange），拿不到再 blur（onBlur）。
+#:        实测 问卷标题/优先级=清空后 120ms 即出现「请输入…」⇒ onChange；题目标题/选项1
+#:        两种时机都无字段级提示，提交时才给 toast「题目1：请输入标题」且**零写请求**发出
+#:        ⇒ 提交时校验 + toast 形态（不是缺陷，也不是"blur 没测到就是前端漏校验"）。
+#:     ② **伪 pass 防护**：清空前先记提示基线，只有"清空后新增的文案"才算本次触发。
+#:        旧行把残留提示当成触发，任何一次校验失败过就会一直判 pass。
+#:     ③ **过程态不重复计数**：客户端取不到证据时的 unverified 只是过程记录，提交层给出
+#:        结论后从 total 里剔除（TR-779 实测 total=8/pass=7/unverified=1，真实是 7/7）。
+COMPILER_REV = "rev165"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -3566,6 +3575,43 @@ _FORM_EXECUTOR_TS = r"""
     return await itemHasError(pg, modal, field, 0);
   }
 
+  //: rev165（2026-10-21，P1 必填校验时机探针）：**读提示文案**，而不只是"有没有错误"。
+  //: 为什么要文案：required_error 的原判据是「填值→清空→blur→查 explain 是否出现」，
+  //: 这个判据对两类 SUT 都会给出错误结论——
+  //:   ① 提示是上一次交互的**残留**（清空前就已存在）→ 被当成"本次触发"= 伪 pass；
+  //:   ② 提示在**清空瞬间**（onChange）就出现，blur 只是顺带 → 结论写"填值后清空出现"，
+  //:      看不出真正的触发时机，也无法和"仅提交时校验"区分。
+  //: 探针实测（营销云问卷，2026-10-21）：
+  //:   问卷标题/优先级：清空后 120ms 即出现「请输入问卷标题」→ onChange；
+  //:   题目标题/选项1（题目卡片内）：清空、blur 均无字段级提示，提交时给 toast
+  //:     「题目1：请输入标题」且**零写请求**发出 → 提交时校验 + toast 形态。
+  //: 返回文案数组（用于"与基线比对"识别残留）；只有 has-error 而无文案时给哨兵，
+  //: 避免把"只挂 class 不渲文案"的 SUT 判成无错误。
+  async function itemErrorTexts(modal: any, field: string, def: any): Promise<string[]> {
+    const out: string[] = [];
+    try {
+      const ctl = fieldControl(modal, field, def);
+      if (!ctl || !(await ctl.count().catch(() => 0))) return out;
+      const item = ctl.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " ant-form-item ")][1]');
+      if (!(await item.count().catch(() => 0))) return out;
+      for (const sel of ['.ant-form-explain', '.ant-form-item-explain-error']) {
+        const n = await item.locator(sel).count().catch(() => 0);
+        for (let i = 0; i < n; i += 1) {
+          const t = String(await item.locator(sel).nth(i).innerText({timeout: 1000}).catch(() => '') || '').trim();
+          if (t) out.push(t);
+        }
+      }
+      if (!out.length) {
+        const cls = String(await item.getAttribute('class', {timeout: 1000}).catch(() => '') || '');
+        if (cls.includes('has-error')) out.push('[has-error]');
+        else if (await item.locator('.ant-form-item-control.has-error, .has-error').count().catch(() => 0)) {
+          out.push('[has-error]');
+        }
+      }
+    } catch { /* 控件消失/页面迁移 → 返回空，由调用方按"未取到证据"处理 */ }
+    return out;
+  }
+
   //: 读取某个单选组当前渲染出来的所有选项标签（只读，用于"选项范围"断言）
   async function optionLabels(modal: any, field: string): Promise<string[]> {
     const item = modal.locator(`.ant-form-item:has-text("${field}")`).first();
@@ -4590,12 +4636,41 @@ _FORM_EXECUTOR_TS = r"""
           // 先填再清：antd 的 required 规则默认 onChange 触发，对空字段 fill('') 不产生事件
           await input.fill('1', {timeout: OP_T});
           await page.waitForTimeout(200);
+          // rev165：**先取基线**（填值态下的提示）。此处若有提示，说明是上一次校验遗留的，
+          // 后面"清空后仍有提示"就不能当本次触发的证据 —— 旧行正是这样产生伪 pass。
+          const errBase = await itemErrorTexts(modal, check.field, def);
           await input.fill('', {timeout: OP_T});
-          await input.blur({timeout: OP_T});
-          // rev140：错误检测锚定控件（题目标题→卡片「标题」这类标签名不同步的盲区，见 itemHasErrorCtl）
-          const hasError = await itemHasErrorCtl(page, modal, check.field, def);
+          // ① onChange 时机：**不 blur** 先采样（antd v3 required 默认 validateTrigger=onChange）
+          await page.waitForTimeout(180);
+          const errOnChange = await itemErrorTexts(modal, check.field, def);
+          const freshOnChange = errOnChange.filter((t) => errBase.indexOf(t) < 0);
+          // ② onBlur 时机：onChange 没拿到**新**提示才继续失焦（命中 onChange 就省掉 blur）
+          let errBlur = errOnChange;
+          if (!freshOnChange.length) {
+            await input.blur({timeout: OP_T});
+            await page.waitForTimeout(600);
+            errBlur = await itemErrorTexts(modal, check.field, def);
+          }
+          const freshBlur = errBlur.filter((t) => errBase.indexOf(t) < 0);
+          let timing = freshOnChange.length ? 'on_change' : (freshBlur.length ? 'on_blur' : 'none');
+          // 兜底：只有 has-error class、既无文案也未被 itemErrorTexts 捕获的 SUT
+          if (timing === 'none' && await itemHasErrorCtl(page, modal, check.field, def, 0)) timing = 'flag';
+          console.log('REQUIRED_TIMING ' + JSON.stringify({
+            field: check.field, timing,
+            baseline: errBase.slice(0, 3),
+            onChange: errOnChange.slice(0, 3),
+            afterBlur: errBlur.slice(0, 3),
+            preexisting: errBase.length > 0,
+          }));
+          const hasError = timing !== 'none';
+          const timingText = timing === 'on_change' ? '清空输入即出现（onChange 触发）'
+            : timing === 'on_blur' ? '失焦后出现（onBlur 触发）'
+            : timing === 'flag' ? '控件挂 has-error 但未渲染文案（仅标记）' : '';
+          const errText = (freshOnChange.length ? freshOnChange : freshBlur)[0] || '';
           recAll(check, name, hasError ? 'pass' : 'unverified',
-                 hasError ? '填值后清空出现必填校验提示' : '填值后清空仍未出现必填提示（可能仅提交时校验）');
+                 hasError
+                   ? `字段级必填提示，${timingText}${errText ? `：${errText}` : ''}`
+                   : '清空与失焦均未出现字段级提示：该字段为提交时校验（交提交层按 toast/请求判定）');
           if (!hasError) submitQueue.push({check, name, kind: 'required_empty'});
           continue;
         }
@@ -7158,11 +7233,30 @@ _FORM_EXECUTOR_TS = r"""
     // rev148：导出独立通道（在列表检查之后——两者都各自 goto，互不复用现场）
     await phaseWatchdog(runExportChecks(), 240000, 'export');
 
+    //: rev165（2026-10-21，P1 探针）：**过程态不重复计数**。
+    //: required_error 的客户端路径在"取不到字段级提示"时会先记一条 unverified，再把该项交给
+    //: 提交层重做；提交层给出真实结论后，那条 unverified 只是过程记录，不是最终结论。
+    //: 旧口径把它算进 total（实测 TR-779：total=8 / pass=7 / unverified=1，而真实是 7 条断言全通），
+    //: 读者会以为有一条没验过。这里把"已被提交层结论覆盖"的过程态从计数里剔除，
+    //: 但仍保留在 COMPILED_ASSERTION 逐条输出里（可复核），差额由 deferred_superseded 说明。
+    const __DEFERRED_RE = /未出现字段级提示|未出现必填提示|必填校验需提交层|仅提交时校验/;
+    const __submitCovered = new Set(
+      formResults.filter((r) => String(r.observed).startsWith('提交层验证')).map((r) => r.name),
+    );
+    const __superseded = formResults.filter(
+      (r) => r.outcome === 'unverified' && __submitCovered.has(r.name) && __DEFERRED_RE.test(String(r.observed)),
+    ).length;
+    const __counted = formResults.length - __superseded;
+
     const summary = {
-      total: formResults.length,
+      total: __counted,
       pass: formResults.filter((r) => r.outcome === 'pass').length,
-      unverified: formResults.filter((r) => r.outcome === 'unverified').length,
+      unverified: formResults.filter((r) => r.outcome === 'unverified').length - __superseded,
       blocked: formResults.filter((r) => r.outcome === 'blocked').length,
+      //: 实际写出的逐条结果数（未剔过程态）+ 被剔除的条数：两者之和恒等于 total + superseded，
+      //: 对账行用它还原"写了多少条"，不还原就会把这次改进读成"少跑了 1 条"。
+      emitted_raw: formResults.length,
+      deferred_superseded: __superseded,
       submit_phase: {
         queued: submitQueue.length,
         // rev139：本层**实际写出**多少条结果（超时/中断也会各写一条，故不能拿 queued 代）
@@ -7235,7 +7329,9 @@ _FORM_EXECUTOR_TS = r"""
     const __scenarioA = summary.negative_scenario_phase.executed;
     const __submitA = summary.submit_phase.emitted || 0;
     const __unexplainedPlan = __plannedA - ((__execA - __configA) + __skipA);
-    const __unexplainedEmitted = summary.total - (__execA + __scenarioA + __submitA);
+    // rev165：用 emitted_raw（未剔过程态的实际写出行数）——summary.total 现在剔掉了
+    // 被提交层覆盖的过程态，拿它做减法会把"改进"读成"少发了 1 条"（balanced 变 false）。
+    const __unexplainedEmitted = summary.emitted_raw - (__execA + __scenarioA + __submitA);
     // rev136：**减去 config_only**。配置驱动的检查（`defaults` 的默认选中、条件显示）
     // 不是文档断言翻译来的，把它们算进 executable 会让 plan 侧恒等式恒为负——
     // 实测 TR-752：planned=4（3 条用例共 4 条断言）、executable=6（多出 2 条
@@ -7249,7 +7345,9 @@ _FORM_EXECUTOR_TS = r"""
       scenario_configured: (FORM_PLAN.negative_scenarios || []).length,
       scenario_executed: __scenarioA,
       submit_resubmitted: __submitA,
-      emitted: summary.total,
+      emitted: summary.emitted_raw,
+      //: 其中有多少条是"提交层已给结论、客户端过程态被剔除"的（rev165）
+      superseded: summary.deferred_superseded || 0,
       unexplained_plan: __unexplainedPlan,
       unexplained_emitted: __unexplainedEmitted,
       balanced: __unexplainedPlan === 0 && __unexplainedEmitted === 0,

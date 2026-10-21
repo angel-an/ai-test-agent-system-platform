@@ -35,7 +35,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev164"' in src
+    assert 'COMPILER_REV = "rev165"' in src
     ast.parse(src)
 
 
@@ -295,3 +295,44 @@ def test_row_pick_clears_previous_search_first():
     assert "LIST_PICK_RESET" in ts
     assert "t.focus(); setter.call(t, '');" in ts
     assert "no_search_box" in ts
+
+
+def test_required_error_samples_timing_separately():
+    """rev165：清空后先不 blur 采样（onChange），拿不到新提示才 blur（onBlur）。
+
+    探针实测（2026-10-21）：问卷标题/优先级清空后 120ms 即出现「请输入…」；
+    题目标题/选项1 两种时机都无字段级提示，提交时才给 toast。
+    """
+    ts = _ts()
+    assert "async function itemErrorTexts(" in ts
+    assert "const errBase = await itemErrorTexts(modal, check.field, def);" in ts
+    assert "const errOnChange = await itemErrorTexts(modal, check.field, def);" in ts
+    assert "if (!freshOnChange.length) {" in ts          # onChange 命中就不必 blur
+    assert "REQUIRED_TIMING" in ts
+    assert "timing === 'on_change'" in ts or "timing = 'on_change'" in ts
+    assert "timing = freshOnChange.length ? 'on_change'" in ts
+
+
+def test_required_error_rejects_residual_hint_as_pass():
+    """清空前已有的提示是残留，只有「新增文案」才算本次触发（旧行会把残留判 pass）。"""
+    ts = _ts()
+    assert "preexisting: errBase.length > 0" in ts
+    assert "errOnChange.filter((t) => errBase.indexOf(t) < 0)" in ts
+    assert "errBlur.filter((t) => errBase.indexOf(t) < 0)" in ts
+
+
+def test_required_error_marks_has_error_without_text():
+    """只挂 has-error、不渲文案的 SUT 不能被判成「无错误」（哨兵 + 兜底）。"""
+    ts = _ts()
+    assert "out.push('[has-error]')" in ts
+    assert "timing = 'flag'" in ts
+
+
+def test_superseded_process_record_not_counted_twice():
+    """客户端 unverified 被提交层覆盖后不重复计入 total（TR-779：8/7/1 → 7/7/0）。"""
+    src = _py()
+    assert "deferred_superseded" in src
+    assert "emitted_raw" in src
+    assert "__DEFERRED_RE" in src
+    # 对账行必须用 emitted_raw，否则 total 变小会被读成「少发了 1 条」
+    assert "summary.emitted_raw - (__execA + __scenarioA + __submitA)" in src
