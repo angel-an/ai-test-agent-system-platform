@@ -340,7 +340,10 @@ from app.services.web_upload_fixtures import (
 #:     digest 预热原在模块体前部，``_FORM_EXECUTOR_TS`` 等尚未定义即被 ``g.get``
 #:     静默跳过 ⇒ 固化**残缺指纹**（fec94279864a，不含执行器模板）；预热挪到模块
 #:     末尾，回归测试断言 warm==full。
-COMPILER_REV = "rev170"
+#:   - rev171（2026-10-21，TR-789 复盘）：``reset_clear_values``。本 SUT「重置」是把
+#:     下拉置回「全部」而非清成 placeholder（TR-789 FILTER_TRACE 实测 value="全部"），
+#:     旧判定（value 空 或 placeholder 可见）恒 false。回显值命中配置等值集也算清空。
+COMPILER_REV = "rev171"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -1437,6 +1440,9 @@ def parse_filter_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
       ``expect_in``           该列允许的取值（缺省 ``[option]``）
       ``reset``               筛选后是否点「重置」并断言控件清空（缺省 False）
       ``reset_label``         重置按钮正则（缺省 ``重\\s*置|重\\s*設|Reset``）
+      ``reset_clear_values``  重置后下拉回显的「已清空」等值文本（缺省 全部/All）——
+                              本 SUT 重置是把下拉置回「全部」而非清成 placeholder
+                              （TR-789 FILTER_TRACE 实测 value="全部"）
       ``case_id`` / ``rule_id``  证据归属
     """
     if raw is None or raw == "":
@@ -1475,6 +1481,8 @@ def parse_filter_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
                 "expect_in": expect_in,
                 "reset": bool(entry.get("reset")),
                 "reset_label": str(entry.get("reset_label") or r"重\s*置|重\s*設|Reset"),
+                "reset_clear_values": ([s for s in _as_str_list(entry.get("reset_clear_values")) if s]
+                                       or ["全部", "全部", "All"]),
                 "case_id": str(entry.get("case_id") or ""),
                 "rule_id": str(entry.get("rule_id") or ""),
                 "rule_ref": str(entry.get("rule_ref") or "筛选与重置"),
@@ -2768,6 +2776,7 @@ def build_form_plan(
             "expect_in": item["expect_in"],
             "reset": item["reset"],
             "reset_label": item["reset_label"],
+            "reset_clear_values": item["reset_clear_values"],
             "rule": item["rule_ref"],
             "case_id": item["case_id"],
             "rule_id": item["rule_id"],
@@ -7053,7 +7062,10 @@ _FORM_EXECUTOR_TS = r"""
               !expectIn.some((e: string) => v === e || v.indexOf(e) >= 0));
             filterOk = sample.rows > 0 && badVals.length === 0;
           }
-          // ④ 重置（配置了才做）：点重置 → 断言下拉清空（选中值消失/placeholder 回显）
+          // ④ 重置（配置了才做）：点重置 → 断言下拉清空（选中值消失/placeholder 回显/
+          //    回显到「已清空」等值文本——本 SUT 重置置回「全部」，TR-789 实测）
+          const clearVals: string[] = (Array.isArray(check.reset_clear_values) && check.reset_clear_values.length)
+            ? check.reset_clear_values.map((s: any) => String(s)) : ['全部', '全部', 'All'];
           let resetOk = true, resetNote = 'not_configured';
           let afterReset: any = null;
           if (check.reset) {
@@ -7080,7 +7092,8 @@ _FORM_EXECUTOR_TS = r"""
                 };
               }, ctrl.idx).catch((e: any) => ({err: String(e).slice(0, 80)}));
               resetOk = !!afterReset && !afterReset.err
-                && (!afterReset.value || afterReset.placeholderVisible);
+                && (!afterReset.value || afterReset.placeholderVisible
+                    || clearVals.indexOf(String(afterReset.value)) >= 0);
               resetNote = JSON.stringify(afterReset).slice(0, 120);
             }
           }

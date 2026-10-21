@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev170"' in src
+    assert 'COMPILER_REV = "rev171"' in src
     ast.parse(src)
 
 
@@ -535,3 +535,16 @@ def test_filter_checks_in_digest():
     """parse_filter_checks 的解析语义决定运行期选哪个选项 ⇒ 必须纳入 digest（rev125 同源）。"""
     src = _py()
     assert '"parse_filter_checks",' in src
+
+
+def test_filter_reset_clear_values():
+    """TR-789 复盘：本 SUT「重置」把下拉置回「全部」而非清成 placeholder——
+    旧判定（value 空 / placeholder 可见）恒 false。回显值命中等值集也算清空。"""
+    items, _ = parse_filter_checks([{"option": "待启用", "reset": True}])
+    assert items[0]["reset_clear_values"] == ["全部", "全部", "All"]  # 缺省等值集
+    items2, _ = parse_filter_checks([{"option": "x", "reset": True, "reset_clear_values": ["全部"]}])
+    assert items2[0]["reset_clear_values"] == ["全部"]
+    ts = _ts()
+    assert "clearVals.indexOf(String(afterReset.value)) >= 0" in ts
+    src = _py()
+    assert '"reset_clear_values": item["reset_clear_values"]' in src

@@ -294,6 +294,12 @@
       "digest": "ad10a9c44913",
       "date": "2026-10-21",
       "summary": "P3 第一项：filter_checks 筛选区独立通道（下拉筛选→第 1 页目标列全量命中→重置回读清空态；选项先精确后包含防子串误选；[filter-skip] 不静默；白名单+filter_phase+digest 纳入）。⚠️ 同时修正 rev169 缺陷：digest 预热原在模块体前部，固化的是不含执行器模板的残缺指纹（fec94279864a），预热挪到模块末尾后 warm==full"
+    },
+    {
+      "rev": "rev171",
+      "digest": "83c85fc1e0e7",
+      "date": "2026-10-22",
+      "summary": "TR-789 复盘：filter_checks 新增 reset_clear_values——本 SUT「重置」把下拉置回「全部」而非清成 placeholder，旧判定（value 空/placeholder 可见）恒 false；回显值命中等值集（缺省 全部/All）也算清空"
     }
   ]
 }
