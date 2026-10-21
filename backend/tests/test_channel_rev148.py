@@ -35,7 +35,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev165"' in src
+    assert 'COMPILER_REV = "rev166"' in src
     ast.parse(src)
 
 
@@ -336,3 +336,13 @@ def test_superseded_process_record_not_counted_twice():
     assert "__DEFERRED_RE" in src
     # 对账行必须用 emitted_raw，否则 total 变小会被读成「少发了 1 条」
     assert "summary.emitted_raw - (__execA + __scenarioA + __submitA)" in src
+
+
+def test_config_only_counts_by_source_not_case_id():
+    """rev166：list_checks/export_checks 带自造 case_id（TC-VIEWONLY-REV157）但仍是
+    配置驱动——config_only 判定只看 source，否则 plan 侧恒等式恒为 -3。"""
+    ts = _ts()
+    i = ts.index("config_only_checks:")
+    blk = ts[i:i + 400]
+    assert "c.source === 'locator_config'," in blk
+    assert "case_id" not in blk.split(").length")[0]

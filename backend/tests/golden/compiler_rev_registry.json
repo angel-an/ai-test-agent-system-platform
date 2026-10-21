@@ -264,6 +264,12 @@
       "digest": "d3a3d05a5739",
       "date": "2026-10-21",
       "summary": "required_error 增加校验时机判定：清空后不 blur 先读提示（onChange），拿不到新提示再 blur（onBlur）；清空前记提示基线识别残留、防伪 pass；提交层已给结论的客户端过程态 unverified 不再重复计入 total（新增 emitted_raw/deferred_superseded）"
+    },
+    {
+      "rev": "rev166",
+      "digest": "f0a11e9a0009",
+      "date": "2026-10-21",
+      "summary": "config_only_checks 判定改只看 source：list_checks/export_checks 带自造 case_id 但仍是配置驱动，旧条件排除它们导致 plan 侧恒等式恒为 -3（balanced 永假）"
     }
   ]
 }

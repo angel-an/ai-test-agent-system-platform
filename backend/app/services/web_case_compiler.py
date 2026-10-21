@@ -306,7 +306,12 @@ from app.services.web_upload_fixtures import (
 #:        旧行把残留提示当成触发，任何一次校验失败过就会一直判 pass。
 #:     ③ **过程态不重复计数**：客户端取不到证据时的 unverified 只是过程记录，提交层给出
 #:        结论后从 total 里剔除（TR-779 实测 total=8/pass=7/unverified=1，真实是 7/7）。
-COMPILER_REV = "rev165"
+#:   - rev166（2026-10-21，TR-780 实测 unexplained_plan=-3）：``config_only_checks``
+#:     判定改**只看 source**。``list_checks``/``export_checks`` 带**自造** case_id
+#:     （TC-VIEWONLY-REV157 之类，仅用于结果归属台账），旧条件"locator_config 且无
+#:     case_id"把它们排除在配置驱动之外 ⇒ plan 侧恒等式恒为负
+#:     （planned=1 - (executable 6 - config_only 2) = -3，balanced 永远 false）。
+COMPILER_REV = "rev166"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -7294,11 +7299,15 @@ _FORM_EXECUTOR_TS = r"""
       plan_checks: FORM_PLAN.checks.length,
       attributed_checks: FORM_PLAN.checks.filter(
         (c: any) => c.case_id || (Array.isArray(c.owners) && c.owners.length)).length,
-      // 配置驱动的计划级检查：来自定位器配置（如 default_selected 的默认值声明），
-      // 本身没有对应用例断言——因此**不算**"本该有归属却没有"，由台账单独归类。
+      // 配置驱动的计划级检查：来自定位器配置（如 default_selected 的默认值声明、
+      // list_checks / export_checks 的列表/导出通道）。rev166（2026-10-21，TR-780 实测
+      // unexplained_plan=-3）：判定**只看 source**，不再要求"无 case_id"——
+      // list_checks/export_checks 会带自造的 case_id（如 TC-VIEWONLY-REV157，仅用于
+      // 结果归属台账），它们同样不是文档断言翻译来的，旧条件把它们排除在 config_only
+      // 之外 ⇒ plan 侧恒等式恒为负（planned=1 - (executable 6 - config_only 2) = -3）。
+      // source 是"是否文档断言"的单一事实；case_id 只是归属线索，不代表断言来源。
       config_only_checks: FORM_PLAN.checks.filter(
-        (c: any) => c.source === 'locator_config'
-          && !(c.case_id || (Array.isArray(c.owners) && c.owners.some((o: any) => o && o.case_id))),
+        (c: any) => c.source === 'locator_config',
       ).length,
       // 上传类检查**不计入 total**：它们只输出原始证据（UPLOAD_EVIDENCE），
       // 由服务端分类器判定后才写入用例结果（避免浏览器侧假通过）。
