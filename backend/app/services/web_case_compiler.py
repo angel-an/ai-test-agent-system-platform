@@ -347,7 +347,14 @@ from app.services.web_upload_fixtures import (
 #:     残留（goto 同 hash 是 no-op、SPA 保留上一条件，rev158/164 同源教训）；
 #:     ② 选中选项后**点「搜索/查询」触发刷新**——本 SUT 选中不自动查询，TR-790 实测
 #:     选「待启用」后结果集仍是上一条件残留的「启用」行（假 unverified）。
-COMPILER_REV = "rev172"
+#:   - rev173（2026-10-22，P3 第二项）：「状态×操作矩阵」独立通道
+#:     ``action_matrix_checks``——按状态定位行 → 断言行内操作集（expect_row/forbid_row，
+#:     数据行与克隆操作行双扫描）→ 更多菜单枚举（expect_menu）→ confirm 配置驱动
+#:     验确认框（Modal+Popover 双采样）后**点取消还原**。目标状态不在第 1 页时
+#:     ``filter: true`` 先状态下拉筛选（复用 rev172 配方：选中后点搜索）。被拒不
+#:     静默（``[matrix-skip]``）；``action_matrix_rejects`` 进 payload 白名单与
+#:     summary ``matrix_phase``；``parse_action_matrix_checks`` 纳入 digest。
+COMPILER_REV = "rev173"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -379,6 +386,9 @@ _DIGEST_FUNCTIONS: tuple[str, ...] = (
     # rev170：filter_checks 的解析语义（option 必填 / expect_in 缺省 / reset 正则）
     # 直接决定运行期选哪个选项、断言哪列 ⇒ 与 parse_list_checks 同源，必须纳入 digest。
     "parse_filter_checks",
+    # rev173：状态×操作矩阵的解析语义（status_in 必填 / confirm 结构 / 数组字段校验）
+    # 直接决定运行期断言哪些操作 ⇒ 同源，必须纳入 digest。
+    "parse_action_matrix_checks",
     "render_form_executor",
 )
 
@@ -1620,6 +1630,114 @@ def parse_export_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
     return items, rejects
 
 
+# ==========================================================================
+# 「状态×操作矩阵」独立通道（``extra_config.action_matrix_checks``，rev173 新增）
+# ==========================================================================
+# 背景（P3 第二项，覆盖审计 2026-10-21）：状态机与行内操作的对应关系（待启用=查看/
+# 编辑/启用/更多(删除,导出明细)；启用=查看/复制/禁用/更多(删除,导出明细)；禁用=查看/
+# 复制/删除/导出明细）此前只有只读探针盘点，没有用例、没有自动化断言。本通道按
+# 「目标状态 → 定位该状态的一行 → 断言行内操作集 → （配置了才）枚举更多菜单 →
+# （配置了才）点删除验确认框再取消」做成独立阶段，与 list/filter/export 同形。
+#
+# 诚实边界（写进判定，不冒充）：
+#   * 目标状态行第 1 页找不到（含筛选后仍无）→ unverified（数据侧缺该状态，非断言结论）；
+#   * 「更多」打不开 → unverified；expect_row 缺失 / forbid_row 出现 / expect_menu
+#     缺失 → unverified + 逐项明细（业务断言结果，与字段级通道口径一致）；
+#   * confirm 点击了「删除」却没有任何确认框（Modal 与 Popover 双采样均无）→ 这是
+#     真断言结果（误删风险），同样记 unverified + 明细；确认框出现必须点取消还原，
+#     取消失败 → unverified（先 Escape 兜底，绝不留确认框挂着）。
+def parse_action_matrix_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """解析 ``extra_config.action_matrix_checks``，返回 ``(可用检查, 被拒检查)``。
+
+    单条配置字段：
+      ``name``             断言名（缺省由 status_in 生成）
+      ``status_column``    状态所在列头文本（缺省 ``状态``）
+      ``status_in``        目标状态取值（数组，繁简同配；**必填**）
+      ``filter``           目标状态不在第 1 页时先用状态下拉筛选（缺省 False）
+      ``filter_option``    筛选选项文本（缺省 = ``status_in[0]``）
+      ``control_placeholder``  状态下拉 placeholder 候选（``filter: true`` 时用）
+      ``expect_row``       行内（数据行 + 克隆操作行）必须可见的操作标签数组
+      ``forbid_row``       行内不得出现的操作标签数组
+      ``expect_menu``      点「更多」后菜单必须包含的项（行无「更多」→ 断言失败明细）
+      ``confirm``          ``{"label": "删除", "via": "menu"|"row"}``——点它→必须出
+                           确认框→点取消还原；不配则不碰任何业务动作
+      ``list_url``         列表页直链（缺省回退 ``locators.list_url``）
+      ``case_id`` / ``rule_id``  证据归属
+    """
+    if raw is None or raw == "":
+        return [], []
+    if not isinstance(raw, list):
+        return [], [{"value": "", "reason": "action_matrix_checks 必须是数组",
+                     "detail": type(raw).__name__}]
+
+    items: list[dict[str, Any]] = []
+    rejects: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(raw):
+        try:
+            if not isinstance(entry, dict):
+                rejects.append({"value": "", "reason": "检查必须是对象",
+                                "detail": f"index={index}"})
+                continue
+            status_in = [str(x).strip() for x in (entry.get("status_in") or [])
+                         if str(x or "").strip()]
+            if not status_in:
+                rejects.append({"value": "", "reason": "缺少 status_in（目标状态取值数组）",
+                                "detail": f"index={index}"})
+                continue
+            for key in ("expect_row", "forbid_row", "expect_menu"):
+                val = entry.get(key)
+                if val is not None and not (isinstance(val, list)
+                                            and all(str(x).strip() for x in val)):
+                    rejects.append({"value": "/".join(status_in), "reason": f"{key} 必须是字符串数组",
+                                    "detail": f"index={index}"})
+                    status_in = []
+                    break
+            if not status_in:
+                continue
+            confirm_raw = entry.get("confirm")
+            confirm = None
+            if confirm_raw is not None:
+                if not isinstance(confirm_raw, dict) or not str(confirm_raw.get("label") or "").strip():
+                    rejects.append({"value": "/".join(status_in),
+                                    "reason": "confirm 必须是对象且带 label",
+                                    "detail": f"index={index}"})
+                    continue
+                via = str(confirm_raw.get("via") or "row").strip().lower()
+                if via not in ("menu", "row"):
+                    rejects.append({"value": "/".join(status_in), "reason": "confirm.via 非法",
+                                    "detail": f"{via!r}，允许：menu/row"})
+                    continue
+                confirm = {"label": str(confirm_raw["label"]).strip(), "via": via}
+            name = str(entry.get("name") or f"matrix:{'/'.join(status_in)}")
+            if name in seen:
+                rejects.append({"value": name, "reason": "同一 name 重复",
+                                "detail": f"index={index}"})
+                continue
+            seen.add(name)
+            items.append({
+                "name": name,
+                "status_column": str(entry.get("status_column") or "状态"),
+                "status_in": status_in,
+                "filter": bool(entry.get("filter")),
+                "filter_option": str(entry.get("filter_option") or status_in[0]),
+                "control_placeholder": _as_str_list(entry.get("control_placeholder"))
+                                       or ["请输入状态", "狀態", "状态"],
+                "expect_row": [str(x).strip() for x in (entry.get("expect_row") or [])],
+                "forbid_row": [str(x).strip() for x in (entry.get("forbid_row") or [])],
+                "expect_menu": [str(x).strip() for x in (entry.get("expect_menu") or [])],
+                "confirm": confirm,
+                "list_url": str(entry.get("list_url") or ""),
+                "case_id": str(entry.get("case_id") or ""),
+                "rule_id": str(entry.get("rule_id") or ""),
+                "rule_ref": str(entry.get("rule_ref") or "状态×操作矩阵"),
+            })
+        except Exception as exc:  # noqa: BLE001  配置畸形不得阻断编译
+            rejects.append({"value": "", "reason": "检查解析异常",
+                            "detail": f"{type(exc).__name__}: {exc}"[:200]})
+    return items, rejects
+
+
 #: ``pre_actions`` 的硬上限：配置写错时不能把整批运行拖死（每项都在检查循环里同步等待）。
 PRE_ACTION_MAX_TIMES = 5
 PRE_ACTION_MAX_WAIT_MS = 10000
@@ -2169,6 +2287,9 @@ NON_LOCATOR_CONFIG_KEYS: tuple[str, ...] = REGISTRATION_META_KEYS + ("negative_s
                                                                      # rev170：筛选区通道
                                                                      # 同为行为配置，不进定位器键
                                                                      "filter_checks",
+                                                                     # rev173：状态×操作矩阵通道
+                                                                     # 同为行为配置，不进定位器键
+                                                                     "action_matrix_checks",
                                                                      # rev119：字段级上传放行
                                                                      # 是**行为配置**，不是选择器；
                                                                      # 列进 locator_keys 会让配置方
@@ -2787,6 +2908,30 @@ def build_form_plan(
             "source": "locator_config",
         })
 
+    # 「状态×操作矩阵」独立通道（rev173）：按状态定位行 → 断言行内操作集 →
+    # 更多菜单枚举 → 确认框验证（点取消还原）。与 list/filter/export 同形。
+    action_matrix_checks, action_matrix_rejects = parse_action_matrix_checks(
+        loc.get("action_matrix_checks"))
+    for item in action_matrix_checks:
+        checks.append({
+            "type": "action_matrix",
+            "name": item["name"],
+            "list_url": item["list_url"] or str(loc.get("list_url") or ""),
+            "status_column": item["status_column"],
+            "status_in": item["status_in"],
+            "filter": item["filter"],
+            "filter_option": item["filter_option"],
+            "control_placeholder": item["control_placeholder"],
+            "expect_row": item["expect_row"],
+            "forbid_row": item["forbid_row"],
+            "expect_menu": item["expect_menu"],
+            "confirm": item["confirm"],
+            "rule": item["rule_ref"],
+            "case_id": item["case_id"],
+            "rule_id": item["rule_id"],
+            "source": "locator_config",
+        })
+
     # N3（2026-10-18）：跳过项按"作用域"分账。`list` = 列表域（列头/筛选/分页），
     # `form` = 表单控件。两者修法完全不同（前者缺生成器，后者缺定位器配置），
     # 合并成一个 skipped_count 会让人按错误的路径去修。
@@ -2887,7 +3032,7 @@ def build_form_plan(
         # 打开表单、把环境问题变成硬失败），但审计与运行期现场仍然完整。
         if (not skipped and not negative_scenario_rejects
                 and not list_check_rejects and not export_check_rejects
-                and not filter_check_rejects):
+                and not filter_check_rejects and not action_matrix_rejects):
             return None
         return {"locators": plan_locators, "checks": [], "skipped": skipped,
                 "check_count": 0, "skipped_count": len(skipped),
@@ -2896,6 +3041,7 @@ def build_form_plan(
                 "list_checks": [], "list_check_rejects": list_check_rejects,
                 "export_check_rejects": export_check_rejects,
                 "filter_check_rejects": filter_check_rejects,
+                "action_matrix_rejects": action_matrix_rejects,
                 **plan_extras}
     return {"locators": plan_locators, "checks": checks, "skipped": skipped,
             "check_count": len(checks), "skipped_count": len(skipped),
@@ -2907,6 +3053,7 @@ def build_form_plan(
             "list_check_rejects": list_check_rejects,
             "export_check_rejects": export_check_rejects,
             "filter_check_rejects": filter_check_rejects,
+            "action_matrix_rejects": action_matrix_rejects,
             **plan_extras}
 
 
@@ -4449,9 +4596,9 @@ _FORM_EXECUTOR_TS = r"""
     for (const check of FORM_PLAN.checks) {
       checkIndex += 1;
       if (check.type === 'upload_file') continue;   // 由独立阶段处理（见下）
-      // 由独立阶段处理（runListChecks / runExportChecks / runFilterChecks，写入之后）
+      // 由独立阶段处理（runListChecks / runExportChecks / runFilterChecks / runActionMatrix，写入之后）
       if (check.type === 'list_visible' || check.type === 'export_check'
-          || check.type === 'filter_check') continue;
+          || check.type === 'filter_check' || check.type === 'action_matrix') continue;
       const name = `${check.type}:${check.field}${check.option ? '=' + check.option : ''}${check.data ? ' [' + check.data + ']' : ''}`;
       currentRuleId = (check as any).rule_id || '';
       currentCaseId = (check as any).case_id || '';
@@ -5570,6 +5717,8 @@ _FORM_EXECUTOR_TS = r"""
     const exportStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
     // rev170：筛选区独立阶段（下拉筛选结果集 + 重置还原）分开计数
     const filterStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
+    // rev173：状态×操作矩阵独立阶段（行操作集断言 + 更多菜单 + 确认框验证）分开计数
+    const mxStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
     async function runNegativeScenarios(): Promise<void> {
       const scenarios: any[] = Array.isArray(FORM_PLAN.negative_scenarios)
         ? FORM_PLAN.negative_scenarios : [];
@@ -7164,6 +7313,407 @@ _FORM_EXECUTOR_TS = r"""
       console.log('FILTER_PHASE ' + JSON.stringify(filterStat));
     }
 
+    // ===== 「状态×操作矩阵」独立通道（rev173）：按状态定位行 → 行内操作集断言 →
+    // 更多菜单枚举 → confirm 配置驱动的确认框验证（Modal+Popover 双采样，点取消还原）=====
+    async function runActionMatrix(): Promise<void> {
+      const page = appPageForNav();
+      const stageMark = (st: string, extra: any = {}) => {
+        try {
+          console.log('MATRIX_STAGE ' + JSON.stringify({
+            stage: st, url: String(page.url() || '').slice(0, 110), ...extra,
+          }));
+        } catch { /* 页面已销毁 */ }
+      };
+      const items: any[] = (FORM_PLAN.checks || []).filter((c: any) => c.type === 'action_matrix');
+      mxStat.configured = items.length;
+      for (const rej of (FORM_PLAN.action_matrix_rejects || []).slice(0, 20)) {
+        console.log('[matrix-skip] ' + JSON.stringify(rej));
+      }
+      if (!items.length) return;
+      const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+      const pickRoot = async (): Promise<any> => {
+        let best: any = null, bn = -1;
+        const cands: any[] = [page, ...page.frames()];
+        for (const f of cands) {
+          try {
+            const n = Number(await f.evaluate(
+              () => document.querySelectorAll('.ant-table-row, .ant-table-tbody tr').length));
+            if (n > bn) { bn = n; best = f; }
+          } catch { /* 跨域 */ }
+        }
+        return best;
+      };
+      // 可见弹出层菜单读取（Dropdown 与 Popover 两种形态都采）：见循环内 readMenuItems
+      for (const check of items) {
+        const nm = String(check.name || ('matrix:' + (check.status_in || []).join('/')));
+        mxStat.executed += 1;
+        try {
+          const url = String(check.list_url || '');
+          if (!url) {
+            mxStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '未配置列表页 URL（action_matrix_checks[].list_url 或 locators.list_url）');
+            continue;
+          }
+          stageMark('goto_begin', {target: resolveListUrl(url, page).slice(0, 120)});
+          await page.goto(resolveListUrl(url, page), {timeout: 30000, waitUntil: 'domcontentloaded'}).catch(() => undefined);
+          stageMark('goto_done');
+          await waitRows(page, 30000);
+          const root: any = await pickRoot();
+          if (!root) {
+            mxStat.unverified += 1;
+            recAll(check, nm, 'unverified', '列表页未渲染出表格（pickRoot 无候选）——现场见 MATRIX_STAGE');
+            continue;
+          }
+          // 目标状态可能不在第 1 页（本 SUT 第 1 页全为「启用」，TR-791 证实待启用在
+          // 筛选后才可见）：filter:true 时先状态下拉筛选——rev172 配方（选中后点搜索）。
+          let filterNote: any = {configured: !!check.filter, ok: true};
+          if (check.filter) {
+            const phs: string[] = (Array.isArray(check.control_placeholder) && check.control_placeholder.length)
+              ? check.control_placeholder.map((s: any) => String(s)) : ['请输入状态', '狀態', '状态'];
+            const selIdx: number = await root.evaluate((src: string) => {
+              const rx = new RegExp(src, 'i');
+              const sels = Array.from(document.querySelectorAll('.ant-select'))
+                .filter((s: any) => s.offsetParent !== null);
+              return sels.findIndex((s: any) => {
+                const ph = s.querySelector('.ant-select-selection__placeholder, .ant-select-selection-selected-value');
+                return !!ph && rx.test(String(ph.textContent || ''));
+              });
+            }, phs.join('|')).catch(() => -1);
+            if (selIdx < 0) {
+              filterNote = {configured: true, ok: false, why: 'status_select_not_found'};
+            } else {
+              await root.locator('.ant-select').nth(selIdx).click({timeout: 8000}).catch(() => undefined);
+              await page.waitForTimeout(1200);
+              const dd = page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').last();
+              const lis = dd.locator('li[role=option], .ant-select-dropdown-menu-item:visible');
+              const n = await lis.count().catch(() => 0);
+              const want = String(check.filter_option || (check.status_in || [])[0] || '');
+              const itemTexts: string[] = [];
+              for (let i = 0; i < n; i++) itemTexts.push(norm(await lis.nth(i).innerText().catch(() => '')));
+              let picked = -1;
+              // 先精确后包含：「启用」是「待启用」的子串，包含优先会选错（rev170 教训）
+              for (const mode of ['exact', 'contains']) {
+                for (let i = 0; i < itemTexts.length; i++) {
+                  if (picked < 0
+                      && (mode === 'exact' ? itemTexts[i] === want : itemTexts[i].indexOf(want) >= 0)) {
+                    picked = i;
+                  }
+                }
+                if (picked >= 0) break;
+              }
+              if (picked < 0) {
+                filterNote = {configured: true, ok: false, why: 'option_not_found',
+                              want, options: itemTexts.slice(0, 8)};
+                await page.keyboard.press('Escape').catch(() => undefined);
+              } else {
+                await lis.nth(picked).click({timeout: 5000}).catch(() => undefined);
+                await page.waitForTimeout(1200);
+                // rev172：本 SUT 选中选项不自动查询——点「搜索」触发刷新
+                const qbtn = root.locator('button')
+                  .filter({hasText: /搜\s*索|查\s*詢|查\s*询|Search/i}).first();
+                if (await qbtn.count().catch(() => 0)) {
+                  await qbtn.click({timeout: 8000}).catch(() => undefined);
+                }
+                await page.waitForTimeout(2000);
+                await waitRows(page, 20000);
+                filterNote = {configured: true, ok: true, option: want, picked_text: itemTexts[picked]};
+              }
+            }
+            stageMark('filter_done', filterNote);
+          }
+          // —— 行定位 + 操作集取样（数据行与克隆操作行双扫描，rev155 口径）——
+          const snap: any = await root.evaluate((sp: any) => {
+            const norm0 = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+            let dataRows: any[] = [], bestCols = 0;
+            Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'), (tb: any) => {
+              const rs = Array.prototype.filter.call(tb.children, (tr: any) =>
+                tr.querySelector('td') && tr.offsetParent !== null);
+              if (!rs.length) return;
+              const nCols = rs[0].querySelectorAll('td').length;
+              if (nCols > bestCols) { bestCols = nCols; dataRows = rs; }
+            });
+            if (!dataRows.length) return {ok: false, why: 'no_rows'};
+            let heads: string[] = [];
+            Array.prototype.forEach.call(document.querySelectorAll('.ant-table-thead'), (th: any) => {
+              const hs = Array.prototype.map.call(th.querySelectorAll('th'), (e: any) => norm0(e.innerText));
+              if (hs.length === bestCols) heads = hs;
+            });
+            if (!heads.length) {
+              Array.prototype.forEach.call(document.querySelectorAll('.ant-table-thead'), (th: any) => {
+                const hs = Array.prototype.map.call(th.querySelectorAll('th'), (e: any) => norm0(e.innerText));
+                if (hs.length > heads.length) heads = hs;
+              });
+            }
+            if (!heads.length) return {ok: false, why: 'no_header'};
+            const ci = heads.indexOf(sp.column);
+            if (ci < 0) return {ok: false, why: 'column_not_found', column: sp.column, heads};
+            const rowWithOps = (row0: any) => {
+              const out: any[] = [row0];
+              const tb0: any = row0.parentElement;
+              const ri = Array.prototype.indexOf.call(tb0.children, row0);
+              Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'), (t2: any) => {
+                const cand = t2.children[ri];
+                if (cand && cand !== row0) out.push(cand);
+              });
+              return out;
+            };
+            const cells = dataRows.map((tr: any) => {
+              const t = tr.querySelectorAll('td')[ci];
+              return t ? norm0(t.innerText) : '';
+            });
+            let hit = -1, mode = '';
+            cells.forEach((c: string, i: number) => {
+              if (hit < 0 && sp.in.indexOf(c) >= 0) { hit = i; mode = 'exact'; }
+            });
+            if (hit < 0) {
+              cells.forEach((c: string, i: number) => {
+                if (hit < 0 && sp.in.some((w: string) => w && c.indexOf(w) >= 0)) { hit = i; mode = 'contains'; }
+              });
+            }
+            if (hit < 0) {
+              return {ok: false, why: 'no_row_matched', column: sp.column, want: sp.in,
+                      cells: cells.slice(0, 12), rows: dataRows.length};
+            }
+            const scopes = rowWithOps(dataRows[hit]);
+            // 操作标签只从 a/button 收集——状态单元格的 .ant-tag/.ant-badge 也是 span，
+            // 混进来会让 forbid「启用」恒命中（状态文本本身就是「启用」）。
+            const labels: string[] = [];
+            for (const sc of scopes) {
+              Array.prototype.forEach.call(sc.querySelectorAll('a,button'), (el: any) => {
+                const t = norm0(el.innerText);
+                if (t && t.length <= 12 && el.offsetParent !== null && labels.indexOf(t) < 0) labels.push(t);
+              });
+            }
+            return {ok: true, rowIndex: hit, status: cells[hit], matchMode: mode,
+                    labels, rows: dataRows.length,
+                    row: norm0(dataRows[hit].innerText).slice(0, 110)};
+          }, {column: String(check.status_column || '状态'),
+              in: (check.status_in || []).map((s: any) => String(s))})
+            .catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 100)}));
+          stageMark('row_scan', {result: snap});
+          if (!snap || !snap.ok) {
+            mxStat.unverified += 1;
+            const fTxt = (filterNote && filterNote.configured)
+              ? (filterNote.ok ? `；已先按「${filterNote.option}」筛选` : `；状态筛选失败：${filterNote.why || ''}`)
+              : '';
+            recAll(check, nm, 'unverified',
+                   `未找到「${(check.status_in || []).join('/')}」状态的可见行（${(snap && snap.why) || 'no_root'}）${fTxt}`
+                   + '——数据侧可能缺该状态记录，不判通过也不判缺陷（现场见 MATRIX_STAGE）');
+            continue;
+          }
+          // —— 操作集断言（expect / forbid）——
+          const missingRow: string[] = (check.expect_row || [])
+            .filter((w: string) => snap.labels.indexOf(w) < 0);
+          const unexpected: string[] = (check.forbid_row || [])
+            .filter((w: string) => snap.labels.indexOf(w) >= 0);
+          // —— 「更多」菜单枚举（配置了才做）——
+          const clickMore = async (): Promise<any> => root.evaluate((rowIdx: number) => {
+            const norm1 = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+            const bodies = Array.from(document.querySelectorAll('.ant-table-tbody'))
+              .filter((b: any) => b.offsetParent !== null)
+              .map((b: any) => Array.from(b.querySelectorAll('tr')).filter((tr: any) => tr.offsetParent !== null));
+            const dataBody = bodies.slice().sort((a: any, b: any) =>
+              ((b[0] && b[0].querySelectorAll('td').length) || 0) -
+              ((a[0] && a[0].querySelectorAll('td').length) || 0))[0] || [];
+            const opBodies = bodies.filter((b: any) => b !== dataBody);
+            const scopes = [dataBody[rowIdx]].concat(opBodies.map((ob: any) => ob[rowIdx]).filter(Boolean));
+            for (const sc of scopes) {
+              const more = Array.from(sc.querySelectorAll('a,button,span'))
+                .find((el: any) => norm1(el.innerText) === '更多' && el.offsetParent);
+              if (more) { (more as any).click(); return {ok: true}; }
+            }
+            return {ok: false, why: 'more_not_found'};
+          }, snap.rowIndex).catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 80)}));
+          const readMenuItems = async (): Promise<string[]> => root.evaluate(() => {
+            const menus = Array.from(document.querySelectorAll(
+              '.ant-dropdown:not(.ant-dropdown-hidden), .ant-popover:not(.ant-popover-hidden)'));
+            const texts: string[] = [];
+            for (const m of menus) {
+              m.querySelectorAll('li, [class*=item], a, button').forEach((it: any) => {
+                const t = String(it.innerText || '').trim().replace(/\s+/g, ' ');
+                if (t && t.length <= 12 && texts.indexOf(t) < 0) texts.push(t);
+              });
+            }
+            return texts;
+          }).catch(() => [] as string[]);
+          let menuItems: string[] = [];
+          let menuNote = 'not_configured';
+          const missingMenu: string[] = [];
+          if ((check.expect_menu || []).length) {
+            if (snap.labels.indexOf('更多') < 0) {
+              menuNote = 'row_has_no_more';
+              missingMenu.push(...check.expect_menu);
+            } else {
+              const opened = await clickMore();
+              await page.waitForTimeout(900);
+              if (opened && opened.ok) {
+                menuItems = await readMenuItems();
+                for (const w of check.expect_menu) {
+                  if (menuItems.indexOf(w) < 0) missingMenu.push(w);
+                }
+                menuNote = 'opened:' + menuItems.join('/');
+              } else {
+                menuNote = 'more_click_failed:' + ((opened && opened.why) || '');
+                missingMenu.push(...check.expect_menu);
+              }
+              await page.keyboard.press('Escape').catch(() => undefined);
+              await page.waitForTimeout(600);
+            }
+          }
+          // —— confirm：点目标按钮 → 必须出确认框（Modal+Popover 双采样）→ 点取消还原 ——
+          let confirmNote: any = {configured: false};
+          if (check.confirm && check.confirm.label) {
+            const clabel = String(check.confirm.label);
+            const viaMenu = String(check.confirm.via || 'row') === 'menu';
+            let clicked: any = {ok: false, why: 'skipped'};
+            if (viaMenu) {
+              const opened = await clickMore();
+              await page.waitForTimeout(900);
+              if (opened && opened.ok) {
+                clicked = await root.evaluate((lb: string) => {
+                  const norm1 = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+                  const menus = Array.from(document.querySelectorAll(
+                    '.ant-dropdown:not(.ant-dropdown-hidden), .ant-popover:not(.ant-popover-hidden)'));
+                  for (const m of menus) {
+                    const el = Array.from(m.querySelectorAll('li, a, button, [class*=item]'))
+                      .find((e: any) => norm1(e.innerText) === lb && (e as any).offsetParent);
+                    if (el) { (el as any).click(); return {ok: true}; }
+                  }
+                  return {ok: false, why: 'menu_item_not_found', items: menus.length};
+                }, clabel).catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 80)}));
+              } else {
+                clicked = {ok: false, why: 'more_not_found'};
+              }
+            } else {
+              clicked = await root.evaluate(({rowIdx, lb}: any) => {
+                const norm1 = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+                const bodies = Array.from(document.querySelectorAll('.ant-table-tbody'))
+                  .filter((b: any) => b.offsetParent !== null)
+                  .map((b: any) => Array.from(b.querySelectorAll('tr')).filter((tr: any) => tr.offsetParent !== null));
+                const dataBody = bodies.slice().sort((a: any, b: any) =>
+                  ((b[0] && b[0].querySelectorAll('td').length) || 0) -
+                  ((a[0] && a[0].querySelectorAll('td').length) || 0))[0] || [];
+                const opBodies = bodies.filter((b: any) => b !== dataBody);
+                const scopes = [dataBody[rowIdx]].concat(opBodies.map((ob: any) => ob[rowIdx]).filter(Boolean));
+                for (const sc of scopes) {
+                  const el = Array.from(sc.querySelectorAll('a,button,span'))
+                    .find((e: any) => norm1(e.innerText) === lb && e.offsetParent);
+                  if (el) { (el as any).click(); return {ok: true}; }
+                }
+                return {ok: false, why: 'action_not_found'};
+              }, {rowIdx: snap.rowIndex, lb: clabel})
+                .catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 80)}));
+            }
+            await page.waitForTimeout(1800);
+            // antd 确认框有 Modal 与 Popconfirm 两种形态，必须同时采样（2026-10-20 实证）
+            const dialog: any = await root.evaluate(() => {
+              const vis = (el: any) => !!el && el.offsetParent !== null;
+              const modal = Array.from(document.querySelectorAll('.ant-modal-confirm'))
+                .find((m: any) => vis(m.closest('.ant-modal-wrap') || m));
+              const pop = Array.from(document.querySelectorAll('.ant-popover'))
+                .find((p: any) => vis(p) && !/ant-popover-hidden/.test(String(p.className)));
+              const mEl: any = modal || null;
+              const pEl: any = pop || null;
+              if (!mEl && !pEl) return {found: false};
+              const scope: any = mEl || pEl;
+              const btns = Array.from(scope.querySelectorAll('button'))
+                .map((b: any) => ({el: b, t: String(b.innerText || '').trim()}))
+                .filter((b: any) => b.t);
+              return {found: true, kind: mEl ? 'modal' : 'popover',
+                      text: String(scope.innerText || '').replace(/\s+/g, ' ').slice(0, 120),
+                      labels: btns.map((b: any) => b.t)};
+            }).catch((e: any) => ({found: false, err: String(e).slice(0, 80)}));
+            let canceled = false;
+            if (dialog && dialog.found) {
+              const cancelRes: any = await root.evaluate(() => {
+                const norm1 = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+                const scope: any = document.querySelector(
+                  '.ant-modal-wrap:not([style*="display: none"]) .ant-modal-confirm')
+                  || document.querySelector('.ant-modal-confirm')
+                  || Array.from(document.querySelectorAll('.ant-popover'))
+                    .find((p: any) => !/ant-popover-hidden/.test(String(p.className)));
+                if (!scope) return {ok: false, why: 'scope_gone'};
+                const btns = Array.from(scope.querySelectorAll('button'));
+                // antd v3 Popconfirm：.ant-popover-buttons 里第一个是取消；Modal/气泡按文本
+                const pbtn = scope.querySelector('.ant-popover-buttons button');
+                const byText = btns.find((b: any) => /取\s*消|Cancel/i.test(norm1(b.innerText)));
+                const target: any = pbtn || byText || null;
+                if (!target) return {ok: false, why: 'cancel_not_found', labels: btns.map((b: any) => norm1(b.innerText))};
+                (target as any).click();
+                return {ok: true};
+              }).catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 80)}));
+              await page.waitForTimeout(1200);
+              const still: any = await root.evaluate(() => {
+                const vis = (el: any) => !!el && el.offsetParent !== null;
+                const modal = Array.from(document.querySelectorAll('.ant-modal-confirm'))
+                  .find((m: any) => vis(m.closest('.ant-modal-wrap') || m));
+                const pop = Array.from(document.querySelectorAll('.ant-popover'))
+                  .find((p: any) => vis(p) && !/ant-popover-hidden/.test(String(p.className)));
+                return {modal: !!modal, pop: !!pop};
+              }).catch(() => ({modal: false, pop: false}));
+              if (cancelRes && cancelRes.ok && !still.modal && !still.pop) {
+                canceled = true;
+              } else {
+                // 取消失败必须兜底收场，绝不让确认框挂着（下一检查可能误回车）
+                await page.keyboard.press('Escape').catch(() => undefined);
+                await page.waitForTimeout(600);
+              }
+              confirmNote = {configured: true, label: clabel, via: viaMenu ? 'menu' : 'row',
+                             kind: dialog.kind, canceled,
+                             dialog_text: dialog.text, cancel: cancelRes};
+            } else {
+              confirmNote = {configured: true, label: clabel, via: viaMenu ? 'menu' : 'row',
+                             clicked: clicked, dialog_found: false};
+            }
+            stageMark('confirm_done', confirmNote);
+          }
+          // —— 汇总判定 ——
+          console.log('MATRIX_TRACE ' + JSON.stringify({
+            name: nm, status: snap.status, labels: snap.labels, menu: menuNote,
+            missing_row: missingRow, unexpected, missing_menu: missingMenu, confirm: confirmNote,
+          }));
+          const problems: string[] = [];
+          if (missingRow.length) problems.push(`行内缺少期望操作：${missingRow.join('/')}`);
+          if (unexpected.length) problems.push(`行内出现禁止操作：${unexpected.join('/')}`);
+          if (missingMenu.length) {
+            problems.push(menuNote === 'row_has_no_more'
+              ? `该状态行没有「更多」菜单，无法核对菜单项：${missingMenu.join('/')}`
+              : `「更多」菜单缺少项：${missingMenu.join('/')}（实际 ${menuNote}）`);
+          }
+          if (confirmNote && confirmNote.configured) {
+            if (confirmNote.dialog_found === false) {
+              problems.push(`点击了「${confirmNote.label}」但确认框未出现`
+                + `（antd Modal 与 Popover 双采样均无，点击结果 ${(confirmNote.clicked || {}).why || 'ok'}）`
+                + '——误删保护断言未通过');
+            } else if (!confirmNote.canceled) {
+              problems.push(`确认框出现但未能以「取消」还原（已 Escape 兜底）：`
+                + `${JSON.stringify(confirmNote.cancel || {}).slice(0, 120)}——需人工复核该行是否被误操作`);
+            }
+          }
+          if (!problems.length) {
+            mxStat.pass += 1;
+            const cTxt = (confirmNote && confirmNote.configured)
+              ? `；确认框验证：点「${confirmNote.label}」弹出${confirmNote.kind === 'modal' ? 'Modal' : '气泡'}确认并已取消还原`
+              : '';
+            recAll(check, nm, 'pass',
+                   `状态「${snap.status}」行操作集断言通过：${snap.labels.join('/') || '（无 a/button 操作）'}`
+                   + (menuItems.length ? `；「更多」菜单含 ${menuItems.join('/')}` : '')
+                   + cTxt);
+          } else {
+            mxStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `状态「${snap.status}」操作矩阵断言未通过——${problems.join('；')}`
+                   + `（实际行内操作 ${snap.labels.join('/') || '无'}）现场见 MATRIX_STAGE`);
+          }
+        } catch (error) {
+          mxStat.unverified += 1;
+          recAll(check, nm, 'unverified', `状态×操作矩阵检查异常：${String(error).slice(0, 200)}`);
+        }
+      }
+      console.log('MATRIX_PHASE ' + JSON.stringify(mxStat));
+    }
+
     // ===== 「导出」独立通道（rev148）：更多菜单 → 导出明细弹窗 → 空时间段校验 →
     // 选时间段 → 确认 → 导出中心轮询 → 下载落盘 → 列名出现性校验 =====
     // 交互配方来自人工探针 xy_p2/p8（实测可用）；判定口径见 parse_export_checks 注释。
@@ -7687,6 +8237,8 @@ _FORM_EXECUTOR_TS = r"""
     await phaseWatchdog(runListChecks(), 180000, 'list');
     // rev170：筛选区独立通道（同样各自 goto，排在列表检查之后）
     await phaseWatchdog(runFilterChecks(), 120000, 'filter');
+    // rev173：状态×操作矩阵独立通道（含确认框验证，排在筛选之后）
+    await phaseWatchdog(runActionMatrix(), 180000, 'matrix');
     // rev148：导出独立通道（在列表检查之后——两者都各自 goto，互不复用现场）
     await phaseWatchdog(runExportChecks(), 240000, 'export');
 
@@ -7742,6 +8294,11 @@ _FORM_EXECUTOR_TS = r"""
       filter_phase: {
         ...filterStat,
         rejected_at_plan: (FORM_PLAN.filter_check_rejects || []).length,
+      },
+      // 「状态×操作矩阵」独立阶段（rev173）：行操作集 + 更多菜单 + 确认框，分开计数。
+      matrix_phase: {
+        ...mxStat,
+        rejected_at_plan: (FORM_PLAN.action_matrix_rejects || []).length,
       },
       skipped_no_locator: FORM_PLAN.skipped_count,
       // 只有一个数字无法复核："跳过 9 条"到底是哪几类原因
@@ -7916,6 +8473,8 @@ def render_form_executor(plan: dict[str, Any], *, default_phone: str = "18320101
          "export_check_rejects": plan.get("export_check_rejects") or [],
          # rev170：筛选区独立通道的被拒配置（[filter-skip]）
          "filter_check_rejects": plan.get("filter_check_rejects") or [],
+         # rev173：状态×操作矩阵通道的被拒配置同样要运行期可见（[matrix-skip]）
+         "action_matrix_rejects": plan.get("action_matrix_rejects") or [],
          # rev142：提交层 toast 归因要用「定位器键 → 页面别名」反查
          #（toast「题目 11：请输入标题」含页面标签「标题」而非字段名「题目标题」）。
          "field_alias_applied": plan.get("field_alias_applied") or [],

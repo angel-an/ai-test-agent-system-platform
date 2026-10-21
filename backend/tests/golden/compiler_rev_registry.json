@@ -306,6 +306,12 @@
       "digest": "49723b90712e",
       "date": "2026-10-22",
       "summary": "TR-790 复盘：filter 交互配方两补——①每条检查前先点重置清残留（goto 同 hash no-op、SPA 保留上一条件）；②选中选项后点「搜索/查询」触发刷新（本 SUT 选中不自动查询，TR-790 实测选「待启用」后结果集仍是上一条件残留的「启用」行）"
+    },
+    {
+      "rev": "rev173",
+      "digest": "6341e090a7c7",
+      "date": "2026-10-22",
+      "summary": "P3 第二项：action_matrix_checks 状态×操作矩阵独立通道——按状态定位行（数据行+克隆操作行双扫描，标签只从 a/button 收集防状态文本污染 forbid）→ expect_row/forbid_row 断言 → expect_menu 更多菜单枚举 → confirm 驱动验确认框（Modal+Popover 双采样）后点取消还原（Escape 兜底）；filter:true 复用 rev172 配方（选中后点搜索）；被拒不静默 [matrix-skip]；action_matrix_rejects 进白名单与 summary matrix_phase；parse_action_matrix_checks 纳入 digest"
     }
   ]
 }

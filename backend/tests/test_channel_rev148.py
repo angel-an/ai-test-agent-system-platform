@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev172"' in src
+    assert 'COMPILER_REV = "rev173"' in src
     ast.parse(src)
 
 
@@ -560,3 +560,94 @@ def test_filter_preset_reset_and_query_click():
     blk = ts[i:i + 900]
     assert "/搜\\s*索|查\\s*詢|查\\s*询|Search/i" in blk
     assert "await waitRows(page, 20000);" in blk
+
+
+# ---------- rev173：action_matrix_checks 状态×操作矩阵通道 ----------
+
+def test_action_matrix_parse_defaults_and_rejects():
+    from app.services.web_case_compiler import parse_action_matrix_checks
+    items, rejects = parse_action_matrix_checks([
+        {"name": "matrix:启用", "status_in": ["启用", "啟用"],
+         "expect_row": ["查看", "复制", "禁用"], "forbid_row": ["编辑"],
+         "expect_menu": ["删除", "导出明细"],
+         "confirm": {"label": "删除", "via": "menu"}, "case_id": "TC-M1"},
+    ])
+    assert not rejects and len(items) == 1
+    it = items[0]
+    assert it["status_column"] == "状态" and it["rule_ref"] == "状态×操作矩阵"
+    assert it["filter"] is False and it["filter_option"] == "启用"
+    assert it["control_placeholder"] == ["请输入状态", "狀態", "状态"]
+    assert it["confirm"] == {"label": "删除", "via": "menu"}
+    # 非法形态：非对象 / 缺 status_in / expect_row 非数组 / confirm 缺 label / via 非法
+    items2, rejects2 = parse_action_matrix_checks([
+        "bad", {"expect_row": ["查看"]},
+        {"status_in": ["启用"], "expect_row": "查看"},
+        {"status_in": ["启用"], "confirm": {}},
+        {"status_in": ["启用"], "confirm": {"label": "删除", "via": "double-click"}},
+    ])
+    assert len(items2) == 0 and len(rejects2) == 5
+    # 空配置整体不产生任何东西
+    assert parse_action_matrix_checks(None) == ([], [])
+
+
+def test_action_matrix_reaches_form_plan():
+    """parse 产出但 build_form_plan 不透传 ⇒ 执行器拿不到（TR-776 同型）。"""
+    src = _py()
+    i = src.index('"type": "action_matrix"')
+    blk = src[i:i + 900]
+    for key in ("status_column", "status_in", "filter", "filter_option",
+                "control_placeholder", "expect_row", "forbid_row",
+                "expect_menu", "confirm"):
+        assert f'"{key}": item["{key}"]' in blk
+    # 早退分支 + 主分支都要带被拒清单
+    assert src.count('"action_matrix_rejects": action_matrix_rejects') >= 2
+
+
+def test_action_matrix_whitelist_and_phase_accounting():
+    """rev173：action_matrix_rejects 必须进 payload 白名单（TR-748 同型第 4 次警戒）；
+    action_matrix 不进字段级主循环、有独立阶段与 summary 行。"""
+    src = _py()
+    assert '"action_matrix_rejects": plan.get("action_matrix_rejects") or [],' in src
+    assert '"action_matrix_checks"' in src  # NON_LOCATOR_CONFIG_KEYS
+    ts = _ts()
+    assert "check.type === 'action_matrix'" in ts
+    assert "async function runActionMatrix()" in ts
+    assert "MATRIX_PHASE" in ts
+    assert "[matrix-skip]" in ts
+    assert "rejected_at_plan: (FORM_PLAN.action_matrix_rejects || []).length" in ts
+
+
+def test_action_matrix_labels_exclude_status_tags():
+    """状态单元格的 .ant-tag/.ant-badge 也是 span——标签只从 a/button 收集，
+    否则 forbid「启用」会被状态文本本身恒命中。"""
+    ts = _ts()
+    assert "querySelectorAll('a,button')" in ts
+
+
+def test_action_matrix_confirm_double_sampling_and_cancel():
+    """antd 确认框有 Modal 与 Popconfirm 两种形态，必须双采样（2026-10-20 实证）；
+    确认框出现必须点取消还原，取消失败要 Escape 兜底。"""
+    ts = _ts()
+    i = ts.index("const dialog: any = await root.evaluate")
+    blk = ts[i:i + 2200]
+    assert "ant-modal-confirm" in blk and "ant-popover" in blk
+    j = ts.index("const cancelRes: any = await root.evaluate")
+    blk2 = ts[j:j + 1400]
+    assert "ant-popover-buttons button" in blk2
+    assert "取\\s*消|Cancel" in blk2
+    k = ts.index("await page.keyboard.press('Escape').catch(() => undefined);\n                await page.waitForTimeout(600);\n              }\n              confirmNote")
+    assert k > 0
+
+
+def test_action_matrix_filter_recipe_reuses_rev172():
+    """filter:true 时复用 rev172 配方：选项先精确后包含 + 选中后点「搜索」触发刷新。"""
+    ts = _ts()
+    i = ts.index("if (check.filter) {")
+    blk = ts[i:i + 3200]
+    assert "for (const mode of ['exact', 'contains'])" in blk
+    assert "/搜\\s*索|查\\s*詢|查\\s*询|Search/i" in blk
+
+
+def test_action_matrix_in_digest():
+    src = _py()
+    assert '"parse_action_matrix_checks",' in src
