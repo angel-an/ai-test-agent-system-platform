@@ -330,7 +330,17 @@ from app.services.web_upload_fixtures import (
 #:     lru_cache 只把重算压到每进程一次，「首次调用」仍可能落在编辑窗口（linecache 按
 #:     mtime 重读半截文件 → ast.parse 500）。预热 = digest 随进程启动固化，在途请求
 #:     永不读源码；撞上编辑也是启动即崩（当场可见），不再中途 500。
-COMPILER_REV = "rev169"
+#:   - rev170（2026-10-21，P3 第一项）：「筛选区」独立通道 ``filter_checks``。
+#:     覆盖审计实证：字段级正/逆/边界已全自动化，筛选区连用例都缺。本通道做成与
+#:     list_checks/export_checks 同形的独立阶段：状态下拉（antd v3 按 placeholder 候选
+#:     定位）→ 选项真实点击（先精确后包含，防「启用」⊂「待启用」）→ 结果集**第 1 页
+#:     可见行**目标列全量命中 → ``reset`` 配置则点重置并断言控件清空。被拒不静默
+#:     （``[filter-skip]``）；``filter_check_rejects`` 进 payload 白名单与 summary
+#:     ``filter_phase``；``parse_filter_checks`` 纳入 digest。⚠️ 同批修正 rev169 缺陷：
+#:     digest 预热原在模块体前部，``_FORM_EXECUTOR_TS`` 等尚未定义即被 ``g.get``
+#:     静默跳过 ⇒ 固化**残缺指纹**（fec94279864a，不含执行器模板）；预热挪到模块
+#:     末尾，回归测试断言 warm==full。
+COMPILER_REV = "rev170"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -359,6 +369,9 @@ _DIGEST_FUNCTIONS: tuple[str, ...] = (
     # 决定运行期选哪一行 ⇒ 与 rev137 的 parse_pre_actions 同源，必须纳入 digest。
     "parse_row_pick",
     "parse_list_checks",
+    # rev170：filter_checks 的解析语义（option 必填 / expect_in 缺省 / reset 正则）
+    # 直接决定运行期选哪个选项、断言哪列 ⇒ 与 parse_list_checks 同源，必须纳入 digest。
+    "parse_filter_checks",
     "render_form_executor",
 )
 
@@ -439,7 +452,12 @@ LOCATOR_DEPENDENT_KINDS = {"required", "enum", "default", "boundary", "precision
 #: mtime 变了就重读半截文件 ⇒ ``ast.parse`` 抛 ``EOF in multi-line string``（运行期 500，
 #: 2026-10-20 实测）。预热后 digest 在进程启动时固化，在途请求永不触发源码重读；
 #: 就算启动恰好撞上编辑，也是启动即崩（当场可见），不会变成中途 500。
-compiler_source_digest()
+#:
+#: ⚠️ rev170 修正：预热调用**原来放在这里（模块体前部）**——执行时 ``_FORM_EXECUTOR_TS``
+#: / ``render_form_executor`` / 多数 digest 函数**尚未定义**，``g.get`` 静默跳过，
+#: lru_cache 把**不含执行器模板的残缺 digest** 固化给整个进程（rev169 登记的
+#: fec94279864a 就是它，实测 warm≠full）。预热调用已挪到**模块末尾**（全部定义之后），
+#: 见文件最后一行。
 
 #: 无需定位器、可做软校验的类型
 SOFT_CHECK_KINDS = {"visibility"}
@@ -1395,6 +1413,79 @@ def parse_list_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
 
 
 # ==========================================================================
+# 「筛选区」独立通道（``extra_config.filter_checks``，rev170 新增）
+# ==========================================================================
+# 背景（覆盖审计 2026-10-21）：字段级正/逆/边界断言已全自动化（16/16 用例进 TR），
+# 但「列表筛选区」连用例都缺（仅模糊查询 1 条文档级）。本通道把「下拉筛选 → 结果集
+# 目标列全量命中 → 重置还原」做成独立阶段，与 list_checks/export_checks 同形：
+# 配置驱动、独立阶段、被拒不静默（``[filter-skip]`` 运行期可见）。
+#
+# 诚实边界（写进判定，不冒充）：
+#   * 只校验**第 1 页可见行**的目标列取值（翻页筛选不在本版范围，如实 unverified）；
+#   * 筛选后 0 行 → unverified（可能合理也可能筛选失效，不判通过也不判缺陷）；
+#   * 找不到状态下拉/选项/列 → unverified（配置或环境问题），不冒充业务结论。
+def parse_filter_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """解析 ``extra_config.filter_checks``，返回 ``(可用检查, 被拒检查)``。
+
+    单条配置字段：
+      ``name``                断言名（缺省 ``filter:<option>@<expect_column>``）
+      ``list_url``            列表页直链（缺省回退 ``locators.list_url``；两者都空 → 运行期 unverified）
+      ``control_placeholder`` 筛选下拉的 placeholder 候选（数组或字符串；缺省 狀態/状态/Status）
+      ``option``              要选中的选项文本（**必填**）
+      ``option_labels``       选项文本候选（繁简同配；缺省 ``[option]``）
+      ``expect_column``       结果集断言的列**表头文案**（缺省「状态」）
+      ``expect_in``           该列允许的取值（缺省 ``[option]``）
+      ``reset``               筛选后是否点「重置」并断言控件清空（缺省 False）
+      ``reset_label``         重置按钮正则（缺省 ``重\\s*置|重\\s*設|Reset``）
+      ``case_id`` / ``rule_id``  证据归属
+    """
+    if raw is None or raw == "":
+        return [], []
+    if not isinstance(raw, list):
+        return [], [{"value": "", "reason": "filter_checks 必须是数组",
+                     "detail": type(raw).__name__}]
+    items: list[dict[str, Any]] = []
+    rejects: list[dict[str, Any]] = []
+    for index, entry in enumerate(raw):
+        try:
+            if not isinstance(entry, dict):
+                rejects.append({"value": "", "reason": "筛选检查必须是对象",
+                                "detail": f"index={index}"})
+                continue
+            option = str(entry.get("option") or "").strip()
+            if not option:
+                rejects.append({"value": "", "reason": "缺少 option（要选中的筛选值）",
+                                "detail": f"index={index}"})
+                continue
+            option_labels = [s for s in _as_str_list(entry.get("option_labels")) if s]
+            if not option_labels:
+                option_labels = [option]
+            expect_in = [s for s in _as_str_list(entry.get("expect_in")) if s]
+            if not expect_in:
+                expect_in = [option]
+            items.append({
+                "name": str(entry.get("name") or
+                            f"filter:{option}@{str(entry.get('expect_column') or '状态').strip()}"),
+                "list_url": str(entry.get("list_url") or ""),
+                "control_placeholder": (_as_str_list(entry.get("control_placeholder"))
+                                        or ["狀態", "状态", "Status"]),
+                "option": option,
+                "option_labels": option_labels,
+                "expect_column": str(entry.get("expect_column") or "状态").strip(),
+                "expect_in": expect_in,
+                "reset": bool(entry.get("reset")),
+                "reset_label": str(entry.get("reset_label") or r"重\s*置|重\s*設|Reset"),
+                "case_id": str(entry.get("case_id") or ""),
+                "rule_id": str(entry.get("rule_id") or ""),
+                "rule_ref": str(entry.get("rule_ref") or "筛选与重置"),
+            })
+        except Exception as exc:  # noqa: BLE001  配置畸形不得阻断编译
+            rejects.append({"value": "", "reason": "筛选检查解析异常",
+                            "detail": f"{type(exc).__name__}: {exc}"[:200]})
+    return items, rejects
+
+
+# ==========================================================================
 # 「导出」独立通道（``extra_config.export_checks``，rev148 新增）
 # ==========================================================================
 # 背景（2026-10-20 需求追溯实测）：导出 11 列走表单字段通道，天生无 required/options
@@ -2063,6 +2154,9 @@ REGISTRATION_META_KEYS: tuple[str, ...] = ("template_key", "registration_id", "s
 #: 列进 locator_keys 会让"这是定位器"的语义失真（它们是行为配置，不是选择器）。
 NON_LOCATOR_CONFIG_KEYS: tuple[str, ...] = REGISTRATION_META_KEYS + ("negative_scenarios",
                                                                      "list_checks",
+                                                                     # rev170：筛选区通道
+                                                                     # 同为行为配置，不进定位器键
+                                                                     "filter_checks",
                                                                      # rev119：字段级上传放行
                                                                      # 是**行为配置**，不是选择器；
                                                                      # 列进 locator_keys 会让配置方
@@ -2659,6 +2753,27 @@ def build_form_plan(
             "source": "locator_config",
         })
 
+    # 「筛选区」独立通道（rev170）：下拉筛选 → 结果集列全量命中 → 重置还原。
+    # 与 list_checks/export_checks 同形：配置驱动、独立阶段、被拒不静默（[filter-skip]）。
+    filter_checks, filter_check_rejects = parse_filter_checks(loc.get("filter_checks"))
+    for item in filter_checks:
+        checks.append({
+            "type": "filter_check",
+            "name": item["name"],
+            "list_url": item["list_url"] or str(loc.get("list_url") or ""),
+            "control_placeholder": item["control_placeholder"],
+            "option": item["option"],
+            "option_labels": item["option_labels"],
+            "expect_column": item["expect_column"],
+            "expect_in": item["expect_in"],
+            "reset": item["reset"],
+            "reset_label": item["reset_label"],
+            "rule": item["rule_ref"],
+            "case_id": item["case_id"],
+            "rule_id": item["rule_id"],
+            "source": "locator_config",
+        })
+
     # N3（2026-10-18）：跳过项按"作用域"分账。`list` = 列表域（列头/筛选/分页），
     # `form` = 表单控件。两者修法完全不同（前者缺生成器，后者缺定位器配置），
     # 合并成一个 skipped_count 会让人按错误的路径去修。
@@ -2758,7 +2873,8 @@ def build_form_plan(
         # 这里返回一个 executable=False 的计划：调用方据此**不注入执行器**（避免为 0 条检查
         # 打开表单、把环境问题变成硬失败），但审计与运行期现场仍然完整。
         if (not skipped and not negative_scenario_rejects
-                and not list_check_rejects and not export_check_rejects):
+                and not list_check_rejects and not export_check_rejects
+                and not filter_check_rejects):
             return None
         return {"locators": plan_locators, "checks": [], "skipped": skipped,
                 "check_count": 0, "skipped_count": len(skipped),
@@ -2766,6 +2882,7 @@ def build_form_plan(
                 "negative_scenarios": [], "negative_scenario_rejects": negative_scenario_rejects,
                 "list_checks": [], "list_check_rejects": list_check_rejects,
                 "export_check_rejects": export_check_rejects,
+                "filter_check_rejects": filter_check_rejects,
                 **plan_extras}
     return {"locators": plan_locators, "checks": checks, "skipped": skipped,
             "check_count": len(checks), "skipped_count": len(skipped),
@@ -2776,6 +2893,7 @@ def build_form_plan(
             "list_checks": list_checks,
             "list_check_rejects": list_check_rejects,
             "export_check_rejects": export_check_rejects,
+            "filter_check_rejects": filter_check_rejects,
             **plan_extras}
 
 
@@ -4318,7 +4436,9 @@ _FORM_EXECUTOR_TS = r"""
     for (const check of FORM_PLAN.checks) {
       checkIndex += 1;
       if (check.type === 'upload_file') continue;   // 由独立阶段处理（见下）
-      if (check.type === 'list_visible' || check.type === 'export_check') continue;  // 由独立阶段处理（runListChecks / runExportChecks，写入之后）
+      // 由独立阶段处理（runListChecks / runExportChecks / runFilterChecks，写入之后）
+      if (check.type === 'list_visible' || check.type === 'export_check'
+          || check.type === 'filter_check') continue;
       const name = `${check.type}:${check.field}${check.option ? '=' + check.option : ''}${check.data ? ' [' + check.data + ']' : ''}`;
       currentRuleId = (check as any).rule_id || '';
       currentCaseId = (check as any).case_id || '';
@@ -5435,6 +5555,8 @@ _FORM_EXECUTOR_TS = r"""
     //: 「导出」独立阶段计数（rev148）：与 list_phase 分开计数——验证的是
     //: 「菜单 → 弹窗 → 时间段 → 导出中心 → 下载 → 列名」整链，不是记录可见性。
     const exportStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
+    // rev170：筛选区独立阶段（下拉筛选结果集 + 重置还原）分开计数
+    const filterStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
     async function runNegativeScenarios(): Promise<void> {
       const scenarios: any[] = Array.isArray(FORM_PLAN.negative_scenarios)
         ? FORM_PLAN.negative_scenarios : [];
@@ -6767,6 +6889,244 @@ _FORM_EXECUTOR_TS = r"""
       console.log('LIST_PHASE ' + JSON.stringify(listStat));
     }
 
+    // ===== rev170：筛选区独立通道（runFilterChecks）=====
+    // 与 list_checks/export_checks 同形：配置驱动、独立阶段、被拒不静默（[filter-skip]）。
+    // 判定口径（诚实边界）：只校验第 1 页可见行目标列取值；筛选后 0 行/控件未找到 =
+    // unverified（不冒充业务结论，也不冒充通过）。选项点击必须先精确后包含 ——
+    // 「启用」是「待启用」的子串，包含优先会把错误选项点进去。
+    async function runFilterChecks(): Promise<void> {
+      const page = appPageForNav();
+      const stageMark = (st: string, extra: any = {}) => {
+        try {
+          console.log('FILTER_STAGE ' + JSON.stringify({
+            stage: st, url: String(page.url() || '').slice(0, 110), ...extra,
+          }));
+        } catch { /* 页面已销毁 */ }
+      };
+      const items: any[] = (FORM_PLAN.checks || []).filter((c: any) => c.type === 'filter_check');
+      filterStat.configured = items.length;
+      for (const rej of (FORM_PLAN.filter_check_rejects || []).slice(0, 20)) {
+        console.log('[filter-skip] ' + JSON.stringify(rej));
+      }
+      if (!items.length) return;
+      const pickRoot = async (): Promise<any> => {
+        let best: any = null, bn = -1;
+        const cands: any[] = [page, ...page.frames()];
+        for (const f of cands) {
+          try {
+            const n = Number(await f.evaluate(
+              () => document.querySelectorAll('.ant-table-row, .ant-table-tbody tr').length));
+            if (n > bn) { bn = n; best = f; }
+          } catch { /* 跨域 */ }
+        }
+        return best;
+      };
+      for (const check of items) {
+        const nm = String(check.name || ('filter:' + (check.option || '')));
+        filterStat.executed += 1;
+        try {
+          const url = String(check.list_url || '');
+          if (!url) {
+            filterStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '未配置列表页 URL（filter_checks[].list_url 或 locators.list_url）');
+            continue;
+          }
+          stageMark('goto_begin');
+          await page.goto(resolveListUrl(url, page), {timeout: 30000, waitUntil: 'domcontentloaded'}).catch(() => undefined);
+          stageMark('goto_done');
+          await waitRows(page, 30000);
+          const root: any = await pickRoot();
+          if (!root) {
+            filterStat.unverified += 1;
+            recAll(check, nm, 'unverified', '列表页未渲染出表格（pickRoot 无候选）——现场见 FILTER_STAGE');
+            continue;
+          }
+          // ① 找筛选下拉：antd v3 Select 按 placeholder 候选正则定位（先 enumerate
+          //    可见 .ant-select，再交给 Playwright 真实点击 —— evaluate 内的合成事件
+          //    不一定触发 rc-select 的 open 处理器，rev154 同源教训）。
+          const phsSrc: string = (Array.isArray(check.control_placeholder) && check.control_placeholder.length)
+            ? check.control_placeholder.map((s: any) => String(s)).filter(Boolean).join('|')
+            : '狀態|状态|Status';
+          const ctrl: any = await root.evaluate((src: string) => {
+            const rx = new RegExp(src, 'i');
+            const sels = Array.from(document.querySelectorAll('.ant-select'))
+              .filter((s: any) => s.offsetParent !== null);
+            const idx = sels.findIndex((s: any) => {
+              const ph = s.querySelector('.ant-select-selection__placeholder');
+              return ph && rx.test(String(ph.textContent || '').trim());
+            });
+            return {ok: idx >= 0, idx,
+                    phs: sels.map((s: any) => String(
+                      (s.querySelector('.ant-select-selection__placeholder') || {textContent: ''}).textContent || ''
+                    ).trim()).filter(Boolean).slice(0, 8)};
+          }, phsSrc).catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 80)}));
+          console.log('FILTER_CONTROL ' + JSON.stringify({name: nm, wanted: phsSrc, found: ctrl}));
+          if (!ctrl || !ctrl.ok) {
+            filterStat.unverified += 1;
+            const seen = (ctrl && ctrl.phs && ctrl.phs.length) ? `，页面可见 placeholder：${JSON.stringify(ctrl.phs)}` : '';
+            recAll(check, nm, 'unverified',
+                   `未找到筛选下拉（placeholder 候选 ${phsSrc}${seen}）——需按页面实际控件调整 control_placeholder`);
+            continue;
+          }
+          const visSels = root.locator('.ant-select:visible');
+          await visSels.nth(ctrl.idx).click({timeout: 8000}).catch(() => undefined);
+          await page.waitForTimeout(800);
+          // ② 选选项：面板条目先 enumerate 文本，**先精确后包含**（防子串误选）
+          const optLabels: string[] = (Array.isArray(check.option_labels) && check.option_labels.length)
+            ? check.option_labels.map((s: any) => String(s)).filter(Boolean)
+            : [String(check.option || '')];
+          const ddLoc = root.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').last();
+          const ddCount = await ddLoc.count().catch(() => 0);
+          let picked = -1, pickedBy = '', itemTexts: string[] = [];
+          if (ddCount) {
+            const lis = ddLoc.locator('li[role=option], .ant-select-dropdown-menu-item:visible');
+            const n2 = await lis.count().catch(() => 0);
+            for (let i = 0; i < n2; i++) {
+              itemTexts.push(String(await lis.nth(i).innerText().catch(() => '')).replace(/\s+/g, ' ').trim());
+            }
+            outer:
+            for (const mode of ['exact', 'contains']) {
+              for (const ol of optLabels) {
+                for (let i = 0; i < itemTexts.length; i++) {
+                  const hit = mode === 'exact' ? itemTexts[i] === ol
+                    : itemTexts[i].indexOf(ol) >= 0;
+                  if (hit) { picked = i; pickedBy = mode + ':' + ol; break outer; }
+                }
+              }
+            }
+          }
+          console.log('FILTER_OPTIONS ' + JSON.stringify({
+            name: nm, labels: optLabels, items: itemTexts.slice(0, 12),
+            picked, pickedBy, dropdowns: ddCount,
+          }));
+          if (picked < 0) {
+            filterStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `下拉面板${ddCount ? '未命中选项' : '未出现'}（候选 ${JSON.stringify(optLabels)}，面板条目 ${JSON.stringify(itemTexts.slice(0, 8))}）`);
+            await page.keyboard.press('Escape').catch(() => undefined);
+            continue;
+          }
+          const lis2 = ddLoc.locator('li[role=option], .ant-select-dropdown-menu-item:visible');
+          await lis2.nth(picked).click({timeout: 5000}).catch(() => undefined);
+          await page.waitForTimeout(2500);
+          await waitRows(page, 20000);
+          // 回读选中值（antd v3：selected-value；回读不到不阻断，仅取证）
+          const selValue: string = String(await visSels.nth(ctrl.idx).evaluate((s: any) => {
+            const el = s.querySelector('.ant-select-selection-selected-value, .ant-select-selection__selected-value');
+            return el ? String(el.textContent || '').trim() : '';
+          }).catch(() => ''));
+          // ③ 结果集断言：第 1 页可见行的目标列全量命中 expect_in
+          //    （与 row_pick 同口径：取 td 数最多的 tbody 为数据行，防固定列克隆错位）
+          const sample: any = await root.evaluate((spec: any) => {
+            const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+            let dataRows: any[] = [], bestCols = 0;
+            Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'), (tb: any) => {
+              const rs = Array.prototype.filter.call(tb.children, (tr: any) =>
+                tr.querySelector('td') && tr.offsetParent !== null);
+              if (!rs.length) return;
+              const n = rs[0].querySelectorAll('td').length;
+              if (n > bestCols) { bestCols = n; dataRows = rs; }
+            });
+            if (!dataRows.length) return {ok: false, why: 'no_rows'};
+            let heads: string[] = [];
+            Array.prototype.forEach.call(document.querySelectorAll('.ant-table-thead'), (th: any) => {
+              const hs = Array.prototype.map.call(th.querySelectorAll('th'), (e: any) => norm(e.innerText));
+              if (hs.length === bestCols) heads = hs;
+            });
+            if (!heads.length) {
+              heads = Array.prototype.map.call(
+                document.querySelectorAll('.ant-table-thead th'), (e: any) => norm(e.innerText));
+            }
+            const ci = heads.indexOf(norm(spec.column));
+            if (ci < 0) return {ok: false, why: 'column_not_found', heads: heads.slice(0, 12)};
+            const vals = dataRows.map((r: any) => norm((r.querySelectorAll('td')[ci] || {}).innerText));
+            return {ok: true, rows: dataRows.length, colIndex: ci, values: vals.slice(0, 30)};
+          }, {column: String(check.expect_column || '状态')}).catch((e: any) =>
+            ({ok: false, why: 'eval_error', err: String(e).slice(0, 80)}));
+          const expectIn: string[] = (Array.isArray(check.expect_in) && check.expect_in.length)
+            ? check.expect_in.map((s: any) => String(s)) : [String(check.option || '')];
+          let filterOk = false, badVals: string[] = [], dist: Record<string, number> = {};
+          if (sample && sample.ok) {
+            for (const v of (sample.values || [])) dist[v] = (dist[v] || 0) + 1;
+            badVals = (sample.values || []).filter((v: string) =>
+              !expectIn.some((e: string) => v === e || v.indexOf(e) >= 0));
+            filterOk = sample.rows > 0 && badVals.length === 0;
+          }
+          // ④ 重置（配置了才做）：点重置 → 断言下拉清空（选中值消失/placeholder 回显）
+          let resetOk = true, resetNote = 'not_configured';
+          let afterReset: any = null;
+          if (check.reset) {
+            const rbtn = root.locator('button')
+              .filter({hasText: new RegExp(String(check.reset_label || '重\\s*置|重\\s*設|Reset'), 'i')})
+              .first();
+            const rbCount = await rbtn.count().catch(() => 0);
+            if (!rbCount) {
+              resetOk = false; resetNote = 'reset_button_not_found';
+            } else {
+              await rbtn.click({timeout: 8000}).catch(() => undefined);
+              await page.waitForTimeout(2000);
+              afterReset = await root.evaluate((idx: number) => {
+                const sels = Array.from(document.querySelectorAll('.ant-select'))
+                  .filter((s: any) => s.offsetParent !== null);
+                const sel = sels[idx];
+                const valEl = sel && sel.querySelector(
+                  '.ant-select-selection-selected-value, .ant-select-selection__selected-value');
+                const phEl = sel && sel.querySelector('.ant-select-selection__placeholder');
+                return {
+                  value: valEl ? String(valEl.textContent || '').trim() : '',
+                  placeholderVisible: !!(phEl && (phEl as any).offsetParent !== null),
+                  rows: document.querySelectorAll('.ant-table-row, .ant-table-tbody tr').length,
+                };
+              }, ctrl.idx).catch((e: any) => ({err: String(e).slice(0, 80)}));
+              resetOk = !!afterReset && !afterReset.err
+                && (!afterReset.value || afterReset.placeholderVisible);
+              resetNote = JSON.stringify(afterReset).slice(0, 120);
+            }
+          }
+          console.log('FILTER_TRACE ' + JSON.stringify({
+            name: nm, option: check.option, sel_value_after: selValue,
+            sample: sample && sample.ok ? {rows: sample.rows, col: sample.colIndex,
+                                           dist, bad: badVals.slice(0, 5)} : sample,
+            expect_in: expectIn, filter_ok: filterOk,
+            reset: {configured: !!check.reset, ok: resetOk, note: resetNote},
+          }));
+          const distText = Object.keys(dist).map((k) => `${k}×${dist[k]}`).join('/');
+          if (filterOk && resetOk) {
+            filterStat.pass += 1;
+            recAll(check, nm, 'pass',
+                   `筛选「${check.option}」：第 1 页 ${sample.rows} 行目标列全部命中`
+                   + `（${distText || '无数据行'}）`
+                   + (check.reset ? `；重置后控件已清空（${resetNote}）` : '；未配置重置断言'));
+          } else if (sample && sample.why === 'no_rows') {
+            filterStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '筛选后第 1 页无可见行——可能数据为空也可能筛选失效，不判通过（现场见 FILTER_TRACE）');
+          } else if (sample && sample.why === 'column_not_found') {
+            filterStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `结果集断言列「${check.expect_column}」未在表头命中（表头 ${JSON.stringify((sample.heads || []).slice(0, 8))}）`);
+          } else if (sample && sample.why) {
+            filterStat.unverified += 1;
+            recAll(check, nm, 'unverified', `结果集取样失败：${sample.why}——现场见 FILTER_TRACE`);
+          } else if (!filterOk) {
+            filterStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `筛选「${check.option}」后 ${sample.rows} 行中有 ${badVals.length} 行目标列取值不在期望集`
+                   + ` ${JSON.stringify(expectIn)} 内（分布 ${distText}）——业务断言未通过，现场见 FILTER_TRACE`);
+          } else {
+            filterStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `筛选命中但重置未完成（${resetNote}）——重置通道未被验证，不判通过`);
+          }
+        } catch (error) {
+          filterStat.unverified += 1;
+          recAll(check, nm, 'unverified', `筛选检查异常：${String(error).slice(0, 200)}`);
+        }
+      }
+      console.log('FILTER_PHASE ' + JSON.stringify(filterStat));
+    }
+
     // ===== 「导出」独立通道（rev148）：更多菜单 → 导出明细弹窗 → 空时间段校验 →
     // 选时间段 → 确认 → 导出中心轮询 → 下载落盘 → 列名出现性校验 =====
     // 交互配方来自人工探针 xy_p2/p8（实测可用）；判定口径见 parse_export_checks 注释。
@@ -7288,6 +7648,8 @@ _FORM_EXECUTOR_TS = r"""
       if (done === null) console.log('PHASE_WATCHDOG ' + JSON.stringify({phase, ms}));
     };
     await phaseWatchdog(runListChecks(), 180000, 'list');
+    // rev170：筛选区独立通道（同样各自 goto，排在列表检查之后）
+    await phaseWatchdog(runFilterChecks(), 120000, 'filter');
     // rev148：导出独立通道（在列表检查之后——两者都各自 goto，互不复用现场）
     await phaseWatchdog(runExportChecks(), 240000, 'export');
 
@@ -7338,6 +7700,11 @@ _FORM_EXECUTOR_TS = r"""
       export_phase: {
         ...exportStat,
         rejected_at_plan: (FORM_PLAN.export_check_rejects || []).length,
+      },
+      // 「筛选区」独立阶段（rev170）：下拉筛选结果集 + 重置还原，分开计数。
+      filter_phase: {
+        ...filterStat,
+        rejected_at_plan: (FORM_PLAN.filter_check_rejects || []).length,
       },
       skipped_no_locator: FORM_PLAN.skipped_count,
       // 只有一个数字无法复核："跳过 9 条"到底是哪几类原因
@@ -7510,6 +7877,8 @@ def render_form_executor(plan: dict[str, Any], *, default_phone: str = "18320101
          "pre_action_rejects": plan.get("pre_action_rejects") or [],
          # rev148：导出独立通道的被拒配置同样要运行期可见（[export-skip]）
          "export_check_rejects": plan.get("export_check_rejects") or [],
+         # rev170：筛选区独立通道的被拒配置（[filter-skip]）
+         "filter_check_rejects": plan.get("filter_check_rejects") or [],
          # rev142：提交层 toast 归因要用「定位器键 → 页面别名」反查
          #（toast「题目 11：请输入标题」含页面标签「标题」而非字段名「题目标题」）。
          "field_alias_applied": plan.get("field_alias_applied") or [],
@@ -7535,3 +7904,12 @@ def render_form_executor(plan: dict[str, Any], *, default_phone: str = "18320101
         .replace("@@FORM_PLAN@@", payload)
         .replace("@@DEFAULT_PHONE@@", default_phone)
     )
+
+
+#: P4 窄口径（rev169）+ rev170 修正：import 期预热 digest **必须放在模块末尾**——
+#: digest 覆盖 ``_FORM_EXECUTOR_TS``、``render_form_executor`` 与多个解析函数，
+#: 放在前部时它们尚未定义，``g.get`` 静默跳过 ⇒ 固化的是**残缺 digest**（实测
+#: warm=fec94279864a ≠ full=ad10a9c44913，rev170 当场发现）。模块末尾 = 全部
+#: digest 输入已定义，预热结果与懒加载首调完全一致，同时保留 rev169 的
+#: 「编辑窗口不 500」收益。
+compiler_source_digest()

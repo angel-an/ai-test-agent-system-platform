@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.services.web_case_compiler import (  # noqa: E402
     COMPILER_REV,
     parse_export_checks,
+    parse_filter_checks,
     parse_list_checks,
 )
 
@@ -35,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev169"' in src
+    assert 'COMPILER_REV = "rev170"' in src
     ast.parse(src)
 
 
@@ -440,10 +441,97 @@ def test_payload_whitelist_carries_default_covered_and_choice_reject():
 
 
 def test_digest_warmed_at_import():
-    """P4 窄口径（rev169）：import 期预热 digest——在途请求永不触发源码重读。"""
+    """P4 窄口径（rev169）+ rev170 修正：import 期预热 digest——但**必须放在模块末尾**。
+
+    rev169 把预热放在模块体前部（第 ~450 行），执行时 `_FORM_EXECUTOR_TS` /
+    `render_form_executor` / 多数 digest 函数尚未定义，`g.get` 静默跳过 ⇒
+    lru_cache 固化**不含执行器模板的残缺 digest**（实测 warm=fec94279864a ≠
+    full=ad10a9c44913，rev169 登记的就是残缺值）。回归：预热调用必须在
+    `render_form_executor` 定义之后；且 import 后的 digest 与 cache_clear 重算一致。
+    """
     src = _py()
     assert "compiler_source_digest()" in src
-    i = src.index("#: P4 窄口径（rev169")
-    j = src.index("compiler_source_digest()", i)
-    # 预热调用必须紧跟注释、在函数定义之后（模块级）
-    assert "def compiler_source_digest" in src[:j]
+    # 旧位置（模块体前部）不得再出现裸调用
+    head = src[:src.index("def render_form_executor")]
+    assert head.count("\ncompiler_source_digest()") == 0
+    # 调用在文件末尾（render_form_executor 定义之后）
+    tail = src[src.index("def render_form_executor"):]
+    assert "\ncompiler_source_digest()" in tail
+    import app.services.web_case_compiler as m
+    warmed = m.compiler_source_digest()
+    m.compiler_source_digest.cache_clear()
+    assert warmed == m.compiler_source_digest(), "预热 digest ≠ 全量 digest（预热位置过早）"
+
+
+# ---------- rev170：filter_checks 筛选区通道 ----------
+
+def test_filter_checks_parse_fields_and_defaults():
+    items, rejects = parse_filter_checks([
+        {"option": "启用", "option_labels": ["启用", "啟用"], "reset": True,
+         "list_url": "https://x/list", "case_id": "TC-F1"},
+    ])
+    assert not rejects and len(items) == 1
+    it = items[0]
+    assert it["option"] == "启用" and it["option_labels"] == ["启用", "啟用"]
+    assert it["expect_column"] == "状态" and it["expect_in"] == ["启用"]  # 缺省 = [option]
+    assert it["control_placeholder"] == ["狀態", "状态", "Status"]
+    assert it["reset"] is True and "重\\s*置" in it["reset_label"]
+    assert it["name"] == "filter:启用@状态" and it["rule_ref"] == "筛选与重置"
+
+
+def test_filter_checks_rejects_missing_option():
+    items, rejects = parse_filter_checks(["bad", {"reset": True}, {"option": " "}, {"option": "启用"}])
+    assert len(items) == 1 and items[0]["option"] == "启用"
+    assert len(rejects) >= 3  # 非对象 + 缺 option ×2
+    assert all(r.get("reason") for r in rejects)
+    # 空配置整体不产生任何东西
+    assert parse_filter_checks(None) == ([], [])
+
+
+def test_filter_checks_reaches_form_plan():
+    """parse 产出 filter_check 但 build_form_plan 不透传 ⇒ 执行器拿不到（TR-776 同型）。"""
+    src = _py()
+    i = src.index('"type": "filter_check"')
+    blk = src[i:i + 900]
+    for key in ("control_placeholder", "option_labels", "expect_column", "expect_in",
+                "reset", "reset_label"):
+        assert f'"{key}": item["{key}"]' in blk
+    # 早退分支 + 主分支都要带被拒清单
+    assert src.count('"filter_check_rejects": filter_check_rejects') >= 2
+
+
+def test_filter_checks_whitelist_and_phase_accounting():
+    """rev170：filter_check_rejects 必须进 payload 白名单（TR-748 同型教训）；
+    filter_check 不进字段级主循环、有独立阶段与 summary 行。"""
+    src = _py()
+    assert '"filter_check_rejects": plan.get("filter_check_rejects") or [],' in src
+    assert '"filter_checks"' in src  # NON_LOCATOR_CONFIG_KEYS
+    ts = _ts()
+    assert "check.type === 'filter_check'" in ts
+    assert "async function runFilterChecks()" in ts
+    assert "FILTER_PHASE" in ts
+    assert "[filter-skip]" in ts
+    assert "rejected_at_plan: (FORM_PLAN.filter_check_rejects || []).length" in ts
+
+
+def test_filter_checks_option_exact_before_contains():
+    """「启用」是「待启用」的子串：选项匹配必须先精确后包含，否则会选错。"""
+    ts = _ts()
+    i = ts.index("for (const mode of ['exact', 'contains'])")
+    assert ts.index("itemTexts[i] === ol") < ts.index("itemTexts[i].indexOf(ol) >= 0")
+    assert "FILTER_OPTIONS" in ts
+
+
+def test_filter_checks_honest_judgement_bar():
+    """0 行/列未命中/结果集不齐 → unverified，不冒充通过；重置必须回读清空态。"""
+    ts = _ts()
+    assert "筛选后第 1 页无可见行" in ts
+    assert "目标列取值不在期望集" in ts
+    assert "placeholderVisible" in ts
+    assert "filter_ok: filterOk" in ts
+
+
+def test_filter_checks_in_digest():
+    """parse_filter_checks 的解析语义决定运行期选哪个选项 ⇒ 必须纳入 digest（rev125 同源）。"""
+    src = _py()
+    assert '"parse_filter_checks",' in src
