@@ -312,6 +312,12 @@
       "digest": "6341e090a7c7",
       "date": "2026-10-22",
       "summary": "P3 第二项：action_matrix_checks 状态×操作矩阵独立通道——按状态定位行（数据行+克隆操作行双扫描，标签只从 a/button 收集防状态文本污染 forbid）→ expect_row/forbid_row 断言 → expect_menu 更多菜单枚举 → confirm 驱动验确认框（Modal+Popover 双采样）后点取消还原（Escape 兜底）；filter:true 复用 rev172 配方（选中后点搜索）；被拒不静默 [matrix-skip]；action_matrix_rejects 进白名单与 summary matrix_phase；parse_action_matrix_checks 纳入 digest"
+    },
+    {
+      "rev": "rev174",
+      "digest": "3390d64156aa",
+      "date": "2026-10-22",
+      "summary": "TR-792 复盘：confirm(via menu) 菜单重开时序——枚举阶段 Escape 可能没真正关掉菜单，再点「更多」会 toggle 关闭（items:0）；改为先探测已开菜单、没有才点更多"
     }
   ]
 }

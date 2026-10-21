@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev173"' in src
+    assert 'COMPILER_REV = "rev174"' in src
     ast.parse(src)
 
 
@@ -651,3 +651,12 @@ def test_action_matrix_filter_recipe_reuses_rev172():
 def test_action_matrix_in_digest():
     src = _py()
     assert '"parse_action_matrix_checks",' in src
+
+
+def test_action_matrix_confirm_menu_reopen_probes_first():
+    """TR-792 复盘（rev174）：枚举阶段 Escape 可能没真正关掉菜单，此时再点「更多」
+    会把它 toggle 关闭 ⇒ 点删除时 items:0。confirm(via menu) 必须先探测已开菜单。"""
+    ts = _ts()
+    i = ts.index("if (viaMenu) {")
+    blk = ts[i:i + 1400]
+    assert blk.index("readMenuItems()") < blk.index("clickMore()"), "必须先探测菜单再点更多"

@@ -354,7 +354,11 @@ from app.services.web_upload_fixtures import (
 #:     ``filter: true`` 先状态下拉筛选（复用 rev172 配方：选中后点搜索）。被拒不
 #:     静默（``[matrix-skip]``）；``action_matrix_rejects`` 进 payload 白名单与
 #:     summary ``matrix_phase``；``parse_action_matrix_checks`` 纳入 digest。
-COMPILER_REV = "rev173"
+#:   - rev174（2026-10-22，TR-792 复盘）：confirm(via menu) 的菜单重开时序。枚举阶段
+#:     Escape 可能没真正关掉菜单（焦点不在菜单上），此时再点「更多」会把它 toggle
+#:     **关闭** ⇒ 点删除时 items:0（TR-792 启用/待启用两单 unverified 的根因）。
+#:     改为先探测已开菜单，没有才点「更多」。
+COMPILER_REV = "rev174"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -7568,9 +7572,19 @@ _FORM_EXECUTOR_TS = r"""
             const viaMenu = String(check.confirm.via || 'row') === 'menu';
             let clicked: any = {ok: false, why: 'skipped'};
             if (viaMenu) {
-              const opened = await clickMore();
-              await page.waitForTimeout(900);
-              if (opened && opened.ok) {
+              // TR-792 复盘：枚举阶段 Escape 可能没真正关掉菜单（焦点不在菜单上），
+              // 此时再点「更多」会把它 toggle **关闭** ⇒ items:0。先探测已开菜单，
+              // 没有才点「更多」，不再盲目 toggle。
+              let menusNow: string[] = await readMenuItems();
+              if (!menusNow.length) {
+                const opened = await clickMore();
+                await page.waitForTimeout(900);
+                if (!(opened && opened.ok)) {
+                  clicked = {ok: false, why: 'more_not_found'};
+                  menusNow = null;
+                }
+              }
+              if (menusNow) {
                 clicked = await root.evaluate((lb: string) => {
                   const norm1 = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
                   const menus = Array.from(document.querySelectorAll(
