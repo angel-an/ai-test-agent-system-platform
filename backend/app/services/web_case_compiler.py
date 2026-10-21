@@ -358,7 +358,12 @@ from app.services.web_upload_fixtures import (
 #:     Escape 可能没真正关掉菜单（焦点不在菜单上），此时再点「更多」会把它 toggle
 #:     **关闭** ⇒ 点删除时 items:0（TR-792 启用/待启用两单 unverified 的根因）。
 #:     改为先探测已开菜单，没有才点「更多」。
-COMPILER_REV = "rev174"
+#:   - rev175（2026-10-22，TR-793 复盘）：菜单项点击方式。confirm(via menu) 的目标项
+#:     对合成 click（evaluate 里 el.click()）**无响应**——TR-793 clicked:ok 却
+#:     dialog_found:false，探针 5s 全 DOM 转储为空、记录仍在；Playwright 真实
+#:     输入管线（locator click）才触发 Popconfirm（探针2 实证）。优先 locator
+#:     真实点击，失败回退合成。
+COMPILER_REV = "rev175"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -7585,7 +7590,23 @@ _FORM_EXECUTOR_TS = r"""
                 }
               }
               if (menusNow) {
-                clicked = await root.evaluate((lb: string) => {
+                // TR-793 复盘（rev175）：菜单项处理器对**合成 click**（evaluate 里
+                // el.click()）无响应——记录仍在、无任何确认框（TR-793 启用/待启用
+                // clicked:ok 却 dialog_found:false；探针 5s 全 DOM 转储为空）；
+                // Playwright 真实输入管线点击才触发 Popconfirm（探针2 实证）。优先
+                // locator 真实点击，失败回退合成 click。
+                const esc = clabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const itemLoc = page.locator(
+                  '.ant-dropdown:not(.ant-dropdown-hidden) li, .ant-popover:not(.ant-popover-hidden) li')
+                  .filter({hasText: new RegExp('^\\s*' + esc + '\\s*$')}).first();
+                let realClicked = false;
+                if (await itemLoc.count().catch(() => 0)) {
+                  await itemLoc.click({timeout: 5000}).catch(() => undefined);
+                  realClicked = true;
+                }
+                clicked = realClicked
+                  ? {ok: true, how: 'locator'}
+                  : await root.evaluate((lb: string) => {
                   const norm1 = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
                   const menus = Array.from(document.querySelectorAll(
                     '.ant-dropdown:not(.ant-dropdown-hidden), .ant-popover:not(.ant-popover-hidden)'));
@@ -7596,8 +7617,6 @@ _FORM_EXECUTOR_TS = r"""
                   }
                   return {ok: false, why: 'menu_item_not_found', items: menus.length};
                 }, clabel).catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 80)}));
-              } else {
-                clicked = {ok: false, why: 'more_not_found'};
               }
             } else {
               clicked = await root.evaluate(({rowIdx, lb}: any) => {

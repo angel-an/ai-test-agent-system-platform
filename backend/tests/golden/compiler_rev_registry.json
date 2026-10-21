@@ -318,6 +318,12 @@
       "digest": "3390d64156aa",
       "date": "2026-10-22",
       "summary": "TR-792 复盘：confirm(via menu) 菜单重开时序——枚举阶段 Escape 可能没真正关掉菜单，再点「更多」会 toggle 关闭（items:0）；改为先探测已开菜单、没有才点更多"
+    },
+    {
+      "rev": "rev175",
+      "digest": "2646909c4ac9",
+      "date": "2026-10-22",
+      "summary": "TR-793 复盘：confirm(via menu) 菜单项对合成 click 无响应（clicked:ok 却 dialog_found:false，探针 5s 全 DOM 为空、记录仍在）；改为 Playwright locator 真实输入管线点击（先精确 hasText 正则），合成 click 仅作回退"
     }
   ]
 }

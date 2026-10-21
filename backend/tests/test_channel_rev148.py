@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev174"' in src
+    assert 'COMPILER_REV = "rev175"' in src
     ast.parse(src)
 
 
@@ -660,3 +660,16 @@ def test_action_matrix_confirm_menu_reopen_probes_first():
     i = ts.index("if (viaMenu) {")
     blk = ts[i:i + 1400]
     assert blk.index("readMenuItems()") < blk.index("clickMore()"), "必须先探测菜单再点更多"
+
+
+def test_action_matrix_confirm_menu_click_uses_locator():
+    """TR-793 复盘（rev175）：菜单项对合成 click 无响应（clicked:ok 却无确认框），
+    必须走 Playwright 真实输入管线（locator click），合成仅作回退。"""
+    ts = _ts()
+    i = ts.index("const itemLoc = page.locator(")
+    blk = ts[i:i + 700]
+    assert "ant-dropdown:not(.ant-dropdown-hidden) li" in blk
+    assert "hasText: new RegExp" in blk
+    assert "realClicked" in ts and "? {ok: true, how: 'locator'}" in ts
+    # 回退合成路径仍在
+    assert "menu_item_not_found" in ts
