@@ -311,7 +311,22 @@ from app.services.web_upload_fixtures import (
 #:     （TC-VIEWONLY-REV157 之类，仅用于结果归属台账），旧条件"locator_config 且无
 #:     case_id"把它们排除在配置驱动之外 ⇒ plan 侧恒等式恒为负
 #:     （planned=1 - (executable 6 - config_only 2) = -3，balanced 永远 false）。
-COMPILER_REV = "rev166"
+#:   - rev167（2026-10-21，TR-784 实测 13 pass/14 unverified）：radio 类助手补**字段级作用域**。
+#:     问卷「题目类型/是否必答」的 radio 组在题目卡片里，卡片在 `.ant-form`（modal）之外；
+#:     ``radioOption``/``optionLabels`` 钉死 modal 作用域且 ``optionLabels`` 不用
+#:     selector_hint ⇒ default_selected 报「未观测到默认选中」（实际 SUT 默认选中
+#:     真实存在：探针 单选题/是 均为 checked=true）、radio_options 报「未读到单选选项」。
+#:     两者改走 ``scopeOf`` + hint 命中的 .ant-form-item → 内部 .ant-radio-wrapper。
+#:     另：defaults 带 owners 的 default 断言（代为取证）进 reconcile 恒等式——
+#:     新增 ``default_covered_assertions``（plan 侧）与 ``default_covered``（对账行），
+#:     消掉 TR-784 的 unexplained_plan=4 假缺口。
+#:   - rev168（2026-10-21，TR-785 复盘）：两处收尾。① ``render_form_executor`` 白名单
+#:     漏 ``default_covered_assertions`` ⇒ TR-785 对账行 ``default_covered:0`` 恒 0、
+#:     ``unexplained_plan:4`` 照旧（与 rev131/TR-748 同型：**运行期要读的计划字段必须
+#:     在白名单登记**）。② ``choice_options`` 补 reject 分支——非法值不在勾选组里
+#:     应判 pass（与 radio_options 同语义）；TR-785「不存在的枚举值」在 外卖/自提/堂食
+#:     里不存在却报 unverified，是判向反了。
+COMPILER_REV = "rev168"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -2679,6 +2694,11 @@ def build_form_plan(
         # 旧实现只在 COMPILED_COVERAGE 里给 assertions、在 SUMMARY 里给 total，
         # 两个数分别属于不同快照，读者无法判断"计划→执行"是否有丢失（实测 TR-747：7/5/6/2）。
         "planned_assertions": int(manifest.get("assertion_count") or 0),
+        # rev167：被 defaults 观测覆盖的 default 断言数（covered_defaults 的 size）。
+        # 这类断言不走独立检查（default_selected 带 owners 代为取证），但对账的
+        # planned 里有它们——不显式列出来，TR-784 那样的 unexplained_plan=4 假缺口
+        # 就会一直存在（4 = 门店/商品/题目类型/是否必答 四条 default 断言）。
+        "default_covered_assertions": len(covered_defaults),
         # rev134：别名真实命中流水（文档字段名 → 定位器键 → 解析次数）。
         # 空列表 = 没配别名或一条都没命中；配置方据此判断"别名到底起没起作用"。
         "field_alias_applied": [
@@ -3427,11 +3447,16 @@ _FORM_EXECUTOR_TS = r"""
   // has-text 按字段名找必落空；配置了 selector_hint 时直接按 hint 定位再按选项文本过滤。
   // def 由**调用方**传入（fieldDefs 在内层作用域，此处拿不到）。
   function radioOption(modal: any, field: string, option: string, def?: any) {
+    // rev167（TR-784 实测）：字段级作用域必须跟随字段——问卷「题目类型/是否必答」
+    // 的 radio 组在题目卡片里，而卡片在 `.ant-form`（modal）**之外**；旧实现
+    // `modal.locator(hint)` 恒 0 ⇒ default_selected 报「未观测到默认选中」，
+    // 实际 SUT 默认选中真实存在（探针：单选题/是 均为 checked=true）。
+    // hint 命中的是字段所在的 .ant-form-item，选项读它内部的 .ant-radio-wrapper
+    //（旧 hint 路径对整个 form-item 做 hasText 过滤，多组同字段名时会串组）。
+    const scope = scopeOf(modal, def);
     const h = hintSel(def);
-    if (h) {
-      return modal.locator(h).filter({hasText: option}).first();
-    }
-    const item = modal.locator(`.ant-form-item:has-text("${field}")`).first();
+    const item = h ? scope.locator(h).first()
+                   : scope.locator(`.ant-form-item:has-text("${field}")`).first();
     return item.locator('.ant-radio-wrapper').filter({hasText: option}).first();
   }
 
@@ -3618,8 +3643,14 @@ _FORM_EXECUTOR_TS = r"""
   }
 
   //: 读取某个单选组当前渲染出来的所有选项标签（只读，用于"选项范围"断言）
-  async function optionLabels(modal: any, field: string): Promise<string[]> {
-    const item = modal.locator(`.ant-form-item:has-text("${field}")`).first();
+  async function optionLabels(modal: any, field: string, def?: any): Promise<string[]> {
+    // rev167：与 radioOption 同口径——hint 优先 + scopeOf 决定作用域。
+    // 旧实现钉死 modal 作用域且不用 hint：卡片字段（题目类型/是否必答）恒读空，
+    // radio_options 只能报「未读到单选选项」（TR-784 实测 4 条全中）。
+    const scope = scopeOf(modal, def);
+    const h = hintSel(def);
+    const item = h ? scope.locator(h).first()
+                   : scope.locator(`.ant-form-item:has-text("${field}")`).first();
     const wraps = item.locator('.ant-radio-wrapper');
     const out: string[] = [];
     const n = await wraps.count();
@@ -4372,7 +4403,7 @@ _FORM_EXECUTOR_TS = r"""
         }
         if (check.type === 'radio_options') {
           // 单选组的选项范围：读选项标签即可判定（无自由输入路径）
-          const labels = await optionLabels(modal, check.field);
+          const labels = await optionLabels(modal, check.field, fieldDefs[check.field]);
           const allowed: string[] = check.allowed || [];
           const norm = (s: string) => (s || '').replace(/\s+/g, '');
           if (!labels.length) {
@@ -4416,6 +4447,16 @@ _FORM_EXECUTOR_TS = r"""
                    labels.length === want
                      ? `勾选组共 ${labels.length} 个选项（${labels.join('/')}），与文档「${check.rule}」一致`
                      : `勾选组实际 ${labels.length} 个选项（${labels.join('/')}），文档要求 ${want} 组`);
+            continue;
+          }
+          if (String(check.expect).startsWith('reject')) {
+            // rev167：reject 语义与 radio_options 对齐——**只判「非法值能否被选到」**。
+            // 勾选组物理上选不到不存在的值 ⇒ 不存在即 pass（TR-785 实测：
+            // 「不存在的枚举值」不在 外卖/自提/堂食 里却报 unverified，是判向反了）。
+            const exists = labels.some((l) => norm(l).includes(norm(check.data)));
+            recAll(check, name, exists ? 'unverified' : 'pass',
+                   exists ? `非法值 ${check.data} 竟出现在勾选组里（${check.rule}）`
+                          : `勾选组中不存在 ${check.data || '(空)'}，用户无法勾选非法值（${check.rule}）`);
             continue;
           }
           if (check.data) {
@@ -7337,7 +7378,11 @@ _FORM_EXECUTOR_TS = r"""
     const __configA = summary.config_only_checks || 0;
     const __scenarioA = summary.negative_scenario_phase.executed;
     const __submitA = summary.submit_phase.emitted || 0;
-    const __unexplainedPlan = __plannedA - ((__execA - __configA) + __skipA);
+    // rev167：被 defaults 观测代为取证的 default 断言——检查本身标 source=locator_config
+    //（计入了 config_only），但 planned 里有它们。不算进恒等式就会像 TR-784 一样
+    // 恒报 unexplained_plan=4（门店/商品/题目类型/是否必答四条 default 断言）。
+    const __defaultCovA = FORM_PLAN.default_covered_assertions || 0;
+    const __unexplainedPlan = __plannedA - ((__execA - __configA) + __defaultCovA + __skipA);
     // rev165：用 emitted_raw（未剔过程态的实际写出行数）——summary.total 现在剔掉了
     // 被提交层覆盖的过程态，拿它做减法会把"改进"读成"少发了 1 条"（balanced 变 false）。
     const __unexplainedEmitted = summary.emitted_raw - (__execA + __scenarioA + __submitA);
@@ -7358,6 +7403,7 @@ _FORM_EXECUTOR_TS = r"""
       //: 其中有多少条是"提交层已给结论、客户端过程态被剔除"的（rev165）
       superseded: summary.deferred_superseded || 0,
       unexplained_plan: __unexplainedPlan,
+      default_covered: __defaultCovA,
       unexplained_emitted: __unexplainedEmitted,
       balanced: __unexplainedPlan === 0 && __unexplainedEmitted === 0,
       skipped_by_reason: summary.skipped_by_reason,
@@ -7433,6 +7479,10 @@ def render_form_executor(plan: dict[str, Any], *, default_phone: str = "18320101
          # COVERAGE_RECONCILE 打出 planned=0 / unexplained_plan=-3（明明有 3 条断言），
          # 对账行反而制造了新的误导。凡运行期要读的计划字段都必须在此登记。
          "planned_assertions": plan.get("planned_assertions") or 0,
+         # rev167：defaults 带 owners 的 default 断言数——对账恒等式要用
+         #（漏登记的后果与 rev131/TR-748 同型：TR-785 default_covered 恒 0，
+         # unexplained_plan=4 假缺口照旧）。
+         "default_covered_assertions": plan.get("default_covered_assertions") or 0,
          # P1-3 阶段 B：规则级负路径场景随计划下发给执行器。
          # ``negative_scenario_rejects`` 一并下发——配置期被拒的场景必须在运行期可见，
          # 否则"配了但没跑"只能靠人去比对配置与日志。

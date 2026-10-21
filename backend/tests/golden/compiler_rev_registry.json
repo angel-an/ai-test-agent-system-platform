@@ -270,6 +270,18 @@
       "digest": "f0a11e9a0009",
       "date": "2026-10-21",
       "summary": "config_only_checks 判定改只看 source：list_checks/export_checks 带自造 case_id 但仍是配置驱动，旧条件排除它们导致 plan 侧恒等式恒为 -3（balanced 永假）"
+    },
+    {
+      "rev": "rev167",
+      "digest": "c873ff19dd5a",
+      "date": "2026-10-21",
+      "summary": "radioOption/optionLabels 补字段级作用域（scopeOf+hint）：题目卡片在 .ant-form 外，TR-784 的 default_selected/radio_options 假 unverified 全消；reconcile 新增 default_covered_assertions 恒等项（消 unexplained_plan=4 假缺口）"
+    },
+    {
+      "rev": "rev168",
+      "digest": "0a9db8d17483",
+      "date": "2026-10-21",
+      "summary": "render_form_executor 白名单补 default_covered_assertions（TR-785 对账恒 0 同 TR-748 型）；choice_options 补 reject 分支（非法值不可勾选=pass，与 radio_options 同语义）"
     }
   ]
 }

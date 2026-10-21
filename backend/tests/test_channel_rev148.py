@@ -35,7 +35,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev166"' in src
+    assert 'COMPILER_REV = "rev168"' in src
     ast.parse(src)
 
 
@@ -394,3 +394,46 @@ def test_compile_receipt_includes_config_warnings():
         svc = f.read()
     assert "config_lint_warnings(form_plan)" in svc
     assert '"config_warnings": lint' in svc
+
+
+def test_radio_helpers_follow_field_scope():
+    """rev167：radioOption/optionLabels 走 scopeOf + hint——题目卡片在 .ant-form 外
+    （TR-784：default_selected:题目类型 报未观测到，实为 modal 作用域找不到卡片）。"""
+    ts = _ts()
+    assert "const scope = scopeOf(modal, def);" in ts
+    i = ts.index("function radioOption(")
+    blk = ts[i:i + 700]
+    assert "scopeOf(modal, def)" in blk
+    assert ".ant-radio-wrapper" in blk
+    j = ts.index("async function optionLabels(")
+    blk2 = ts[j:j + 700]
+    assert "def?: any" in blk2 and "scopeOf(modal, def)" in blk2
+    # 调用点带字段定义
+    assert "optionLabels(modal, check.field, fieldDefs[check.field])" in ts
+
+
+def test_reconcile_counts_default_covered_assertions():
+    """rev167：defaults 带 owners 的 default 断言进恒等式（TR-784 unexplained_plan=4）。"""
+    ts = _ts()
+    assert "default_covered_assertions" in ts
+    assert "const __defaultCovA = FORM_PLAN.default_covered_assertions || 0;" in ts
+    k = ts.index("const __unexplainedPlan")
+    blk = ts[k:k + 200]
+    assert "+ __defaultCovA" in blk
+    assert "default_covered: __defaultCovA" in ts
+    src = _py()
+    assert '"default_covered_assertions": len(covered_defaults)' in src
+
+
+def test_payload_whitelist_carries_default_covered_and_choice_reject():
+    """rev167 补丁：render_form_executor 白名单漏 default_covered_assertions 的后果
+    与 rev131/TR-748 同型（TR-785 default_covered 恒 0）；choice_options 的 reject
+    分支与 radio_options 对齐（非法值不存在 = pass）。"""
+    src = _py()
+    assert '"default_covered_assertions": plan.get("default_covered_assertions") or 0,' in src
+    ts = _ts()
+    i = ts.index("if (check.type === 'choice_options')")
+    blk = ts[i:i + 2400]
+    assert "startsWith('reject')" in blk
+    assert "竟出现在勾选组里" in blk
+    assert "用户无法勾选非法值" in blk
