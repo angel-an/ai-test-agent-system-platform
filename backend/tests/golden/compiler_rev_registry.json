@@ -300,6 +300,12 @@
       "digest": "83c85fc1e0e7",
       "date": "2026-10-22",
       "summary": "TR-789 复盘：filter_checks 新增 reset_clear_values——本 SUT「重置」把下拉置回「全部」而非清成 placeholder，旧判定（value 空/placeholder 可见）恒 false；回显值命中等值集（缺省 全部/All）也算清空"
+    },
+    {
+      "rev": "rev172",
+      "digest": "49723b90712e",
+      "date": "2026-10-22",
+      "summary": "TR-790 复盘：filter 交互配方两补——①每条检查前先点重置清残留（goto 同 hash no-op、SPA 保留上一条件）；②选中选项后点「搜索/查询」触发刷新（本 SUT 选中不自动查询，TR-790 实测选「待启用」后结果集仍是上一条件残留的「启用」行）"
     }
   ]
 }

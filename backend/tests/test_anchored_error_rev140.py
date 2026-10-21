@@ -22,7 +22,7 @@ def _py() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev171"' in src
+    assert 'COMPILER_REV = "rev172"' in src
     ast.parse(src)  # 语法完好
 
 

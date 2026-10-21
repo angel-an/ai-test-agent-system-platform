@@ -343,7 +343,11 @@ from app.services.web_upload_fixtures import (
 #:   - rev171（2026-10-21，TR-789 复盘）：``reset_clear_values``。本 SUT「重置」是把
 #:     下拉置回「全部」而非清成 placeholder（TR-789 FILTER_TRACE 实测 value="全部"），
 #:     旧判定（value 空 或 placeholder 可见）恒 false。回显值命中配置等值集也算清空。
-COMPILER_REV = "rev171"
+#:   - rev172（2026-10-21，TR-790 复盘）：交互配方两补。① 每条检查前先点「重置」清
+#:     残留（goto 同 hash 是 no-op、SPA 保留上一条件，rev158/164 同源教训）；
+#:     ② 选中选项后**点「搜索/查询」触发刷新**——本 SUT 选中不自动查询，TR-790 实测
+#:     选「待启用」后结果集仍是上一条件残留的「启用」行（假 unverified）。
+COMPILER_REV = "rev172"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -6951,6 +6955,17 @@ _FORM_EXECUTOR_TS = r"""
             recAll(check, nm, 'unverified', '列表页未渲染出表格（pickRoot 无候选）——现场见 FILTER_STAGE');
             continue;
           }
+          // rev172：每条检查前先点「重置」清残留——goto 同 hash 是 no-op、SPA 不重载，
+          // 列表页会保留上一检查项的筛选条件（rev158/rev164 同源教训）
+          const preReset = root.locator('button')
+            .filter({hasText: new RegExp(String(check.reset_label || '重\\s*置|重\\s*設|Reset'), 'i')})
+            .first();
+          if (await preReset.count().catch(() => 0)) {
+            await preReset.click({timeout: 8000}).catch(() => undefined);
+            stageMark('preset_reset');
+            await page.waitForTimeout(1500);
+            await waitRows(page, 20000);
+          }
           // ① 找筛选下拉：antd v3 Select 按 placeholder 候选正则定位（先 enumerate
           //    可见 .ant-select，再交给 Playwright 真实点击 —— evaluate 内的合成事件
           //    不一定触发 rc-select 的 open 处理器，rev154 同源教训）。
@@ -7018,6 +7033,15 @@ _FORM_EXECUTOR_TS = r"""
           }
           const lis2 = ddLoc.locator('li[role=option], .ant-select-dropdown-menu-item:visible');
           await lis2.nth(picked).click({timeout: 5000}).catch(() => undefined);
+          // rev172：本 SUT 选中选项**不自动查询**（TR-790 实测：选「待启用」后列表仍是
+          // 上一条件残留的「启用」行），必须点「搜索/查询」触发刷新；没有按钮则如实记录
+          const qbtn = root.locator('button')
+            .filter({hasText: /搜\s*索|查\s*詢|查\s*询|Search/i}).first();
+          const qbtnN = await qbtn.count().catch(() => 0);
+          if (qbtnN) {
+            await qbtn.click({timeout: 8000}).catch(() => undefined);
+            stageMark('query_clicked', {n: qbtnN});
+          }
           await page.waitForTimeout(2500);
           await waitRows(page, 20000);
           // 回读选中值（antd v3：selected-value；回读不到不阻断，仅取证）

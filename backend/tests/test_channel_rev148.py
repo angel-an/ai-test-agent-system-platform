@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev171"' in src
+    assert 'COMPILER_REV = "rev172"' in src
     ast.parse(src)
 
 
@@ -548,3 +548,15 @@ def test_filter_reset_clear_values():
     assert "clearVals.indexOf(String(afterReset.value)) >= 0" in ts
     src = _py()
     assert '"reset_clear_values": item["reset_clear_values"]' in src
+
+
+def test_filter_preset_reset_and_query_click():
+    """TR-790 复盘：① goto 同 hash 是 no-op，检查前必须先重置清残留；② 本 SUT 选中
+    选项不自动查询，必须点「搜索/查询」触发刷新（否则结果集是上一条件的残留行）。"""
+    ts = _ts()
+    assert "preset_reset" in ts
+    assert "query_clicked" in ts
+    i = ts.index("await lis2.nth(picked).click(")
+    blk = ts[i:i + 900]
+    assert "/搜\\s*索|查\\s*詢|查\\s*询|Search/i" in blk
+    assert "await waitRows(page, 20000);" in blk
