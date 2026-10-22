@@ -202,15 +202,17 @@ class TestGeneratedCases:
         assert "99999" in steps_text and "0.01" in steps_text and "99999.01" in steps_text
 
         # 3) 文件规则用例（格式 + 大小）
+        # rev181：字段名自带括号时标题改为「主语-后缀（限定）」，限定词仍在标题里
         upload = next(
             c for c in cases
-            if "上传文件（企业充值）" in c.name and "边界值" in c.name
+            if "上传文件" in c.name and "企业充值" in c.name and "边界值" in c.name
         )
         upload_text = " ".join(s.step + " " + s.result for s in upload.test_case_steps)
         assert "xlsx" in upload_text and "1M" in upload_text
 
         # 3b) 上传字段的必填用例同样存在（文档标注"是否必填=是"）
-        assert any("上传文件（企业充值）" in c.name and "必填" in c.name for c in cases)
+        assert any("上传文件" in c.name and "企业充值" in c.name and "必填" in c.name
+                   for c in cases)
 
         # 4) 条件显示用例
         assert any("条件显示校验" in n for n in names)

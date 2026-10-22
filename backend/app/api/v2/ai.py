@@ -1070,6 +1070,52 @@ def _subject_zone(point: str) -> str:
     return _SUBJECT_DELIM_RE.split(text, 1)[0]
 
 
+#: 可测行为词（rev181）。需求点要能扩写成「反向/边界」用例，必须至少说清**一个行为**；
+#: 只描述"有这个东西/新增了这个东西"的条目（如「增加会员限购商品管理列表--交易云-运营-
+#: 增加菜单(菜单名称：会员限购商品管理)」）扩写出来就是纯噪音，实测产出
+#: 「…的必填或非法输入校验」「…的边界条件处理」两条无断言用例（TC-843363 / 2026-10-22 审计）。
+_TESTABLE_VERBS = (
+    "必填", "選填", "选填", "填写", "填入", "输入", "錄入", "录入", "提交", "保存", "儲存",
+    "校验", "校驗", "校验", "拦截", "攔截", "提示", "限制", "上限", "下限", "字符", "字数", "字數",
+    "长度", "長度", "最多", "至少", "不能超过", "不能超過", "不得", "小于", "小於", "大于", "大於",
+    "范围", "範圍", "格式", "上传", "上傳", "选择", "選擇", "勾选", "勾選", "单选", "多选",
+    "默认为", "默認", "默认", "自动带出", "自動帶出", "回填", "展示", "显示", "顯示", "隐藏",
+    "隐藏", "置灰", "禁用", "可编辑", "可編輯", "只读", "只讀", "不可", "排序", "筛选", "篩選",
+    "查询", "查詢", "导出", "導出", "导入", "導入", "删除", "刪除", "启用", "啟用", "停用",
+    "切换", "切換", "生效", "重复", "重複", "唯一", "去重", "同步", "回写", "回寫", "计算",
+    "計算", "取整", "精度", "小数", "小數", "天数", "天數", "次数", "次數", "数量", "數量",
+    "金额", "金額", "价格", "價格", "比例", "折扣", "状态", "狀態", "流转", "流轉",
+)
+#: 「只描述存在/入口」的弱语气词——命中它们本身不构成可测行为
+_PRESENCE_ONLY_RE = re.compile(
+    r"^\s*(?:增加|新增|添加|新建|建立|提供|支持|實現|实现|可以|可)[^，。；;]{0,30}"
+    r"(?:菜单|菜單|入口|按鈕|按钮|頁面|页面|列表|模塊|模块|功能)\s*(?:\(|（|$)"
+)
+#: 「提供/增加一个导出按钮」= 只说有按钮，没说按钮怎么表现 → 仍属存在性描述。
+#: 需要与「新增题目」这类**真的行为**区分（「题目」不在元素词里），故只按 UI 元素词判定。
+_CREATE_ELEMENT_RE = re.compile(
+    r"^\s*(?:增加|新增|添加|新建|建立|提供|支持|增加一?个|新增一?个|添加一?个)"
+    r"[^，。；;]{0,20}"
+    r"(?:按钮|按鈕|菜单|菜單|入口|图标|圖標|链接|連結|tab|标签页|標籤頁|开关|開關)\s*$"
+)
+
+
+def _has_testable_behavior(point: str) -> bool:
+    """需求点是否描述了**可验证的行为**（而不是"存在某入口/某菜单"）。
+
+    只用于决定「要不要按反向/边界模板扩写」：判 false 时仍保留正向叙述用例，
+    不丢需求，只是不再机械复制两条无断言的变体（rev181）。
+    """
+    text = (point or "").strip()
+    if not text:
+        return False
+    if _PRESENCE_ONLY_RE.match(text) and not any(v in text for v in _TESTABLE_VERBS):
+        return False
+    if _CREATE_ELEMENT_RE.match(text):
+        return False
+    return any(v in text for v in _TESTABLE_VERBS)
+
+
 def _match_field_for_point(
     point: str, aliases: list[tuple[FieldRule, list[str]]]
 ) -> tuple[FieldRule, str] | None:
@@ -1119,7 +1165,12 @@ def _build_requirement_cases(
     aliases = _distinctive_field_aliases(field_rules or [])
     for point in points:
         scenarios.append((point, "正向", Priority.HIGH if test_mode == "smoke" else Priority.MEDIUM))
+        # rev181：扩写前置闸门——需求点必须①能回链到字段规则（否则没断言可挂）
+        # ②本身描述可测行为。两个条件缺一就不扩写：
+        #   有 reverse 无断言 = 不可判定用例（2026-10-22 审计：95 条里 29 条断言为 0）；
+        #   无行为词 = 纯噪音（「增加…菜单(…）的必填或非法输入校验」TC-843363）。
         if (test_mode != "smoke" and _match_field_for_point(point, aliases)
+                and _has_testable_behavior(point)
                 and not re.search(r"列表|查询|查詢|点击|點擊|入口|状态|狀態|問卷|问卷|新增题目|拖拽", point)):
             scenarios.append((f"{point}的必填或非法输入校验", "反向", Priority.MEDIUM))
             scenarios.append((f"{point}的边界条件处理", "边界", Priority.MEDIUM))
@@ -1191,8 +1242,12 @@ def _build_requirement_cases(
                 ),
             })
             gap["titles"].append(_case_title_from_requirement(title))
+        case_title = _case_title_from_requirement(title)
+        if case_title != (title or "").strip():
+            # rev181 留痕：标题被规范化过，原文必须可追（验收时能逐字对回需求）
+            custom_fields["title_normalized_from"] = (title or "")[:200]
         cases.append(TestCaseCreate(
-            name=_case_title_from_requirement(title),
+            name=case_title,
             description=description,
             preconditions="已按上传需求准备角色、权限和前置数据。",
             priority=priority,
@@ -2174,7 +2229,10 @@ def _field_rule_cases(
                 steps.append((f"上传超过 {_num_fmt(limit)}M 的文件", "被拒绝并提示文件过大"))
         if steps:
             out.append(make(
-                f"{rule.name}-边界值与格式校验（{rule.summary()}）" if rule.summary()
+                # rev181：summary 自身可能已含括号（「上传文件（企业充值）」+「文件≤1M；格式：…」
+                # → 标题里堆两对括号、41~42 字）。这里统一收成一对：字段名里的括号去掉，
+                # 只留规则摘要那一对；仍超 40 字则截到摘要的第一个分句。
+                _bracket_title(rule.name, rule.summary()) if rule.summary()
                 else f"{rule.name}-边界值与格式校验",
                 steps, "边界", "high", "boundary",
             ))
@@ -2196,16 +2254,244 @@ def _field_rule_cases(
     return out[:MAX_CASES_PER_FIELD]
 
 
+def _bracket_title(field_name: str, summary: str, limit: int = 40) -> str:
+    """字段规则类标题：`{字段}-边界值与格式校验（{规则摘要}）`，保证**只有一对括号**。
+
+    rev181：字段名自带括号（「上传文件（企业充值）」）时，原写法拼出来是
+    「上传文件（企业充值）-边界值与格式校验（文件≤1M；格式：xlsx/xls/csv）」= 42 字、两对括号。
+    现在把字段名的括号摊平进主语（「上传文件-企业充值」），摘要超限时取第一个分句。
+    """
+    head, groups = _split_bracket_groups(field_name or "")
+    head = head.strip() or (field_name or "").strip()
+    main = "、".join(g for g in groups if g)
+    subject = f"{head}-{main}" if main else head
+    base = f"{subject}-边界值与格式校验"
+    room = limit - len(base) - 2  # 两对全角括号
+    body = (summary or "").strip()
+    if room <= 0:
+        return f"{subject}-边界校验"
+    if len(body) > room:
+        for sep in ("；", ";", "，"):
+            idx = body.find(sep)
+            if 0 < idx <= room:
+                body = body[:idx]
+                break
+        else:
+            body = body[:room]
+    return f"{base}（{body}）"
+
+
 def _num_fmt(value: float) -> str:
     """数值格式化：保留小数精度（"%g" 只有 6 位有效数字，会截掉 99999.01）。"""
     text = f"{float(value):.10f}".rstrip("0").rstrip(".")
     return text if text else "0"
 
 
+#: 路径/目录式描述（「会员限购商品管理列表--交易云-运营-增加菜单」）在标题里是噪音，
+#: 不是被测对象。只在含 `--` 或 ≥2 个 `-` 时切掉尾段，正常词（「问卷-新建」）不受影响。
+_PATH_TAIL_RE = re.compile(
+    r"\s*(?:--|[—–]{1,2}|->|→)\s*[^，。；;\r\n]{1,40}(?:\s*[（(][^（）()]{0,20}[）)])?\s*$")
+#: 标题里可省略的弱意义尾句（不影响可判定性）
+_WEAK_TAIL_RE = re.compile(r"[，,]\s*(?:即可|就行了|同上|以此类推|等等)\s*$")
+#: 流水线自己生成的场景后缀（扩写模板句式），不属于需求现象
+_SCENARIO_SUFFIX = (
+    "必填或非法输入校验", "必填与取值校验", "必填與取值校驗",
+    "边界值与格式校验", "边界條件與格式校驗", "边界条件处理", "条件显示校验", "边界校验",
+)
+_SCENARIO_SUFFIX_RE = re.compile(
+    r"的?(?:" + "|".join(re.escape(s) for s in _SCENARIO_SUFFIX) + r")\s*$")
+#: 标题噪音替换：模糊词 → 可测表述。顺序敏感（长串优先）。
+_TITLE_NOISE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"可(?:以)?正常(保存|提交|通过|生效|显示|展示|操作)"), r"可\1"),
+    (re.compile(r"正常(生效|保存|提交|显示|展示|运行|使用|操作)"), r"\1"),
+    (re.compile(r"无(?:任何)?异常|无问题|没有问题"), "无报错"),
+    (re.compile(r"符合预期"), "与需求一致"),
+    (re.compile(r"功能正常|使用正常"), "功能可用"),
+)
+#: 现象归一：同一语义统一成一种叫法，便于按标题聚合与检索
+_TITLE_CANON: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"不显示|未显示|不展示|未展示|看不到|不可见"), "未显示"),
+    (re.compile(r"不能保存|保存失败|无法保存|未保存"), "保存失败"),
+    (re.compile(r"不能提交|提交失败|无法提交"), "提交失败"),
+    (re.compile(r"被拦截|校验拦截|提示不能|无法通过"), "被拦截"),
+)
+
+
+def _strip_path_tail(text: str) -> str:
+    """切掉「--交易云-运营-增加菜单」这类导航路径尾段（只保留被测对象）。
+
+    只认**路径标记**（`--`/`—`/`->`/`→`），普通连字符不算——「问卷列表-状态筛选」里的
+    `-` 是对象名的分隔符。括号里的路径说明同样处理（先拆括号，再逐段清）。
+    """
+    def _cut(segment: str, in_group: bool = False) -> str:
+        raw = (segment or "").strip()
+        trimmed = _PATH_TAIL_RE.sub("", raw).strip()
+        if not trimmed:
+            return raw
+        # 顶层标题切太短会毁掉标题本身（「会员限购商品列表--交易云-运营-增加菜单」→「会员…」），
+        # 所以要求剩余 ≥6 字；括号里的内容本来只是解释说明，切短也照切
+        # （「(路径说明--交易云-运营-增加菜单)」→「(路径说明)」）。
+        if in_group:
+            return trimmed
+        return trimmed if len(trimmed) >= 6 else raw
+
+    value = text or ""
+    head, groups = _split_bracket_groups(value)
+    if groups:
+        head = _cut(head)
+        cleaned = [_cut(g, in_group=True) for g in groups]
+        rebuilt = head + "".join(f"（{g}）" for g in cleaned if g)
+        if rebuilt.strip():
+            return rebuilt
+    return _cut(value)
+
+
+def _normalize_title_noise(text: str) -> str:
+    """把模糊词换成可测表述、统一现象叫法。原句始终保留在 description。"""
+    value = text or ""
+    for pattern, repl in _TITLE_NOISE_RULES:
+        value = pattern.sub(repl, value)
+    for pattern, repl in _TITLE_CANON:
+        value = pattern.sub(repl, value)
+    value = _WEAK_TAIL_RE.sub("", value)
+    return re.sub(r"[ \t\u3000]{2,}", " ", value).strip()
+
+
+def _split_bracket_groups(text: str) -> tuple[str, list[str]]:
+    """把「主语（说明）」拆成 (主语, [说明…])，说明本身嵌套括号时按深度配对。"""
+    head, groups = "", []
+    i = 0
+    pairs = {"（": "）", "(": ")"}
+    while i < len(text):
+        ch = text[i]
+        if ch in pairs:
+            depth, j = 0, i
+            while j < len(text):
+                if text[j] == ch:
+                    depth += 1
+                elif text[j] == pairs[ch]:
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if j >= len(text):
+                break
+            groups.append(text[i + 1:j].strip())
+            i = j + 1
+            continue
+        head += ch
+        i += 1
+    return head.strip(), [g for g in groups if g]
+
+
+def _compact_title(text: str, limit: int = 40) -> str:
+    """超长标题压缩：保主语、保可判定信息（数值/规则），把括号内解释降级到 description。
+
+    实测噪音（2026-10-22 审计）：54 字标题把需求原文的括号解释整段搬进标题——
+    「限购商品需要在点单页展示(润典配置在菜单分类展示即可，不能配置在隐藏分类/加购购分类中)」，
+    后半段是**配置方法说明**，不是判定条件。
+    """
+    value = (text or "").strip()
+    if len(value) <= limit:
+        return value
+    head, groups = _split_bracket_groups(value)
+    # ① 括号里有硬规则（数值/区间/最长/上限/格式）→ 只保这个，丢掉解释性文字
+    for g in groups:
+        if re.search(r"最长|最多|至少|上限|下限|字符|位数|\d+\s*(?:字|个|位|天|条|次|M|MB|KB)"
+                     r"|≤|≥|[\[(（]\s*-?\d", g):
+            cand = f"{head}（{g}）" if head else g
+            if len(cand) <= limit:
+                return cand
+            return f"{head[:limit - 2]}…"
+    # ② 无硬规则：先切路径/导航尾段；仍在限内就留主语+首句；否则按分句边界截断
+    head = _strip_path_tail(head or value)
+    if head and len(head) <= limit:
+        return head if head != value or len(value) <= limit else value[:limit]
+    for sep in ("，", ",", "；", ";", "。", " "):
+        idx = head.find(sep)
+        if 6 <= idx <= limit:
+            return head[:idx]
+    return (head or value)[: limit - 1] + "…"
+
+
+def _strip_pipeline_suffix(text: str) -> str:
+    """切掉**尾句**是流水线场景句式的情况——那是模板话术，不是需求现象。
+
+    实测（2026-10-22 审计 TC-265298，54 字）：「限购商品需要在点单页展示(润典配置…)的必填或
+    非法输入校验」——前缀是需求原文、尾巴是扩写模板，两者被拼进同一个标题。扩写场景已由
+    `_scenario_suffix` 字段表达，标题里不该再重复。
+
+    只在「后缀前是**整句/带括号解释」的重型前置**（≥16 字或含括号）时切；像
+    「题目类型-必填与取值校验」这种轻量字段名标题，后缀本身就是主要判定信息，保留原样。
+    """
+    match = _SCENARIO_SUFFIX_RE.search(text or "")
+    if not match:
+        return text or ""
+    head = (text or "")[: match.start()].strip(" -—、,，;；")
+    if len(head) < 16 and "（" not in head and "(" not in head:
+        return text or ""
+    # 括号限定 + 校验后缀 = 标题缺了「在验什么」，此时后缀是唯一判定信息 → 保留并重排
+    if head.endswith("）") or head.endswith(")"):
+        return text or ""
+    return head or (text or "")
+
+
+def _collapse_bracket_duplicate(text: str) -> str:
+    """去括号信息重复：「上传文件（企业退款）-条件显示校验」→「上传文件-条件显示校验（企业退款）」。
+
+    字段名带括号限定时后缀拼在括号外，读起来像「上传文件（企业退款）然后再条件显示校验」。
+    把限定挪到末尾括号、后缀紧贴主语，语义不变但结构统一。仅当前缀以
+    「主语 + 括号组」结束（即后缀前面就是括号）时才改，正常嵌套说明不动。
+    """
+    match = _SCENARIO_SUFFIX_RE.search(text or "")
+    if not match:
+        return text or ""
+    prefix = (text or "")[: match.start()].strip(" -—、,，;；")
+    suffix = (text or "")[match.start():].strip()
+    if not prefix.endswith(("）", ")")):
+        return text or ""  # 「主语-后缀」结构，括号不在后缀前面 → 不是错位，别动
+    head, groups = _split_bracket_groups(prefix)
+    if not head or not groups:
+        return text or ""
+    head = head.strip(" -—、,，;；")
+    if not head:
+        return text or ""
+    # 前缀里括号后面还跟着内容（如「…（企业退款）-边界值…（文件≤1M）」）→ 结构已是
+    # 「主语-后缀（说明）」，不是「字段名（限定）」错位，交给 _compact_title 处理
+    trailing = prefix[len(head):] if prefix.startswith(head) else ""
+    if trailing.strip(" -—、,，;；") and not _SCENARIO_SUFFIX_RE.search(head):
+        return text or ""
+    merged: list[str] = []
+    for g in groups:
+        for part in g.split("；"):
+            part = part.strip()
+            if part and part not in merged:
+                merged.append(part)
+    if not merged:
+        return text or ""
+    return f"{head}-{suffix}（{'；'.join(merged)}）"
+
+
 def _case_title_from_requirement(text: str) -> str:
-    """保留需求原意，清理文档编号和泛化前缀，形成生产用例标题。"""
-    value = re.sub(r"^\s*(?:功能点|需求验证|测试场景)\s*[-：:]\s*", "", text).strip()
-    return value[:120] or "未命名需求场景"
+    """保留需求原意，清理文档编号、导航路径与模糊词，形成可判定的生产用例标题。
+
+    rev181（2026-10-22 用例质量审计）：原实现只剥「功能点：」前缀再 `[:120]` 截断，
+    于是 ① 标题=需求原句（含 `--交易云-运营` 这类路径、含整段括号解释，最长 54 字）；
+    ② 模糊词原样保留（「…可正常保存」「…正常生效」，不可判定）。现改为：
+    去路径尾段 → 去弱尾句 → 模糊词可测化 → 现象归一 → 超长按主语+硬规则压缩。
+    """
+    value = re.sub(r"^\s*(?:功能点|需求验证|测试场景)\s*[-：:]\s*", "", text or "").strip()
+    value = _strip_pipeline_suffix(value)
+    value = _strip_path_tail(value)
+    value = _collapse_bracket_duplicate(value)
+    value = value.replace("((", "（").replace("))", "）")
+    # 中文语境统一全角括号（英文括号夹中文读起来断裂）
+    if re.search(r"[\u4e00-\u9fa5]", value):
+        value = re.sub(r"\(([^()]*)\)", r"（\1）", value)
+    value = _normalize_title_noise(value)
+    value = re.sub(r"（\s*）|\(\s*\)", "", value).strip(" -—、,，;；")
+    value = _compact_title(value, limit=40)
+    return value or "未命名需求场景"
 
 
 def _derive_requirement_module(points: list[str], filename: str, *, module_hint: str = "") -> str:
