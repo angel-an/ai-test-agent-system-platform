@@ -18,6 +18,7 @@ from app.api.v2.ai import (
     _case_title_from_requirement,
     _has_testable_behavior,
 )
+from app.services.requirement_structure import extract_constraints
 from app.services.requirement_structure import FieldRule
 
 
@@ -48,7 +49,7 @@ def test_behavior_points_stay_testable(point: str) -> None:
 
 def test_no_behavior_point_yields_single_positive_case() -> None:
     """闸门生效：不可测条目只出 1 条正向，不再膨胀成 3 条无断言用例。"""
-    cases, _ = _build_requirement_cases(
+    cases, _gaps, _skips = _build_requirement_cases(
         ["增加会员限购商品管理列表--交易云-运营-增加菜单(菜单名称：会员限购商品管理)"],
         "限购.pdf",
     )
@@ -57,20 +58,29 @@ def test_no_behavior_point_yields_single_positive_case() -> None:
 
 
 def test_behavior_point_with_field_link_still_expands() -> None:
-    """同一文档里，能回链到字段规则且含行为词的条目**仍然**扩写成三条（不误杀）。"""
+    """同一文档里，能回链到字段规则且含行为词的条目**仍然**扩写成多条（不误杀）。
+
+    rev182 起扩写条数由「该字段在哪个维度上真有约束」决定，不再是固定 3 条：
+    `限购标签` 只有 required + max_length，边界桶为空 → 只扩反向，不扩边界
+    （原先那条边界用例断言为 0，是空壳）。详见 test_expand_assertion_gate_rev182.py。
+    """
     rules = [FieldRule(name="限购标签", description="必填；最多8个字",
-                       field_type="text", required=True)]
-    cases, _ = _build_requirement_cases(
+                       field_type="text", required=True,
+                       constraints=extract_constraints("必填；最多8个字"))]
+    cases, _gaps, _skips = _build_requirement_cases(
         ["限购标签最多8个字"], "限购.pdf", field_rules=rules,
     )
     names = [c.name for c in cases]
-    assert len(names) == 3, names
+    assert len(names) >= 2, names
     assert any("必填或非法输入校验" in n for n in names)
+    for case in cases:
+        if case.keyword in ("反向", "边界"):
+            assert case.custom_fields.get("assertions"), case.name
 
 
 def test_unlinked_point_is_not_expanded_even_when_testable() -> None:
     """可测但回链不到字段 → 不扩写（没有断言可挂，扩写出来就是不可判定用例）。"""
-    cases, _ = _build_requirement_cases(["系统需要校验门店地址格式"], "限购.pdf")
+    cases, _gaps, _skips = _build_requirement_cases(["系统需要校验门店地址格式"], "限购.pdf")
     assert len(cases) == 1
 
 
@@ -159,7 +169,7 @@ def test_title_normalization_is_traceable() -> None:
     """标题被改过就必须留原文，验收时能逐字对回需求。"""
     rules = [FieldRule(name="限购标签", description="必填；最多8个字",
                        field_type="text", required=True)]
-    cases, _ = _build_requirement_cases(
+    cases, _gaps, _skips = _build_requirement_cases(
         ["限购标签最多8个字"], "限购.pdf", field_rules=rules)
     positive = [c for c in cases if "必填或非法输入校验" not in c.name
                 and "边界条件处理" not in c.name]

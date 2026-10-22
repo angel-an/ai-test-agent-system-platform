@@ -26,7 +26,7 @@ def test_rules_do_not_become_modules_and_unlinked_rules_are_not_tripled():
     """
     from app.api.v2.ai import UNMAPPED_MODULE
 
-    cases, _ = _build_requirement_cases(["订单取消后不显示评价入口"], "问卷.pdf")
+    cases, _gaps, _skips = _build_requirement_cases(["订单取消后不显示评价入口"], "问卷.pdf")
     assert len(cases) == 1
     _assign_case_metadata(cases, "3. 用于内部区分问卷\n订单取消后不显示评价入口", "问卷.pdf", None)
     assert cases[0].module == UNMAPPED_MODULE

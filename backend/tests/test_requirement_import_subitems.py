@@ -64,7 +64,7 @@ def test_pending_overlap_has_no_requirement_rule_or_assertions():
 
 
 def test_import_only_document_reaches_generation():
-    cases, _ = _build_minimal_cases(TEXT, "需求.txt")
+    cases, _gaps, _skips = _build_minimal_cases(TEXT, "需求.txt")
     assert sum(bool(c.custom_fields.get("import_clause_case")) for c in cases) == 4
     assert sum(bool(c.custom_fields.get("manual_supplement")) for c in cases) == 1
 

@@ -172,3 +172,55 @@ VAGUE_TERMS  3 条用例含不可测化表述（TC-249172 标题、TC-255903 预
 
 - `.workbuddy/tmp/item34_audit.py` — 标题/步骤模糊词分布
 - `.workbuddy/tmp/item4_precise.py` — 238 条扩写场景断言分布 + 语义对齐检查
+
+---
+
+## 实施记录：rev182（2026-10-22 落地）
+
+原方案（「按 kind 是否存在决定要不要扩写」）已实现，另修了两处只有落地后才暴露的问题。
+
+### 改了什么
+
+`backend/app/api/v2/ai.py`：
+
+1. **`_assertions_for_scenario(keyword, buckets)`** — 判定「扩不扩」与「挂什么断言」用**同一个函数**。
+   反向场景按 `required → condition → boundary` 顺序取第一个非空桶（原逻辑只认
+   `required`，导致「只有范围约束」的字段扩了反向却挂 0 条断言）；边界场景只认 `boundary` 桶。
+2. **扩写闸门**改为 `if _assertions_for_scenario(...)` 才追加场景，判定顺序调整为
+   `unlinked → list_or_nav → no_behavior → no_constraint`（从最具体到最笼统）。
+3. **`expand_skips` 回执** — 每个没扩写的点都记 `{point, reason, field?, detail}`，
+   `_build_expand_skip_warning()` 转成中文告警随生成回执返回（`expand_skip_warning`）。
+4. **`_TESTABLE_VERBS` 补选填语义**：`可以不填 / 无需填 / 非必填 / 不必填 …`
+   原先「备注可以不填」被判 `no_behavior`。
+5. **`_SUBJECT_DELIM_RE` 补 `--` / `—` / `->` / `→`**（**落地后发现的真缺陷**）：
+   「增加会员限购商品管理列表--交易云-运营-增加菜单」的主语区原先覆盖整串，
+   里面的「限购商品」被当成主语回链，给"新增菜单"条目挂上「限购商品=必填8字」断言
+   —— 与 rev133 假通过同型。
+
+### 实测效果（项目 1169，库中现存 34 条扩写场景）
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| 扩写场景中断言=0 | 25/34（73%） | **0** |
+| 同批条目的判定 | 全部扩写 | 8 条扩写且有断言，26 条不扩写 |
+| 正向用例（需求点） | 34 | 34（**一条没丢**） |
+
+> ⚠️ 这次改的是**生成期**逻辑，库里旧用例不会自愈——必须重新生成才能拿到新结果。
+
+### 回测与单测
+
+- `.workbuddy/tmp/rev182_backtest.py` — 10 种真实约束形态，空断言扩写 **0 条**。
+- `.workbuddy/tmp/rev182_replay.py` — 用库中真实条目重放，空断言 **0 条**。
+- `backend/tests/test_expand_assertion_gate_rev182.py`（24 条）— 锁三件事：
+  能扩⇔有断言、无约束不扩且原因可解释、有约束不误杀。
+  另含 `test_parser_gap_is_not_reported_as_gate_bug`：登记「口语化写法抽不出约束」
+  属 `extract_constraints` 的缺口（`仅支持jpg，png格式`、`最多2位小数`、
+  `仅当…时显示` 三种），**不是闸门误杀**，避免以后被反复误报。
+- 连带改动：`_build_minimal_cases` / `_build_requirement_cases` 返回二元组 → 三元组，
+  6 个测试文件共 14 处解包同步。
+
+### 遗留（本次未改）
+
+- `extract_constraints` 不支持：口语格式串、`最多N位小数`、`仅当…显示`。
+  这三类字段会被判「无约束」而不扩写——**宁可少生成也不生成空壳**，
+  但要补解析层才能让它们重新进入覆盖范围。

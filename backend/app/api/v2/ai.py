@@ -215,7 +215,7 @@ async def generate_from_document(
     created = []
     untraced_case_titles: list[str] = []
     module_hint = feature_points[0].feature_name if len(feature_points) == 1 else ""
-    minimal_cases, assertion_gaps = _build_minimal_cases(
+    minimal_cases, assertion_gaps, expand_skips = _build_minimal_cases(
         text, source, test_mode=test_mode, module_hint=module_hint, structure=structure
     )
     for case in minimal_cases:
@@ -256,6 +256,7 @@ async def generate_from_document(
     # 可判定断言、为什么、怎么补——方便识别补充，而不是等执行后看到
     # 一排「需人工执行」再回头查原因。
     assertion_gap_warning = _build_assertion_gap_warning(assertion_gaps)
+    expand_skip_warning = _build_expand_skip_warning(expand_skips)
     assertability = _assertability_preview(text, structure, source)
     assertability_md = _render_assertability_markdown(
         assertability, len(structure.field_rules) if structure is not None else 0
@@ -272,6 +273,8 @@ async def generate_from_document(
         "compilability_warning": compilability_warning,
         "assertion_gap_warning": assertion_gap_warning,
         "assertion_gap_cases": assertion_gaps,
+        "expand_skip_warning": expand_skip_warning,
+        "expand_skip_points": expand_skips,
         "assertability_preview": assertability,
         "traceability_warning": (
             f"有 {len(untraced_case_titles)} 条用例未能确定功能点归属（多功能点需求不默认绑定 FP-001），"
@@ -343,17 +346,9 @@ def _build_minimal_cases(
     # 只根据当前上传需求生成，不引入历史项目业务上下文。
     narrative_source = structure.narrative_text if structure is not None else text
     source_points = _extract_requirement_points(narrative_source, filename=filename)
-    narrative_cases, assertion_gaps = (
-        _build_requirement_cases(
-            source_points, filename, test_mode=test_mode, module_hint=module_hint,
-            field_rules=structure.field_rules if structure is not None else None,
-        )
-        if source_points
-        else _build_requirement_cases(
-            [], filename,
-            test_mode=test_mode, module_hint=module_hint,
-            field_rules=structure.field_rules if structure is not None else None,
-        )
+    narrative_cases, assertion_gaps, expand_skips = _build_requirement_cases(
+        source_points, filename, test_mode=test_mode, module_hint=module_hint,
+        field_rules=structure.field_rules if structure is not None else None,
     )
 
     module = narrative_cases[0].module if narrative_cases else ""
@@ -373,7 +368,7 @@ def _build_minimal_cases(
             narrative_cases + list_cases + import_cases + supplement_cases + export_cases,
             import_source, filename, structure)
         return _stamp_document_fingerprint(
-            _resolve_duplicate_titles(cases), text), assertion_gaps
+            _resolve_duplicate_titles(cases), text), assertion_gaps, expand_skips
 
     field_cases = _build_field_rule_cases(
         field_rules, filename, test_mode=test_mode, module_hint=module_hint or module
@@ -397,7 +392,8 @@ def _build_minimal_cases(
             + filter_cases + import_cases + list_cases
             + map_cases + read_only_cases + supplement_cases + export_cases,
             import_source, filename, structure)
-    return _stamp_document_fingerprint(_resolve_duplicate_titles(cases), text), assertion_gaps
+    return _stamp_document_fingerprint(
+        _resolve_duplicate_titles(cases), text), assertion_gaps, expand_skips
 
 
 def _stamp_document_fingerprint(
@@ -1050,7 +1046,11 @@ def _distinctive_field_aliases(
 
 #: 主语区边界：标签前缀（"查询条件："、"列表信息："、
 #: "文件名格式："）之后的字段名只是**被提到**，不是该句要验证的对象。
-_SUBJECT_DELIM_RE = re.compile(r"[：:，,。；;]")
+#: rev182 补 `--`/`—`/`->`/`→`：需求文档里极常见的「菜单名--路径--操作」写法。
+#: 不加的话「增加会员限购商品管理列表--交易云-运营-增加菜单」的主语区会覆盖整串，
+#: 里面的「限购商品」被当成主语回链 → 给一个"新增菜单"条目挂上「限购商品=必填8字」断言
+#: （与 rev133 的假通过同型）。回链判据必须只看分隔符前的部分。
+_SUBJECT_DELIM_RE = re.compile(r"[：:，,。；;]|\s*--+|—+|–+|->|→|\s-\s")
 #: 占位符 / 括号注释里的字段名同理——"调查问卷-{问卷标题+问卷编码}" 描述的是文件名构成，
 #: 不是「问卷标题必填」。
 _PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}|\[[^\[\]]*\]|（[^（）]*）|\([^()]*\)")
@@ -1075,7 +1075,7 @@ def _subject_zone(point: str) -> str:
 #: 增加菜单(菜单名称：会员限购商品管理)」）扩写出来就是纯噪音，实测产出
 #: 「…的必填或非法输入校验」「…的边界条件处理」两条无断言用例（TC-843363 / 2026-10-22 审计）。
 _TESTABLE_VERBS = (
-    "必填", "選填", "选填", "填写", "填入", "输入", "錄入", "录入", "提交", "保存", "儲存",
+    "必填", "必選", "必选", "選填", "选填", "填写", "填入", "输入", "錄入", "录入", "提交", "保存", "儲存",
     "校验", "校驗", "校验", "拦截", "攔截", "提示", "限制", "上限", "下限", "字符", "字数", "字數",
     "长度", "長度", "最多", "至少", "不能超过", "不能超過", "不得", "小于", "小於", "大于", "大於",
     "范围", "範圍", "格式", "上传", "上傳", "选择", "選擇", "勾选", "勾選", "单选", "多选",
@@ -1085,6 +1085,9 @@ _TESTABLE_VERBS = (
     "切换", "切換", "生效", "重复", "重複", "唯一", "去重", "同步", "回写", "回寫", "计算",
     "計算", "取整", "精度", "小数", "小數", "天数", "天數", "次数", "次數", "数量", "數量",
     "金额", "金額", "价格", "價格", "比例", "折扣", "状态", "狀態", "流转", "流轉",
+    # rev182：「可以不填 / 无需填写 / 非必填」是**可测的选填语义**（反向场景验「不填也能提交」），
+    # 原先全缺席 ⇒ 「备注可以不填」被当成"没有可验证行为"跳过，理由还归到了 no_behavior 上。
+    "可以不填", "可以不填寫", "无需填", "無需填", "非必填", "非必選", "非必选", "不必填",
 )
 #: 「只描述存在/入口」的弱语气词——命中它们本身不构成可测行为
 _PRESENCE_ONLY_RE = re.compile(
@@ -1150,6 +1153,30 @@ def _match_field_for_point(
 _NARRATIVE_SCENARIO_ASSERTION_KIND = {"正向": "required", "反向": "required", "边界": "boundary"}
 
 
+def _assertions_for_scenario(
+    keyword: str, bucket_map: dict[str, list[dict[str, Any]]]
+) -> list[dict[str, Any]]:
+    """按场景类型取断言——**不要**把「反向=required」写死成单一桶。
+
+    rev182：原实现 `_rule_assertions(rule).get(assertion_kind)` 让反向场景只认 `required`。
+    反向场景名为「必填**或**非法输入校验」，对「消费金额门槛」这类没有必填约束、
+    只有范围约束的字段，取断言时拿到空列表——正是本次要消灭的空壳形态。
+    现在反向场景按「必填 → 条件显示 → 取值约束（长度/范围/精度/格式/文件）」顺序
+    取**第一个非空桶**；边界场景取 `boundary`。
+
+    判定「扩不扩写」也调用本函数，保证「能扩」⇔「有断言可挂」是同一个判据。
+    """
+    if keyword == "边界":
+        return list(bucket_map.get("boundary") or [])
+    if keyword == "反向":
+        for bucket in ("required", "condition", "boundary"):
+            items = bucket_map.get(bucket) or []
+            if items:
+                return list(items)
+        return []
+    return list(bucket_map.get(_NARRATIVE_SCENARIO_ASSERTION_KIND.get(keyword, "required")) or [])
+
+
 def _build_requirement_cases(
     points: list[str],
     filename: str,
@@ -1163,17 +1190,56 @@ def _build_requirement_cases(
     module = _derive_requirement_module(points, filename, module_hint=module_hint)
     scenarios: list[tuple[str, str, Priority]] = []
     aliases = _distinctive_field_aliases(field_rules or [])
+    # rev182：记录「为什么没扩写」——原来静默跳过，用户只看得到用例变少，
+    # 分不清是"不该扩"还是"逻辑漏了"。这条清单进生成回执。
+    expand_skips: dict[str, dict[str, Any]] = {}
     for point in points:
         scenarios.append((point, "正向", Priority.HIGH if test_mode == "smoke" else Priority.MEDIUM))
         # rev181：扩写前置闸门——需求点必须①能回链到字段规则（否则没断言可挂）
         # ②本身描述可测行为。两个条件缺一就不扩写：
         #   有 reverse 无断言 = 不可判定用例（2026-10-22 审计：95 条里 29 条断言为 0）；
         #   无行为词 = 纯噪音（「增加…菜单(…）的必填或非法输入校验」TC-843363）。
-        if (test_mode != "smoke" and _match_field_for_point(point, aliases)
-                and _has_testable_behavior(point)
-                and not re.search(r"列表|查询|查詢|点击|點擊|入口|状态|狀態|問卷|问卷|新增题目|拖拽", point)):
+        if test_mode == "smoke":
+            continue
+        # rev182：判定顺序 = 从「原因最具体」到「最笼统」。
+        # 「未回链」是**数据侧**原因（字段说明表里没这个字段），必须先判——否则
+        # 「增加会员限购商品管理列表（交易云-运营-增加菜单）」会先命中 list_or_nav
+        # 和 no_behavior，让人误以为"加了定位器就能扩写"，实际是根本没绑字段。
+        linked_rule = _match_field_for_point(point, aliases)
+        if not linked_rule:
+            expand_skips[point] = {"point": point, "reason": "unlinked",
+                                   "detail": "未回链到字段说明表的字段规则，扩写无断言可挂"}
+            continue
+        # 「列表/导航」次之：这类条目本来就不适合反向/边界，与有没有约束无关。
+        # ⚠️ 必须先于 no_behavior 判：列表类条目常带「点击/查询」等行为词，
+        # 用 no_behavior 解释会把"不适用"说成"没有行为"。
+        if re.search(r"列表|入口|点击|點擊|拖拽", point):
+            expand_skips[point] = {"point": point, "reason": "list_or_nav",
+                                   "detail": "列表/导航类条目，反向与边界场景不适用"}
+            continue
+        if not _has_testable_behavior(point):
+            expand_skips[point] = {"point": point, "reason": "no_behavior",
+                                   "detail": "只描述了存在/入口（如新增某菜单），没有可验证行为"}
+            continue
+        # rev182：扩写必须**有断言可挂**——按目标场景 kind 探测该字段在此维度上是否真有约束。
+        # rev181 只保证「能回链到字段」，实测（全库 238 条扩写产物）182 条断言为 0：
+        # 回链成功 ≠ 有断言。`限购标签`（必填 + 最多8字）扩边界场景时断言桶是空的。
+        buckets = _rule_assertions(linked_rule[0])
+        field_name = linked_rule[0].name
+        added: list[str] = []
+        # 判定「扩不扩」与「挂什么断言」必须用同一套取桶逻辑，否则会出现
+        # 「扩写了但断言为空」——那正是 rev182 要消灭的形态。
+        if _assertions_for_scenario("反向", buckets):
             scenarios.append((f"{point}的必填或非法输入校验", "反向", Priority.MEDIUM))
+            added.append("reverse")
+        if _assertions_for_scenario("边界", buckets):
             scenarios.append((f"{point}的边界条件处理", "边界", Priority.MEDIUM))
+            added.append("boundary")
+        if not added:
+            expand_skips[point] = {
+                "point": point, "reason": "no_constraint", "field": field_name,
+                "detail": f"字段「{field_name}」在必填/取值/边界三个维度均无约束，扩写会是空断言用例",
+            }
 
     # 叙述条目规则回链（2026-09-25）：条目文本命中字段说明表字段的**独有**别名时，
     # 给该条场景用例挂上字段规则体 + 机器可判定断言，使其可被自动验证（compiled）。
@@ -1202,7 +1268,8 @@ def _build_requirement_cases(
         description = f"基于上传需求文档《{filename}》生成；场景来源：{title}。"
         if linked is not None:
             rule, alias = linked
-            assertion_kind = _NARRATIVE_SCENARIO_ASSERTION_KIND.get(keyword, "required")
+            bucket_map = _rule_assertions(rule)
+            _linked_assertions = _assertions_for_scenario(keyword, bucket_map)
             custom_fields["requirement_rule"] = {
                 "field": rule.name,
                 "type": rule.field_type,
@@ -1214,7 +1281,6 @@ def _build_requirement_cases(
                     "point": title[:120],
                 },
             }
-            _linked_assertions = _rule_assertions(rule).get(assertion_kind, [])
             custom_fields["assertions"] = _linked_assertions
             # rev106 修正：回鏈成功但該場景種類抽不出斷言（如規則無 required 約束時的正向場景）
             # → 不得標自動軌，否則「空斷言的自動用例」會被當成可執行材料。
@@ -1263,7 +1329,7 @@ def _build_requirement_cases(
             # 命中字段的场景带规则体+断言（compiled）；未命中只给稳定规则编号（dangling，不编造断言）
             custom_fields=custom_fields,
         ))
-    return cases, list(assertion_gaps.values())
+    return cases, list(assertion_gaps.values()), list(expand_skips.values())
 
 
 #: 伴生場景模板（rev105）：通用測試慣例，**不含任何項目/業務信息**。
@@ -1903,6 +1969,35 @@ def _build_compilability_warning(
         f"重列化行数={summary.get('rebalanced_rows')}，"
         f"被拒绝的表格行={summary.get('rejected_field_count')}）"
         "请确认文档是否包含字段说明表，或其表头/列结构是否可被识别。"
+    )
+
+
+def _build_expand_skip_warning(skips: list[dict[str, Any]]) -> str | None:
+    """扩写被跳过的说明（rev182）。
+
+    rev181 起"不扩写"是静默的——用户只看到用例条数变少，分不清是"本来就该少"
+    还是"逻辑漏了"。这里按原因分类点名，让"为什么没生成反向/边界场景"可解释。
+    """
+    if not skips:
+        return None
+    by_reason: dict[str, list[dict[str, Any]]] = {}
+    for item in skips:
+        by_reason.setdefault(item.get("reason") or "other", []).append(item)
+    labels = {
+        "unlinked": "未回链到字段说明表的字段规则（没有断言可挂）",
+        "no_behavior": "只描述了存在/入口，没有可验证行为",
+        "list_or_nav": "列表/导航类条目，反向与边界不适用",
+        "no_constraint": "字段在必填/取值/边界三个维度均无约束（扩写会是空断言用例）",
+    }
+    parts = []
+    for reason, items in by_reason.items():
+        names = "、".join(f"「{(i.get('point') or '')[:30]}」" for i in items[:3])
+        more = f" 等 {len(items)} 个" if len(items) > 3 else ""
+        parts.append(f"{len(items)} 个需求点{labels.get(reason, reason)}：{names}{more}")
+    return (
+        f"有 {len(skips)} 个需求点未生成反向/边界扩写场景（正向用例均已保留）："
+        + "；".join(parts) + "。"
+        "反向/边界场景只在字段规则**确实能给出断言**时才生成，避免产出无法判定的空壳用例。"
     )
 
 

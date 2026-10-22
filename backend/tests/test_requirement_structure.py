@@ -177,7 +177,7 @@ class TestGeneratedCases:
 
         structure = parse_requirement_document(name, None, content)
         # 现口径：_build_minimal_cases 返回 (cases, assertion_gaps)，用例列表取第一个元素
-        cases, _gaps = _build_minimal_cases(
+        cases, gaps_gaps, _gapsskips = _build_minimal_cases(
             structure.full_text, name, test_mode="sit", structure=structure
         )
         return cases, structure
@@ -240,7 +240,7 @@ class TestCaseContract:
         from app.api.v2.ai import _build_minimal_cases
 
         structure = parse_requirement_document(filename, None, content)
-        cases, _gaps = _build_minimal_cases(
+        cases, gaps_gaps, _gapsskips = _build_minimal_cases(
             structure.full_text, filename, test_mode="sit", structure=structure
         )
         return [c for c in cases if "字段规则" in (c.tags or [])]
@@ -299,7 +299,7 @@ class TestCaseContract:
         from app.api.v2.ai import _build_minimal_cases
 
         structure = parse_requirement_document("需求.txt", None, content)
-        cases, _gaps = _build_minimal_cases(
+        cases, gaps_gaps, _gapsskips = _build_minimal_cases(
             structure.full_text, "需求.txt", test_mode="sit", structure=structure
         )
         assert cases

@@ -153,7 +153,7 @@ class TestSameNameDifferentScenario:
             [FORM_TABLE, FILTER_TABLE],
         )
         structure = parse_requirement_document("YL-主数据管理.docx", None, content)
-        cases, _gaps = _build_minimal_cases(
+        cases, gaps_gaps, _gapsskips = _build_minimal_cases(
             structure.full_text, "YL-主数据管理.docx", structure=structure)
         return cases, structure
 
@@ -200,7 +200,7 @@ class TestCompanionCasesAreNotForceClassified:
             [FORM_TABLE],
         )
         structure = parse_requirement_document("YL-主数据管理.docx", None, content)
-        cases, _gaps = _build_minimal_cases(
+        cases, gaps_gaps, _gapsskips = _build_minimal_cases(
             structure.full_text, "YL-主数据管理.docx", structure=structure)
         companions = [c for c in cases if (c.custom_fields or {}).get("companion_template")]
         assert companions, "伴生场景用例不应消失"
@@ -443,7 +443,7 @@ class TestParsingDefectFixes:
             ]],
         )
         structure = parse_requirement_document("PR2.docx", None, content)
-        cases, _gaps = _build_minimal_cases(structure.full_text, "PR2.docx", structure=structure)
+        cases, gaps_gaps, _gapsskips = _build_minimal_cases(structure.full_text, "PR2.docx", structure=structure)
         export = [c for c in cases if (c.custom_fields or {}).get("export_detail_case")]
         assert export, [c.name for c in cases]
         assert "導出明細" in export[0].name and "欄位完整性" in export[0].name
@@ -458,12 +458,12 @@ class TestParsingDefectFixes:
               ["店鋪編號", "輸入框", "否", "小於等於30個字符；字符類型：大小寫字母、數字"]]],
         )
         structure = parse_requirement_document("YL.docx", None, content)
-        cases, _gaps = _build_minimal_cases(structure.full_text, "YL.docx", structure=structure)
+        cases, gaps_gaps, _gapsskips = _build_minimal_cases(structure.full_text, "YL.docx", structure=structure)
         assert cases
         # 指纹：同一文本稳定、不同文本不同
         digests = {(c.custom_fields or {}).get("source_text_sha1") for c in cases}
         assert len(digests) == 1 and None not in digests
-        other, _ = _build_minimal_cases(
+        other, _gaps, _skips = _build_minimal_cases(
             "B2B储值订单不能退款，储值订单不在C端显示；", "YL.docx", structure=None)
         assert other and (other[0].custom_fields or {}).get("source_text_sha1") not in digests
         # 精确来源：字段规则用例带表行，其余用例也应尽量带行号
