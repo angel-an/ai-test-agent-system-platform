@@ -330,6 +330,12 @@
       "digest": "1bbd42fed0b3",
       "date": "2026-10-22",
       "summary": "空时间段导出悬置定案：导出弹窗必填校验提示是表单内联 .ant-form-explain（用户截图 2026-10-22 实证），不是 toast——step3 改 toast+explain 双采样，任一命中 validation_toast 正则即判拦截生效（TR-794 unverified 根因修复）"
+    },
+    {
+      "rev": "rev177",
+      "digest": "d8af57688714",
+      "date": "2026-10-22",
+      "summary": "列表通道推广首站 purchase-limit：状态列是 .ant-switch（无文本）——action_matrix 的 status_in 改为按 ant-switch-checked 折算标签（status_on_label/off_label，缺省 启用/不启用），无 switch 时行为不变"
     }
   ]
 }

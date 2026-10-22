@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev176"' in src
+    assert 'COMPILER_REV = "rev177"' in src
     ast.parse(src)
 
 
@@ -688,3 +688,46 @@ def test_export_empty_time_validation_samples_form_explain():
     assert "vrx.test(validation.toast) || validation.explainHit" in blk
     # EXPORT_TRACE 整体序列化 validation ⇒ explain 证据自动可见
     assert "EXPORT_TRACE" in ts and "validation," in ts
+
+
+def test_action_matrix_status_column_reads_switch():
+    """rev177（purchase-limit 推广首站）：状态列可能是 .ant-switch（会员限购商品管理
+    实测：10 行 switch 全无文本，仅 checked 区分启用/不启用）。只读 td.innerText 会
+    恒 no_row_matched，与「数据里没有该状态的行」无法区分。"""
+    from app.services.web_case_compiler import parse_action_matrix_checks
+
+    items, rejects = parse_action_matrix_checks([
+        {"status_in": ["不启用"], "expect_row": ["编辑", "删除"]},
+    ])
+    assert not rejects
+    assert items[0]["status_on_label"] == "启用"
+    assert items[0]["status_off_label"] == "不启用"
+    # 可覆盖（有的 SUT 用「已启用 / 已停用」）
+    items2, _ = parse_action_matrix_checks([
+        {"status_in": ["已停用"], "status_on_label": "已启用", "status_off_label": "已停用"},
+    ])
+    assert items2[0]["status_on_label"] == "已启用"
+    assert items2[0]["status_off_label"] == "已停用"
+
+    ts = _ts()
+    i = ts.index("// rev177：状态列可能是 .ant-switch")
+    blk = ts[i:i + 700]
+    assert ".ant-switch" in blk and "ant-switch-checked" in blk
+    assert "sp.onLabel" in blk and "sp.offLabel" in blk
+    # 无 switch 时退化为原行为
+    assert "return norm0(t.innerText);" in blk
+    assert "statusKind: switchCol ? 'switch' : 'text'" in ts
+    # 参数确实传进快照 evaluate
+    j = ts.index("onLabel: String(check.status_on_label")
+    assert "offLabel: String(check.status_off_label" in ts[j:j + 200]
+
+
+def test_action_matrix_switch_labels_reach_form_plan():
+    """rev177：两个标签字段必须经 build_form_plan 落到 check 上（否则运行期永远用缺省）。
+    build_form_plan 在 locators 无 fields 时直接返回 None（跨业务防串表），
+    这里用源码透传断言，与 test_action_matrix_reaches_form_plan 同口径。"""
+    src = _py()
+    i = src.index('"type": "action_matrix"')
+    blk = src[i:i + 1200]
+    assert '"status_on_label": item["status_on_label"]' in blk
+    assert '"status_off_label": item["status_off_label"]' in blk

@@ -368,7 +368,13 @@ from app.services.web_upload_fixtures import (
 #:     用户截图 2026-10-22 实证），不是 toast——旧实现只采 toast ⇒ 永远判「空时间段
 #:     未拦截」（TR-794 该单 unverified 的根因）。改为 toast 与 explain **双采样**，
 #:     任一命中 ``validation_toast`` 正则即判拦截生效；EXPORT_TRACE 记录命中来源。
-COMPILER_REV = "rev176"
+#:   - rev177（2026-10-22，列表通道推广首站 purchase-limit）：``status_in`` 的取值来源。
+#:     会员限购商品管理的「状态」列是 ``.ant-switch`` 开关（checked=启用），单元格
+#:     **没有任何文本** ⇒ 旧实现只读 ``td.innerText`` 会恒 ``no_row_matched``，
+#:     与「数据里没有该状态的行」在回执上完全一样。改为：状态列内若有 ``.ant-switch``，
+#:     按 ``ant-switch-checked`` 映射成标签文本（``status_on_label``/``status_off_label``，
+#:     缺省 启用/不启用）；无 switch 时行为逐字不变（survey 的 .ant-tag 路径不受影响）。
+COMPILER_REV = "rev177"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -1667,6 +1673,9 @@ def parse_action_matrix_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dic
       ``name``             断言名（缺省由 status_in 生成）
       ``status_column``    状态所在列头文本（缺省 ``状态``）
       ``status_in``        目标状态取值（数组，繁简同配；**必填**）
+      ``status_on_label``  状态列是 ``.ant-switch`` 时，checked 折算成的标签（缺省 ``启用``）
+      ``status_off_label`` 同上，未 checked 折算成的标签（缺省 ``不启用``）——rev177：
+                           本 SUT 该列无任何文本，不折算则 ``status_in`` 恒匹配不到
       ``filter``           目标状态不在第 1 页时先用状态下拉筛选（缺省 False）
       ``filter_option``    筛选选项文本（缺省 = ``status_in[0]``）
       ``control_placeholder``  状态下拉 placeholder 候选（``filter: true`` 时用）
@@ -1733,6 +1742,8 @@ def parse_action_matrix_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dic
                 "name": name,
                 "status_column": str(entry.get("status_column") or "状态"),
                 "status_in": status_in,
+                "status_on_label": str(entry.get("status_on_label") or "启用").strip() or "启用",
+                "status_off_label": str(entry.get("status_off_label") or "不启用").strip() or "不启用",
                 "filter": bool(entry.get("filter")),
                 "filter_option": str(entry.get("filter_option") or status_in[0]),
                 "control_placeholder": _as_str_list(entry.get("control_placeholder"))
@@ -2933,6 +2944,8 @@ def build_form_plan(
             "list_url": item["list_url"] or str(loc.get("list_url") or ""),
             "status_column": item["status_column"],
             "status_in": item["status_in"],
+            "status_on_label": item["status_on_label"],
+            "status_off_label": item["status_off_label"],
             "filter": item["filter"],
             "filter_option": item["filter_option"],
             "control_placeholder": item["control_placeholder"],
@@ -7472,9 +7485,18 @@ _FORM_EXECUTOR_TS = r"""
               });
               return out;
             };
+            let switchCol = false;
             const cells = dataRows.map((tr: any) => {
               const t = tr.querySelectorAll('td')[ci];
-              return t ? norm0(t.innerText) : '';
+              if (!t) return '';
+              // rev177：状态列可能是 .ant-switch（本 SUT 会员限购商品管理即如此，单元格
+              // 无任何文本）——按 checked 折算成标签，否则 status_in 恒 no_row_matched。
+              const sw = t.querySelector('.ant-switch');
+              if (sw) {
+                switchCol = true;
+                return sw.classList.contains('ant-switch-checked') ? sp.onLabel : sp.offLabel;
+              }
+              return norm0(t.innerText);
             });
             let hit = -1, mode = '';
             cells.forEach((c: string, i: number) => {
@@ -7500,10 +7522,13 @@ _FORM_EXECUTOR_TS = r"""
               });
             }
             return {ok: true, rowIndex: hit, status: cells[hit], matchMode: mode,
+                    statusKind: switchCol ? 'switch' : 'text',
                     labels, rows: dataRows.length,
                     row: norm0(dataRows[hit].innerText).slice(0, 110)};
           }, {column: String(check.status_column || '状态'),
-              in: (check.status_in || []).map((s: any) => String(s))})
+              in: (check.status_in || []).map((s: any) => String(s)),
+              onLabel: String(check.status_on_label || '启用'),
+              offLabel: String(check.status_off_label || '不启用')})
             .catch((e: any) => ({ok: false, why: 'eval_error', err: String(e).slice(0, 100)}));
           stageMark('row_scan', {result: snap});
           if (!snap || !snap.ok) {
