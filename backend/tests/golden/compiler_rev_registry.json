@@ -324,6 +324,12 @@
       "digest": "2646909c4ac9",
       "date": "2026-10-22",
       "summary": "TR-793 复盘：confirm(via menu) 菜单项对合成 click 无响应（clicked:ok 却 dialog_found:false，探针 5s 全 DOM 为空、记录仍在）；改为 Playwright locator 真实输入管线点击（先精确 hasText 正则），合成 click 仅作回退"
+    },
+    {
+      "rev": "rev176",
+      "digest": "1bbd42fed0b3",
+      "date": "2026-10-22",
+      "summary": "空时间段导出悬置定案：导出弹窗必填校验提示是表单内联 .ant-form-explain（用户截图 2026-10-22 实证），不是 toast——step3 改 toast+explain 双采样，任一命中 validation_toast 正则即判拦截生效（TR-794 unverified 根因修复）"
     }
   ]
 }

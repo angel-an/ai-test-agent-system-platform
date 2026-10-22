@@ -363,7 +363,12 @@ from app.services.web_upload_fixtures import (
 #:     dialog_found:false，探针 5s 全 DOM 转储为空、记录仍在；Playwright 真实
 #:     输入管线（locator click）才触发 Popconfirm（探针2 实证）。优先 locator
 #:     真实点击，失败回退合成。
-COMPILER_REV = "rev175"
+#:   - rev176（2026-10-22，空时间段导出悬置定案）：step3 空时间段校验提示的采样面。
+#:     本 SUT 导出弹窗的必填校验提示是**表单内联文案**（`.ant-form-explain`「请选择时间」，
+#:     用户截图 2026-10-22 实证），不是 toast——旧实现只采 toast ⇒ 永远判「空时间段
+#:     未拦截」（TR-794 该单 unverified 的根因）。改为 toast 与 explain **双采样**，
+#:     任一命中 ``validation_toast`` 正则即判拦截生效；EXPORT_TRACE 记录命中来源。
+COMPILER_REV = "rev176"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -7987,7 +7992,18 @@ _FORM_EXECUTOR_TS = r"""
             }, String(check.confirm_label || '导出|确定'));
             await page.waitForTimeout(2000);
             validation.toast = await toastOf();
-            validation.ok = new RegExp(String(check.validation_toast || '请选择')).test(validation.toast);
+            // rev176：本 SUT 空时间段校验提示是**表单内联文案**（.ant-form-explain
+            // 「请选择时间」，用户截图 2026-10-22 实证），不是 toast。toast 与 explain
+            // 双采样，任一命中 validation_toast 正则即判拦截生效。
+            validation.explain = await page.evaluate(() => Array.from(
+              document.querySelectorAll('.ant-modal-content .ant-form-explain'))
+              .filter((e: any) => e.offsetParent !== null)
+              .map((e: any) => String(e.innerText || '').trim())
+              .filter((t: string) => t.length > 0));
+            const vrx = new RegExp(String(check.validation_toast || '请选择'));
+            validation.explainHit = !!(validation.explain || [])
+              .some((t: string) => vrx.test(t));
+            validation.ok = vrx.test(validation.toast) || validation.explainHit;
             validation.checked = true;
             if (!validation.ok) problems.push('空时间段未拦截');
           }

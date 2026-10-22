@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev175"' in src
+    assert 'COMPILER_REV = "rev176"' in src
     ast.parse(src)
 
 
@@ -673,3 +673,18 @@ def test_action_matrix_confirm_menu_click_uses_locator():
     assert "realClicked" in ts and "? {ok: true, how: 'locator'}" in ts
     # 回退合成路径仍在
     assert "menu_item_not_found" in ts
+
+
+def test_export_empty_time_validation_samples_form_explain():
+    """空时间段导出悬置定案（rev176）：本 SUT 导出弹窗必填校验提示是表单内联
+    `.ant-form-explain`「请选择时间」（用户截图 2026-10-22 实证），不是 toast——
+    旧实现只采 toast ⇒ 永远判「空时间段未拦截」（TR-794 unverified 根因）。
+    step3 必须 toast 与 explain 双采样，任一命中即判拦截生效。"""
+    ts = _ts()
+    i = ts.index("validation.toast = await toastOf();")
+    blk = ts[i:i + 900]
+    assert ".ant-form-explain" in blk
+    assert "explainHit" in blk
+    assert "vrx.test(validation.toast) || validation.explainHit" in blk
+    # EXPORT_TRACE 整体序列化 validation ⇒ explain 证据自动可见
+    assert "EXPORT_TRACE" in ts and "validation," in ts
