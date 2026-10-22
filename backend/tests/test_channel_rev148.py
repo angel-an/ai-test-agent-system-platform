@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev177"' in src
+    assert 'COMPILER_REV = "rev179"' in src
     ast.parse(src)
 
 
@@ -731,3 +731,52 @@ def test_action_matrix_switch_labels_reach_form_plan():
     blk = src[i:i + 1200]
     assert '"status_on_label": item["status_on_label"]' in blk
     assert '"status_off_label": item["status_off_label"]' in blk
+
+
+def test_channel_only_config_is_honoured_without_fields():
+    """rev178：只有列表域通道、没有表单字段的定位器表不能被当成「没配置」。
+
+    TR-796 实测：会员限购商品管理配了 list_url + action_matrix_checks，回执却是
+    ``form_locator_source=project_registration`` / ``form_executable_checks=0``
+    —— 与"什么都没配"在回执上完全一样，配置方会去反复检查本来就对的配置。
+    """
+    from app.services.web_case_compiler import (
+        build_form_plan, has_channel_config, resolve_form_locators)
+
+    only_matrix = {
+        "list_url": "#/decoration/purchaselimit",
+        "action_matrix_checks": [{"name": "m", "status_in": ["启用"], "expect_row": ["编辑"]}],
+    }
+    assert has_channel_config(only_matrix) is True
+    assert has_channel_config({"name": "空"}) is False
+    assert has_channel_config({"fields": {"a": {}}}) is True
+    assert has_channel_config(None) is False
+
+    loc, source = resolve_form_locators("purchase_limit", only_matrix, {"fields": {"x": {}}})
+    assert source == "sub_function_override" and loc is only_matrix
+
+    plan = build_form_plan({"assertions": []}, only_matrix)
+    assert plan is not None, "只有通道配置也必须生成计划"
+    kinds = [c.get("type") for c in plan["checks"]]
+    assert kinds == ["action_matrix"]
+
+    # 防串表语义不能破：完全没配置 → 仍然 None
+    assert build_form_plan({"assertions": []}, {"name": "空"}) is None
+
+
+def test_list_domain_plan_skips_open_form():
+    """rev179：列表域通道不容许被"必须开表单"绑架。
+
+    TR-797 实测：只有 action_matrix 的计划仍触发 openForm，纯列表子功能
+    （会员限购商品管理，无任何表单字段）在入口阶段硬失败
+    `无法打开表单：定位器未配置表单入口（flow=recharge_modal）`。
+    """
+    ts = _ts()
+    i = ts.index("const LIST_DOMAIN_KINDS")
+    blk = ts[i:i + 1100]
+    for kind in ("'list_visible'", "'export_check'", "'filter_check'", "'action_matrix'"):
+        assert kind in blk, kind
+    assert "hasFormFieldChecks" in blk
+    # create 语义场景仍要开表单（不能被这次放宽顺带跳过）
+    assert "hasFormFieldChecks || needsCanvas" in blk
+    assert "跳过主流程 openForm" in ts

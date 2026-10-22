@@ -336,6 +336,18 @@
       "digest": "d8af57688714",
       "date": "2026-10-22",
       "summary": "列表通道推广首站 purchase-limit：状态列是 .ant-switch（无文本）——action_matrix 的 status_in 改为按 ant-switch-checked 折算标签（status_on_label/off_label，缺省 启用/不启用），无 switch 时行为不变"
+    },
+    {
+      "rev": "rev178",
+      "digest": "160ea06c1736",
+      "date": "2026-10-22",
+      "summary": "只有列表域通道（无 fields）的定位器表不再被当成没配置：resolve_form_locators 与 build_form_plan 改用 has_channel_config 判定（list_url/list_checks/filter_checks/action_matrix_checks/export_checks/negative_scenarios），TR-796 空跑根因修复"
+    },
+    {
+      "rev": "rev179",
+      "digest": "dbfb66bf6d45",
+      "date": "2026-10-22",
+      "summary": "列表域计划不再强制 openForm：runFormChecks 只对表单域检查开表单，list_visible/export_check/filter_check/action_matrix 视为列表域；create 语义场景仍预开。TR-797「无法打开表单（flow=recharge_modal）」根因修复"
     }
   ]
 }

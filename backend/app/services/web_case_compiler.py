@@ -374,7 +374,18 @@ from app.services.web_upload_fixtures import (
 #:     与「数据里没有该状态的行」在回执上完全一样。改为：状态列内若有 ``.ant-switch``，
 #:     按 ``ant-switch-checked`` 映射成标签文本（``status_on_label``/``status_off_label``，
 #:     缺省 启用/不启用）；无 switch 时行为逐字不变（survey 的 .ant-tag 路径不受影响）。
-COMPILER_REV = "rev177"
+#:   - rev178（2026-10-22，同站第二个缺口）：「只有列表域通道」的配置被静默忽略。
+#:     ``resolve_form_locators`` 原先要求 override 的 ``fields`` 非空，``build_form_plan``
+#:     也在 ``not fields`` 时直接返回 None ⇒ 会员限购商品管理（只有列表页、无表单字段）
+#:     配了 ``list_url`` + ``action_matrix_checks`` 仍走 ``project_registration``，
+#:     回执 ``form_executable_checks=0``（TR-796 实测）。改为按
+#:     :func:`has_channel_config` 判定「有没有配置」，两个门槛同时放宽。
+#:   - rev179（2026-10-22，同站第三个缺口）：**列表域计划不该开表单**。rev101 只排除了
+#:     「零字段检查」的计划，但 list_visible/export_check/filter_check/action_matrix
+#:     都是列表域检查（各自 goto 列表 URL 后断言），`planChecks.length > 0` 仍会触发
+#:     openForm ⇒ 纯列表子功能在入口阶段硬失败（TR-797：
+#:     `无法打开表单：定位器未配置表单入口（flow=recharge_modal）`）。
+COMPILER_REV = "rev179"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -383,6 +394,8 @@ _DIGEST_CONSTANTS: tuple[str, ...] = (
     "FORM_CHECK_KINDS",
     "LOCATOR_DEPENDENT_KINDS",
     "SOFT_CHECK_KINDS",
+    # rev178：决定「这份定位器表算不算有配置」，直接改变是否生成任何检查 ⇒ 纳入
+    "CHANNEL_ONLY_CONFIG_KEYS",
 )
 
 #: 纳入 digest 的编译函数（源码级）。新增/修改这些函数的实现都会改变 digest。
@@ -409,6 +422,9 @@ _DIGEST_FUNCTIONS: tuple[str, ...] = (
     # rev173：状态×操作矩阵的解析语义（status_in 必填 / confirm 结构 / 数组字段校验）
     # 直接决定运行期断言哪些操作 ⇒ 同源，必须纳入 digest。
     "parse_action_matrix_checks",
+    # rev178：来源判定本身（哪些配置算"有配置"）直接决定跑不跑通道 ⇒ 纳入 digest
+    "has_channel_config",
+    "resolve_form_locators",
     "render_form_executor",
 )
 
@@ -2273,6 +2289,37 @@ TEMPLATE_FORM_LOCATORS: dict[str, dict[str, Any]] = {
 }
 
 
+#: 「非字段级」的通道配置键（rev178）。有这些**之一**，定位器表就算「有配置」——
+#: 哪怕 ``fields`` 为空。实测动机（2026-10-22 会员限购商品管理推广首站）：该子功能
+#: 只有列表页，压根没有表单字段，配了 ``list_url`` + ``action_matrix_checks`` 却因为
+#: ``resolve_form_locators`` 要求 ``fields`` 非空而被静默跳过 ⇒ TR-796 回执
+#: ``form_locator_source=project_registration``、``form_executable_checks=0``，
+#: 与「什么都没配」在回执上完全一样。
+CHANNEL_ONLY_CONFIG_KEYS: tuple[str, ...] = (
+    "list_url", "list_checks", "filter_checks", "action_matrix_checks",
+    "export_checks", "negative_scenarios",
+)
+
+
+def has_channel_config(cfg: Any) -> bool:
+    """定位器表里是否有**任何**可用配置（字段级 ``fields`` 或列表域通道）。
+
+    只看「有没有」，不做值域校验——真配错了由各自的 ``*_rejects`` 报出来，
+    这里早退会把「配置写错」和「没配置」混为一谈。
+    """
+    if not isinstance(cfg, dict):
+        return False
+    if cfg.get("fields"):
+        return True
+    for key in CHANNEL_ONLY_CONFIG_KEYS:
+        val = cfg.get(key)
+        if isinstance(val, (list, tuple, dict)) and val:
+            return True
+        if isinstance(val, str) and val.strip():
+            return True
+    return False
+
+
 def resolve_form_locators(
     template_key: Any,
     override: Any = None,
@@ -2285,10 +2332,13 @@ def resolve_form_locators(
     - ``project_registration``：项目内按模板键注册的表（P6 数据化注册，可在线维护、跨子功能复用）；
     - ``template_default``：平台内置表（老项目零改动兜底）；
     - ``none``：都没有 → 不生成表单检查（**不回退到其它业务的表**）。
+
+    rev178：override 的判定从「必须有 ``fields``」放宽为「有字段**或**任一路列表域通道」
+    （:func:`has_channel_config`）——只有列表页的子功能不该被当成"没配置"。
     """
-    if isinstance(override, dict) and override.get("fields"):
+    if has_channel_config(override):
         return override, "sub_function_override"
-    if isinstance(registered, dict) and registered.get("fields"):
+    if has_channel_config(registered):
         return registered, "project_registration"
     table = TEMPLATE_FORM_LOCATORS.get(str(template_key or ""))
     if isinstance(table, dict) and table.get("fields"):
@@ -2442,7 +2492,9 @@ def build_form_plan(
     """
     loc = locators if isinstance(locators, dict) else {}
     fields = loc.get("fields") or {}
-    if not fields:
+    # rev178：只有列表域通道（无表单字段）也必须能生成计划——否则配了 list_url /
+    # action_matrix_checks 的子功能会在这里被早退成"什么都没有"。
+    if not fields and not has_channel_config(loc):
         return None
 
     checks: list[dict[str, Any]] = []
@@ -4020,12 +4072,21 @@ _FORM_EXECUTOR_TS = r"""
     const planScenarios: any[] = FORM_PLAN.negative_scenarios || [];
     const needsCanvas = planScenarios.some(
       (s: any) => String((s && s.target_entry) || 'custom') === 'create');
+    // rev179：**列表域通道不需要表单入口**。上面 rev101 只排除了"零字段检查"的计划，
+    // 但 list_visible / export_check / filter_check / action_matrix 都是列表域检查
+    // ——它们各自 goto 列表 URL 后直接断言，硬开表单会让纯列表子功能（会员限购商品管理：
+    // 只有列表页、无任何表单字段）在入口阶段就硬失败
+    // （TR-797 实测：`无法打开表单：定位器未配置表单入口（flow=recharge_modal）`）。
+    const LIST_DOMAIN_KINDS = ['list_visible', 'export_check', 'filter_check', 'action_matrix'];
+    const hasFormFieldChecks = planChecks.some(
+      (c: any) => LIST_DOMAIN_KINDS.indexOf(String((c && c.type) || '')) < 0);
     let modal: any = null;
-    if (planChecks.length > 0 || planScenarios.length === 0 || needsCanvas) {
+    if (hasFormFieldChecks || needsCanvas
+        || (planChecks.length === 0 && planScenarios.length === 0)) {
       modal = await openForm();
     } else {
-      console.log('CS_FORM_DIAG scenario-only plan: 跳过主流程 openForm（场景自带入口，'
-        + '无 create 语义场景）');
+      console.log('CS_FORM_DIAG list-only plan: 跳过主流程 openForm（无表单域检查，'
+        + '入口由列表 URL 负责）');
     }
     const fieldDefs: Record<string, any> = (FORM_PLAN.locators || {}).fields || {};
 
