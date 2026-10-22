@@ -1,6 +1,6 @@
 # 问卷表单 radio/checkbox 必填字段 —— API 层兜底补测记录
 
-> 日期：2026-10-22　SUT：营销云 UAT（`imarketing-uat.xysjg.com`）　子功能：`marketing-cloud-survey-management/survey-operation`
+> 日期：2026-10-22　项目：**小杨生煎**（需求名称：问卷调查）　SUT：数盈营销云 UAT（`imarketing-uat.xysjg.com`）　子功能：`marketing-cloud-survey-management/survey-operation`
 > 背景：5 条用例的 `submit_only`（提交时校验）在 UI 层恒为 `unverified`——单选组有默认选中、多选组无自由输入，
 > 页面构造不出「必填为空」的提交。按计划改走 API 层直调创建接口，验证服务端是否有必填兜底。
 
@@ -58,7 +58,7 @@ DELETE .../v1/evaluate/{id}      # 删除（清理用，data:true 即成功）
 
 ## 5. 缺陷草稿（待确认后登记，不自动提）
 
-- 标题：`【美心-HK】_UAT_YL主数据管理，调查问卷管理-新建问卷，接口未校验必填字段，可创建无业务类型/无题目类型的问卷`
+- 标题：`【小杨生煎】_UAT_问卷调查，调查问卷管理-新建问卷，接口未校验必填字段，可创建无业务类型/无题目类型的问卷`
 - 类型：功能缺陷（服务端校验缺失）　优先级：中
 - 复现：登录 UAT → 取前端 `access-token` 请求头 → `POST /v1/evaluate`，请求体删除 `orderType` 后提交 →
   返回 `resultCode=0` 并生成 `id`；`GET /v1/evaluate/{id}` 回读 `orderType` 为 `null`。
