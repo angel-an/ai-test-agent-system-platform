@@ -57,7 +57,8 @@
 
 ## 4. 执行结论（2026-10-22，A 类已落地）
 
-`purchase-limit-form-probe` 已推广完成并通过验收（**TR-798：MATRIX_PHASE 3/3 pass，0 unverified，balanced=true**）。
+`purchase-limit-form-probe` 已推广完成并通过验收（**TR-798：MATRIX_PHASE 3/3 pass，0 unverified，balanced=true**；
+rev180 判定面修正后复跑 **TR-799 同样 3/3 pass、1 passed**）。
 过程中暴露并修掉了 3 个「只有列表页的子功能」专属缺口 —— 这 3 个缺口在 survey 上永远不会显形
 （survey 同时有字段级配置和表单页），是推广到纯列表子功能才暴露的：
 
@@ -66,6 +67,9 @@
 | 1 | `status_in` 恒 `no_row_matched`，cells 全空 | 状态列是 `.ant-switch`，单元格**无文本**，只有 checked 位 | rev177：状态列有 switch 时按 `ant-switch-checked` 折算标签（`status_on_label`/`status_off_label`，缺省 启用/不启用） |
 | 2 | `form_locator_source=project_registration`、`form_executable_checks=0` | `resolve_form_locators` / `build_form_plan` 要求 `fields` 非空，列表通道配置被当「没配置」跳过 | rev178：按 `has_channel_config` 判定（list_url/list_checks/filter_checks/action_matrix_checks/export_checks/negative_scenarios） |
 | 3 | 入口阶段硬失败 `无法打开表单：定位器未配置表单入口（flow=recharge_modal）` | `runFormChecks` 只要 `planChecks.length > 0` 就 `openForm()`，列表域检查也被算进去 | rev179：`list_visible/export_check/filter_check/action_matrix` 视为列表域，无表单域检查时跳过 openForm（create 语义场景仍预开） |
+
+> 注：rev178 曾把 `negative_scenarios` 也算作「有配置的通道键」，被 `test_no_fields_means_no_plan`
+> 拦下（场景 setup 要在表单里点击/填值/提交，不属于列表域）—— rev180 已收窄为 5 项，这里是裁判修正。
 
 ### 落地配置（`web_sub_functions.custom_config.field_locators`，子功能 `1fa23da4-…`）
 
