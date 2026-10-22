@@ -36,7 +36,7 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev179"' in src
+    assert 'COMPILER_REV = "rev180"' in src
     ast.parse(src)
 
 

@@ -385,7 +385,12 @@ from app.services.web_upload_fixtures import (
 #:     都是列表域检查（各自 goto 列表 URL 后断言），`planChecks.length > 0` 仍会触发
 #:     openForm ⇒ 纯列表子功能在入口阶段硬失败（TR-797：
 #:     `无法打开表单：定位器未配置表单入口（flow=recharge_modal）`）。
-COMPILER_REV = "rev179"
+#:   - rev180（2026-10-22，rev178 的裁判修正）：``negative_scenarios`` 不算「有配置」的
+#:     通道键。它虽非定位器，但 setup 要在表单里点击/填值/提交 ⇒ 归入它会破坏
+#:     「无 fields + 只有场景 → 无计划」的既有契约（``test_no_fields_means_no_plan``
+#:     红）。判定面收敛为 list_url / list_checks / filter_checks / action_matrix_checks /
+#:     export_checks 五项。
+COMPILER_REV = "rev180"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -2295,9 +2300,13 @@ TEMPLATE_FORM_LOCATORS: dict[str, dict[str, Any]] = {
 #: ``resolve_form_locators`` 要求 ``fields`` 非空而被静默跳过 ⇒ TR-796 回执
 #: ``form_locator_source=project_registration``、``form_executable_checks=0``，
 #: 与「什么都没配」在回执上完全一样。
+#:
+#: ⚠️ rev180 修正：``negative_scenarios`` **不在此列**。它虽不是定位器，但要在**表单里**
+#: 点击/填值/提交（``setup`` 依赖 modal/form_button），把它算成"有配置"会让
+#: 「无 fields + 只有场景」的计划从 ``None`` 变成一个没有字段的计划，
+#: 与 ``test_no_fields_means_no_plan`` 保护的既有契约冲突 —— 那次裁判是错的，已撤回。
 CHANNEL_ONLY_CONFIG_KEYS: tuple[str, ...] = (
-    "list_url", "list_checks", "filter_checks", "action_matrix_checks",
-    "export_checks", "negative_scenarios",
+    "list_url", "list_checks", "filter_checks", "action_matrix_checks", "export_checks",
 )
 
 

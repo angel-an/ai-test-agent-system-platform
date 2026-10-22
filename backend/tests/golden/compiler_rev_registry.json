@@ -348,6 +348,12 @@
       "digest": "dbfb66bf6d45",
       "date": "2026-10-22",
       "summary": "列表域计划不再强制 openForm：runFormChecks 只对表单域检查开表单，list_visible/export_check/filter_check/action_matrix 视为列表域；create 语义场景仍预开。TR-797「无法打开表单（flow=recharge_modal）」根因修复"
+    },
+    {
+      "rev": "rev180",
+      "digest": "b40b5cddc722",
+      "date": "2026-10-22",
+      "summary": "修正 rev178 判定面：negative_scenarios 不算列表域通道键（其 setup 要在表单里点击/填值/提交），判定收敛为 list_url/list_checks/filter_checks/action_matrix_checks/export_checks 五项"
     }
   ]
 }
