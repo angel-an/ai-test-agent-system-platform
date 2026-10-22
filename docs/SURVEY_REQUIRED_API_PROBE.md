@@ -56,11 +56,22 @@ DELETE .../v1/evaluate/{id}      # 删除（清理用，data:true 即成功）
 - 证据：`.workbuddy/tmp/xy_survey/api_required_probe_1022091221.json`、`api_required_readback_*.json`；
   脚本：`.workbuddy/tmp/api_required_probe2.py`、`api_required_readback.py`、`api_cleanup_probe.py`。
 
-## 5. 缺陷草稿（待确认后登记，不自动提）
+## 5. 缺陷草稿（**已提交**，2026-10-22 11:00）
 
-- 标题：`【小杨生煎】_UAT_问卷调查，调查问卷管理-新建问卷，接口未校验必填字段，可创建无业务类型/无题目类型的问卷`
+- IDP：项目 **1169（小杨生煎首年实施服务项目）**
+- **issueId `932542` / 编号 `jf-20260122392-01-3191`**，类型 bug，状态待处理，描述版本 v2
+- 标题：`【小杨生煎】_UAT_问卷调查，调查问卷管理-新建问卷，接口未校验必填字段，可通过接口创建无业务类型/无题目类型的问卷`
+- 验证：`POST` 返回 **HTTP 201**；回读 `summary` **逐字一致**（True）；描述为 14 段 Quill Delta，无占位符残留
+- requestId：`0A000527-MVIXXL80-85`（10:59 复采的负例请求；该请求创建的数据 `1454697321196560441` 已删除）
+- 脚本：`.workbuddy/tmp/idp_create_survey_required.py`、`idp_reqid_probe2.py`；回执：`idp_survey_required_created.json`、`xy_survey/idp_reqid_capture.json`
+
+<details>
+<summary>提交正文（历史记录，状态已由上节取代）</summary>
+
 - 类型：功能缺陷（服务端校验缺失）　优先级：中
 - 复现：登录 UAT → 取前端 `access-token` 请求头 → `POST /v1/evaluate`，请求体删除 `orderType` 后提交 →
   返回 `resultCode=0` 并生成 `id`；`GET /v1/evaluate/{id}` 回读 `orderType` 为 `null`。
 - 预期：服务端校验必填，返回非 0 错误码并提示（如「请选择业务类型」），不落库。
 - 实际：创建成功且落库为空值。
+
+</details>
