@@ -1064,7 +1064,13 @@ _LEADING_ENUM_RE = re.compile(
 
 
 def _subject_zone(point: str) -> str:
-    """取出"这句话在讲谁"——占位符剔除、段首编号剥离、遇到标签冒号/逗号即止。"""
+    """取出"这句话在讲谁"——占位符剔除、段首编号剥离、遇到标签冒号/逗号/路径分隔即止。
+
+    ⚠️ 这里**不**因为「分隔符后是约束」就并回主语区。主语区越宽，越容易把
+    「这句话只是提到了某字段」误判成「这句话在验证某字段」——那正是 rev133
+    修掉的假通过（标题讲导出、断言验必填）。约束信息由**标题层**保留
+    （见 `_is_path_tail`：尾段是约束时整个保留），断言层仍然只认主语。
+    """
     text = _PLACEHOLDER_RE.sub("", point or "").strip()
     text = _LEADING_ENUM_RE.sub("", text).strip()
     return _SUBJECT_DELIM_RE.split(text, 1)[0]
@@ -2386,6 +2392,17 @@ def _num_fmt(value: float) -> str:
 #: 不是被测对象。只在含 `--` 或 ≥2 个 `-` 时切掉尾段，正常词（「问卷-新建」）不受影响。
 _PATH_TAIL_RE = re.compile(
     r"\s*(?:--|[—–]{1,2}|->|→)\s*[^，。；;\r\n]{1,40}(?:\s*[（(][^（）()]{0,20}[）)])?\s*$")
+#: 尾段像「路径」的判据：含层级分隔（交易云-运营-增加菜单）或是纯动作+入口（→增加菜单）。
+#: 只有像路径才切——`--` 在需求文档里也常作「对象---行为约束」的分隔符。
+_PATH_SEGMENTS_RE = re.compile(r"[-—–/→>]+")
+_PATH_ACTION_RE = re.compile(r"^(?:增加|新增|添加|新建|進入|进入|打開|打开|點擊|点击|跳轉|跳转)")
+#: 尾段若是**可测约束**（支持模糊查询 / 默认选中 / 最多N字…），它才是这句的判定依据，
+#: 不能当路径切掉。实测回归：`查询条件：问卷标题---支持模糊查询` 被切成
+#: `查询条件：问卷标题`，标题不再表达"模糊查询"这一唯一的可断言点（rev182 落地后引入）。
+_PATH_CONSTRAINT_RE = re.compile(
+    r"支持|默認|默认|最多|至少|不少於|不少于|不能|不得|限制|校驗|校验|必填|必選|必选|"
+    r"模糊|精確|精确|可選|可选|範圍|范围|時長|时长|排序|升序|降序|"
+    r"自動|自动|實時|实时|同步|隱藏|隐藏|置灰|禁用")
 #: 标题里可省略的弱意义尾句（不影响可判定性）
 _WEAK_TAIL_RE = re.compile(r"[，,]\s*(?:即可|就行了|同上|以此类推|等等)\s*$")
 #: 流水线自己生成的场景后缀（扩写模板句式），不属于需求现象
@@ -2412,14 +2429,37 @@ _TITLE_CANON: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
+def _is_path_tail(tail: str) -> bool:
+    """尾段到底是不是「导航路径」？不是所有 `--` 后面都是路径。
+
+    2026-10-22 实测回归（rev182 落地后引入）：
+    `查询条件：问卷标题---支持模糊查询` 被切成 `查询条件：问卷标题`，
+    标题丢掉唯一的可断言点（模糊匹配）。但 `增加XX列表--交易云-运营-增加菜单`
+    确实该切（那是菜单位置，不是被测行为）。两者的差别是**语义**，不是分隔符：
+    - 像路径 = 含层级分隔（`交易云-运营-增加菜单`）或以动作+入口开头（`→增加菜单`）；
+    - 像约束 = 含「支持/默认/最多/必填/模糊/隐藏…」等**可判定**的词。
+    约束优先：只要尾段里出现可测约束词，就整句保留——宁可标题长一点，也不能删掉判据。
+    """
+    tail = (tail or "").strip()
+    if not tail:
+        return True
+    if _PATH_CONSTRAINT_RE.search(tail):
+        return False
+    return bool(_PATH_SEGMENTS_RE.search(tail)) or bool(_PATH_ACTION_RE.match(tail))
+
+
 def _strip_path_tail(text: str) -> str:
     """切掉「--交易云-运营-增加菜单」这类导航路径尾段（只保留被测对象）。
 
     只认**路径标记**（`--`/`—`/`->`/`→`），普通连字符不算——「问卷列表-状态筛选」里的
     `-` 是对象名的分隔符。括号里的路径说明同样处理（先拆括号，再逐段清）。
+    是否真属路径由 `_is_path_tail` 判——尾段是约束（「支持模糊查询」）时必须保留。
     """
     def _cut(segment: str, in_group: bool = False) -> str:
         raw = (segment or "").strip()
+        match = _PATH_TAIL_RE.search(raw)
+        if not match or not _is_path_tail(match.group(0)):
+            return raw
         trimmed = _PATH_TAIL_RE.sub("", raw).strip()
         if not trimmed:
             return raw

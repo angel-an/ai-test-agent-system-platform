@@ -17,6 +17,7 @@ from app.api.v2.ai import (
     _bracket_title,
     _case_title_from_requirement,
     _has_testable_behavior,
+    _PATH_CONSTRAINT_RE,
 )
 from app.services.requirement_structure import extract_constraints
 from app.services.requirement_structure import FieldRule
@@ -99,6 +100,33 @@ def test_path_tail_kept_for_short_titles() -> None:
                 "会员限购商品列表-状态切换为不启用-列表同步",
                 "限购商品名称-必填与取值校验"):
         assert _case_title_from_requirement(raw) == raw
+
+
+@pytest.mark.parametrize("raw", [
+    "查询条件：问卷标题---支持模糊查询",
+    "状态---默认选中全部，可下拉筛选全部/待启用/启用/禁用",
+    "问卷编码---最多10位数字",
+    "优先级---范围[1,999]的整数",
+])
+def test_constraint_tail_is_not_mistaken_for_path(raw) -> None:
+    """`--` 后面若是**可测约束**，它才是这句的判定依据，绝不能当路径切掉。
+
+    2026-10-22 实测回归（rev182 落地后引入）：`查询条件：问卷标题---支持模糊查询`
+    被切成 `查询条件：问卷标题`——模糊查询这一唯一的可断言点从标题里消失，
+    生成出来的用例标题不再说明要验什么。根因是 `_PATH_TAIL_RE` 见到 `--` 就切，
+    而需求文档里 `---` 同时被用作「对象---行为约束」的分隔符。
+    """
+    title = _case_title_from_requirement(raw)
+    assert title == raw or _PATH_CONSTRAINT_RE.search(title), title
+    for token in _PATH_CONSTRAINT_RE.findall(raw):
+        assert token in title, f"{raw} 的约束词 {token} 被切掉了：{title}"
+
+
+def test_real_path_tail_is_still_removed() -> None:
+    """反证：真正的菜单位置仍然要切——收紧判据不能把噪音又放回来。"""
+    for raw in ("增加会员限购商品管理列表--交易云-运营-增加菜单",
+                "限购商品需要在点单页展示(路径说明--交易云-运营-增加菜单)"):
+        assert "--交易云-运营-增加菜单" not in _case_title_from_requirement(raw)
 
 
 def test_bracket_explanation_is_dropped_when_too_long() -> None:

@@ -7,7 +7,7 @@
 
 from sqlalchemy import ForeignKey, Integer, String, Text, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
 # pragma: no cover  MC80OmFIVnBZMlhscm9ua3VMazZXazlJU3c9PTo1M2ExMGU1ZA==
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -98,7 +98,14 @@ class TestResult(Base, UUIDMixin, TimestampMixin):
     )
     test_case: Mapped["TestCase"] = relationship(
         "TestCase",
-        backref="test_results"
+        # 2026-10-22 实测缺陷：原先只写 backref="test_results"，没有 cascade。
+        # SQLAlchemy 对「非空外键 + 无 cascade」的默认动作是把外键置 NULL
+        # （而不是让数据库的 ondelete="CASCADE" 生效），于是删除用例报
+        # `null value in column "test_case_id" of relation "test_results" violates
+        #  not-null constraint` → DELETE /test-cases/{id} 恒 500。
+        # 只有**已有执行结果**的用例才删不掉，没跑过的能删——所以长期没被发现。
+        # delete-orphan 让 ORM 真正下发 DELETE，与 DDL 的 ondelete 一致。
+        backref=backref("test_results", cascade="all, delete-orphan"),
     )
     step_results: Mapped[list["TestStepResult"]] = relationship(
         "TestStepResult",
