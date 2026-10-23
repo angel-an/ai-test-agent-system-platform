@@ -132,7 +132,9 @@ class TestEchoChannelRegistration:
         assert "echo_check_rejects" in seg
 
     def test_compiler_rev_bumped(self):
-        assert COMPILER_REV == "rev186"
+        # 通道自 rev186 引入；后续 rev 只能前进，不能倒退回去
+        num = int(COMPILER_REV.replace("rev", ""))
+        assert num >= 186
 
 
 # ---------------------------------------------------------------- 升轨

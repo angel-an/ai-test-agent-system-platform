@@ -8,6 +8,7 @@
 import ast
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,7 +37,11 @@ def _ts() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev186"' in src
+    # 不再钉死具体 rev：rev193/194 之后每次 bump 都会误红，而本用例真正要锁的是
+    # 「版本声明存在、格式正确、且不低于本文件引入时的基线」。
+    m = re.search(r'COMPILER_REV = "rev(\d+)"', src)
+    assert m, 'COMPILER_REV 声明缺失或格式变了'
+    assert int(m.group(1)) >= 192
     ast.parse(src)
 
 

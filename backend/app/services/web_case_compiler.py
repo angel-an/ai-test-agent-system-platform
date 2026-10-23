@@ -390,7 +390,63 @@ from app.services.web_upload_fixtures import (
 #:     「无 fields + 只有场景 → 无计划」的既有契约（``test_no_fields_means_no_plan``
 #:     红）。判定面收敛为 list_url / list_checks / filter_checks / action_matrix_checks /
 #:     export_checks 五项。
-COMPILER_REV = "rev186"
+#:   - rev187/rev188（2026-10-23，echo 通道补真实关联选择器形态）：rev186 的 echo 阶段
+#:     只会找「表单项内的 .ant-select」，问卷实测（探针 v4–v7）证明真实 SUT 是
+#:     **radio 门控（指定门店/指定商品）→「选择门店/选择商品」按钮唤起弹窗 →
+#:     勾选行 → 底部「添加并关闭」→ 表单下方展开明细子表回显**，且弹窗底部根本没有
+#:     「确定」（只有 添加全部并关闭/添加并关闭/关 闭/添 加）。旧实现在这种页面上恒
+#:     unverified，且与「定位器配错」在回执上无法区分。本版把运行形态显式入配：
+#:     ``fields[].gate / picker(select|modal) / picker_button / confirm_button /
+#:     row_text_column / echo_scope(item|subtable) / echo_column``，并让
+#:     ``required_fields`` 支持 ``checkbox_group``（复选组必填不能 fill，只能点）；
+#:     预填值与行锚均支持 ``{{RUN_TAG}}`` 展开（否则重复运行同名，重开定位到旧记录）。
+#:     缺省值保持旧行为（picker=select、echo_scope=item），存量配置零影响。
+#:     rev187 为同一提交内的中间态，未产出任何执行产物，登记表不留条目。
+#:   - rev189（2026-10-23，echo 保存判据与行定位）：TR-802 实测暴露两处框架缺口——
+#:     ① route_form 页面没有弹窗，旧判据「弹窗关闭」恒真 ⇒ 前端必填拦截（探针实测
+#:     explain=「请输入优先级」、URL 仍在 add 页）被误判成「已保存」；改为先读
+#:     .ant-form-explain 自带说明，命中即判「保存被拦截」并指出该补哪个必填项，
+#:     再以 URL 离开表单页/成功提示/弹窗关闭三选一确认成功；
+#:     ② 保存后只用「扫描当前页行」定位新记录，按优先级排序时新记录不在首屏 ⇒ 误报
+#:     「列表未找到记录行」（实测该记录已在库、列表搜索可见）。改为先按
+#:     search_placeholder 搜索 row_match 再取行。另补 panel_open/picked/saved/
+#:     row_searched/save_blocked 阶段打点，失败可归因到具体步骤。
+#:   - rev193（2026-10-23，TR-801 实测 unexplained_plan=9）：**对账两侧口径不一致**。
+#:     planned 侧数的是"断言条数"（compile_cases.assertion_count），跳过侧数的却是
+#:     "记录条数"（FORM_PLAN.skipped_count）；而"一条用例整条落不了地"只写 1 条 skip
+#:     记录、却承载该用例 N 条断言 ⇒ 这 N−1 条既没生成检查也没被计数器认领，恒等式
+#:     报成静默缺口。实测 TR-801：planned=36 / executable=17 / skipped_no_locator=10 ⇒
+#:     unexplained_plan=9（8 条 case 级 skip 覆盖 17 条断言）。本版给每条 skip 记录挂
+#:     ``assertions`` 权重（只算计入 planned 的 kind），新增 ``skipped_assertion_count``
+#:     并按它做恒等式；``skipped_no_locator`` 保留记录条数口径（配置方看的是"几条配置项
+#:     没落地"）。副作用是收益：写法错误的 kind（如 input_validation）权重记 0，
+#:     不会再像以前那样把恒等式推向负缺口。
+#:     注：这是**对账口径**修复，不改变任何执行行为——TR-801 里那 9 条断言本来就没有
+#:     执行通道（无定位器），修完后它们从"未解释"变成"已解释为跳过"。
+#:   - rev194（2026-10-23，TR-806 实测 echo 仍 unverified）：两个"看得见"的缺口。
+#:     ① **预填失败静默**：`required_fields` 的字段行找不到就 `continue`，保存随即被前端
+#:     拦住，结论只剩「保存后列表未找到记录行」——与"列表没刷新"无法区分。实测真相是
+#:     题目标题没填上（SUT 提示「题目1：请输入标题」）。本版逐字段记 `prefill` 落点
+#:     （找到字段行/可填控件/回读值），未落地的字段随结论一起列出。
+#:     ② **"任意提示即拦截"被 `!modalGone` 抵掉**：route_form 页没有弹窗 ⇒ `modalGone`
+#:     恒真 ⇒ rev192 那条分支永不生效（TR-806 的 notices 已命中却仍去列表找行）。改为
+#:     只看「URL 是否离开表单页 / 是否有成功提示 / 是否有拦截提示」三件事，弹窗关闭
+#:     不再作为成功依据（它在本 SUT 的表单页上恒为真，等于没有信号）。
+#:   - rev195（2026-10-23，TR-806 的 `题目1：请输入标题` 追因）：预填项原按**可见标签**
+#:     找字段行，而问卷题目卡片的 label 是「标题」、规则字段名是「题目标题」⇒ 找不到就
+#:     静默跳过 ⇒ 题目标题空着 ⇒ 保存被前端拦住。字段定位器里本就有精确选择器
+#:     （`[class*=questionCard] input[maxlength="50"]`），本版按 label → fields 键
+#:     **显式解析**（走 aliases，不做模糊猜测）后把 `selector/scope` 随计划下发，
+#:     执行器优先用选择器、未命中才退回标签匹配，并在 prefill 打点里标注 `via`。
+#:     字段侧声明的控件类型（如 checkbox_group）在配置只写 input 时补充纠正。
+#:   - rev196（2026-10-23，TR-807 实测「编辑页字段不存在」）：回显读取前的那次「点编辑」
+#:     是**静默无效**的——`row.locator('a').click()` 抛错被 `.catch()` 吞掉（本 SUT 操作列
+#:     独立成表「查看/编辑/启用/更多」，数据行里的 a 点不动），随后在**列表页**读回显，
+#:     于是把一个好端端的编辑页报成「字段不存在」（探针实测该页 9 个表单项、子表 2 行俱全）。
+#:     本版：三策略点击（行内 locator → 链接坐标点击 → 按「操作」表头定位动作表同序号行）
+#:     + **效果验证**（URL 变化 / 新开页 / 表单项数变多），仍无效则明确报「编辑入口点击无效」；
+#:     编辑若在新标签页打开，回显改在新页读（旧实现只读当前页）。
+COMPILER_REV = "rev196"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -528,6 +584,58 @@ SOFT_CHECK_KINDS = {"visibility"}
 #: 但表单计划明确支持它（见下面的 ``elif kind in {"boundary", "range", ...}`` 分支）——
 #: 断言校验/回写接口必须以本集合为准，否则会把合法的 range 断言误判为不支持。
 FORM_CHECK_KINDS = frozenset(LOCATOR_DEPENDENT_KINDS | SOFT_CHECK_KINDS | {"range"})
+
+#: rev193（2026-10-23，TR-801 实测 ``unexplained_plan=9``）：对账恒等式里 **planned 的
+#: 计数口径是"断言条数"**（``compile_cases`` 的 ``assertion_count`` = 需定位器断言 +
+#: 软校验断言，即本集合减去 ``range``），而**跳过的计数口径是"记录条数"**：一条用例
+#: 全部字段都落不了地时，历史实现只写 **1 条** ``skipped`` 记录（"一条都落不了地 →
+#: 整条记一次"），却承载了该用例的 N 条断言 ⇒ 这 (N−1) 条既没生成检查、也没被计数器
+#: 认领，恒等式上凭空多出静默缺口。实测 TR-801：``planned=36 / executable=17 /
+#: skipped_no_locator=10``，差额 9 = 8 条 case 级 skip 覆盖 17 条断言所折叠掉的部分。
+#:
+#: 修法：每条 ``skipped`` 记录自带 ``assertions`` = 它**解释了几个计数断言**，对账时按
+#: 权重求和（``skipped_assertion_count``）。**不能**改成"每条断言写一条 skip"——那会把
+#: 同一条用例的同类缺失膨胀成 N 行，反而稀释原因。
+#:
+#: 权重只看 ``COUNTED_ASSERTION_KINDS``：不在 ``assertion_count`` 里的 kind（如
+#: ``range``、写法错误的 ``input_validation``）权重记 0——否则它们会把恒等式推向负缺口
+#: （planned 里没有它们、却给它们记了 1 条跳过）。
+#:
+#: ⚠️ 上一条的 ``range`` 例子暴露了**反向**缺口（同轮实测）：``build_form_plan`` 明确支持
+#: ``range``（生成 input_validation 检查），但 ``assertion_count`` 不含它 ⇒ planned 少数
+#: 1 条、检查多数 1 条，``unexplained_plan=-1``。两个方向都是"两个数用了两个集合"。
+#: 因此对账两侧**统一到 ``FORM_CHECK_KINDS``**（计划真正能生成检查的全部种类）：
+#:   · planned 侧：按 FORM_CHECK_KINDS 数 manifest 里的断言（见 plan_extras）；
+#:   · 跳过侧：``assertion_weight`` 也按 FORM_CHECK_KINDS 数。
+#: ``compile_cases`` 的 ``assertion_count`` **保持原口径不动**——它是"编译断言数"这个
+#: 对外指标（四指标之一），改它会让历史批次不可比；两个数的差异在本注释与回执里可见。
+COUNTED_ASSERTION_KINDS = FORM_CHECK_KINDS
+
+
+def assertion_weight(assertions: Any) -> int:
+    """一段断言里**能进表单计划**的条数（与 ``FORM_CHECK_KINDS`` 同集合）。"""
+    if not assertions:
+        return 0
+    total = 0
+    for item in assertions:
+        if isinstance(item, dict) and item.get("kind") in COUNTED_ASSERTION_KINDS:
+            total += 1
+    return total
+
+
+def plan_assertion_count(manifest: dict[str, Any]) -> int:
+    """计划侧应承载的断言数：manifest 里**种类可执行**的断言条数（rev193）。
+
+    与 ``compile_cases.assertion_count`` 的差别只在 ``range``（后者不计），
+    这个数专供 ``COVERAGE_RECONCILE`` 的 planned 侧使用，保证与跳过侧同集合。
+    """
+    total = 0
+    for case in (manifest.get("cases") or []):
+        if not isinstance(case, dict):
+            continue
+        total += assertion_weight(case.get("assertions"))
+    return total
+
 
 # ==========================================================================
 # P1-3 阶段 B：**规则级负路径场景**（``extra_config.negative_scenarios``）
@@ -1562,7 +1670,7 @@ def parse_filter_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
 # ⚠️ 副作用声明：本通道会**真实创建一条记录**（这是「保存→重开」语义的必然）。
 # 运行期以 required_fields 的 RUN_TAG 值作定位锚，便于事后清理。
 def parse_echo_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """解析 ``extra_config.echo_checks``，返回 ``(可用检查, 被拒检查)``。
+    r"""解析 ``extra_config.echo_checks``，返回 ``(可用检查, 被拒检查)``。
 
     单条配置字段：
       ``name``             断言名（缺省 ``echo:<首个 field.label>``）
@@ -1572,8 +1680,19 @@ def parse_echo_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                            ``label`` 页面字段文案（必填）；``kind`` ∈ multi_select|select|input
                            （缺省 select）；``pick`` 选几个（缺省 multi=2 / 单=1）；
                            ``option_labels`` 目标对象文本候选（缺省取面板前 N 项，自洽比对）
-      ``required_fields``  保存前预填项：``[{label, kind(input|textarea), value}]``；
-                           其 ``value`` 兼作重开时的行定位锚（建议含 RUN_TAG）
+                           —— rev187 起可选运行形态（不填走旧的「表单项内 .ant-select」）：
+                           ``gate`` 选对象前先点的单选/复选项文案（如「指定门店」）；
+                           ``picker`` ∈ select|modal（缺省 select；modal=按钮唤起弹窗）；
+                           ``picker_button`` 唤起按钮正则（缺省 选\s*择|添\s*加|Select）；
+                           ``confirm_button`` 弹窗确认按钮正则（缺省
+                           添加并关闭|添\s*加|确\s*定|保\s*存|OK）；
+                           ``row_text_column`` 弹窗行里取哪个列作文本（缺省整行）；
+                           ``echo_scope`` ∈ item|subtable（缺省 item；subtable=表单下展开子表）；
+                           ``echo_column`` 子表回显取哪列（缺省整行文本）
+      ``required_fields``  保存前预填项：
+                           ``[{label, kind(input|textarea|checkbox_group), value}]``；
+                           其 ``value`` 兼作重开时的行定位锚（建议含 RUN_TAG）；
+                           checkbox_group 的 value 用顿号/逗号分隔多个选项文本
       ``save_button``      保存按钮正则（缺省 保存/确定/Save）
       ``row_match``        重开时用于定位记录行的文本（缺省取首个 required_fields.value）
       ``case_id`` / ``rule_id``  证据归属
@@ -1620,11 +1739,38 @@ def parse_echo_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                     pick = 2 if kind == "multi_select" else 1
                 if kind == "input":
                     pick = 0
+                # rev187：关联字段在真实 SUT 里不只有「表单项内 .ant-select」一种形态。
+                # 问卷实测（2026-10-23）：适用门店/适用商品是 radio 门控（指定门店/指定商品），
+                # 选中后才出现「选择门店」按钮，点开弹窗勾选 → 「添加并关闭」→ 表单下方
+                # 展开一张子表回显。旧实现按 .ant-select 找控件，恒 unverified 且与
+                # 「定位器配错」无法区分。故把「门控/唤起方式/确认按钮/回显载体」显式入配。
+                gate = str(fld.get("gate") or "").strip()
+                picker = str(fld.get("picker") or "select").strip()
+                if picker not in ("select", "modal"):
+                    rejects.append({"value": "", "reason": "fields.picker 取值非法",
+                                    "detail": f"index={index}.fields[{fi}] picker={picker}"
+                                              "（可选 select/modal）"})
+                    continue
+                echo_scope = str(fld.get("echo_scope") or "item").strip()
+                if echo_scope not in ("item", "subtable"):
+                    rejects.append({"value": "", "reason": "fields.echo_scope 取值非法",
+                                    "detail": f"index={index}.fields[{fi}] echo_scope={echo_scope}"
+                                              "（可选 item/subtable）"})
+                    continue
                 fields.append({
                     "label": label,
                     "kind": kind,
                     "pick": max(pick, 0),
                     "option_labels": [s for s in _as_str_list(fld.get("option_labels")) if s],
+                    "gate": gate,
+                    "picker": picker,
+                    "picker_button": str(fld.get("picker_button")
+                                         or r"选\s*择|请\s*选\s*择|添\s*加|Select"),
+                    "confirm_button": str(fld.get("confirm_button")
+                                          or r"添加并关闭|添\s*加|确\s*定|保\s*存|OK|Confirm"),
+                    "row_text_column": str(fld.get("row_text_column") or "").strip(),
+                    "echo_scope": echo_scope,
+                    "echo_column": str(fld.get("echo_column") or "").strip(),
                 })
             if not fields:
                 rejects.append({"value": "", "reason": "fields 全部无效",
@@ -1636,9 +1782,17 @@ def parse_echo_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
                     rejects.append({"value": "", "reason": "required_fields 项缺少 label",
                                     "detail": f"index={index}.required_fields[{ri}]"})
                     continue
+                rf_kind = str(rf.get("kind") or "input").strip()
+                if rf_kind not in ("input", "textarea", "checkbox_group"):
+                    rejects.append({"value": "", "reason": "required_fields.kind 取值非法",
+                                    "detail": f"index={index}.required_fields[{ri}] kind={rf_kind}"
+                                              "（可选 input/textarea/checkbox_group）"})
+                    continue
+                # rev187：复选组型必填（如「业务类型」外卖/自提/堂食）无法用 fill 预填，
+                # 必须点 label。value 用顿号/逗号分隔多个选项文本。
                 required_fields.append({
                     "label": str(rf.get("label")).strip(),
-                    "kind": "textarea" if str(rf.get("kind") or "") == "textarea" else "input",
+                    "kind": rf_kind,
                     "value": str(rf.get("value") or ""),
                 })
             items.append({
@@ -2753,6 +2907,8 @@ def build_form_plan(
                     "kinds": sorted({
                         str(a.get("kind") or "") for a, _f in planned if a.get("kind")
                     }),
+                    # rev193：整条用例的断言都并进这一条记录，权重必须是**断言条数**
+                    "assertions": assertion_weight([a for a, _f in planned]),
                     "declared_fields": list(fields.keys())[:20],
                     "suggestions": [],
                 })
@@ -2772,6 +2928,8 @@ def build_form_plan(
                     "case_id": case.get("identifier") or "",
                     "rule_id": case.get("rule_id") or "",
                     "kinds": [],
+                    # rev193：这条用例本身**零断言**（叙述型），不解释任何 planned 断言
+                    "assertions": 0,
                     "columns_declared": int((columns_contract or {}).get("column_count") or 0),
                     "declared_fields": list(fields.keys())[:20],
                     "suggestions": [],
@@ -2794,6 +2952,8 @@ def build_form_plan(
                     str(a.get("kind") or "")
                     for a, _f in planned if a.get("kind")
                 }),
+                # rev193：整条用例记一次 ⇒ 权重 = 本用例计入 planned 的断言条数
+                "assertions": assertion_weight([a for a, _f in planned]),
                 "columns_declared": int((columns_contract or {}).get("column_count") or 0),
                 "declared_fields": list(fields.keys())[:20],
                 "suggestions": [] if list_scope else _suggest_fields(probe_field, fields.keys()),
@@ -2814,6 +2974,8 @@ def build_form_plan(
                     "case_id": case.get("identifier") or "",
                     "rule_id": case.get("rule_id") or "",
                     "kinds": [str(assertion.get("kind") or "")],
+                    # rev193：单断言粒度，权重 1；不在计数口径里的 kind 记 0（否则负缺口）
+                    "assertions": assertion_weight([assertion]),
                     "columns_declared": int((columns_contract or {}).get("column_count") or 0),
                     "declared_fields": list(fields.keys())[:20],
                     "suggestions": [] if list_scope else _suggest_fields(field, fields.keys()),
@@ -2927,16 +3089,23 @@ def build_form_plan(
                 if (case.get("identifier") or "", field) in covered_defaults:
                     continue
                 skipped.append({"field": field,
+                                # rev193：权重 1，并把归属带上——缺 case_id 时对账与台账
+                                # 都只能记成"无主缺失"，配置方无从知道是哪条用例的默认值
+                                "assertions": assertion_weight([assertion]),
+                                "kind": kind,
+                                "case_id": case.get("identifier") or "",
+                                "rule_id": case.get("rule_id") or "",
                                 "reason": "默认值须在未点击状态下观测，且未配置该默认观测项"})
             elif kind in {"file_format", "file_size"}:
                 if not is_upload:
                     skipped.append({"field": field, "reason": "需上传文件（该字段无上传控件配置）",
-                                    "kind": kind})
+                                    "kind": kind, "assertions": assertion_weight([assertion])})
                     continue
                 if not allow_upload:
                     # 默认关闭：附文件可能触发向 UAT 的上传请求（服务端副作用），
                     # 必须显式开启才执行；关闭时**显式登记**，不静默丢弃。
                     skipped.append({"field": field, "kind": kind,
+                                    "assertions": assertion_weight([assertion]),
                                     "reason": "需上传文件（allow_upload_checks=false，默认关闭）"})
                     continue
                 upload_cfg = upload_fields.get(field) or {}
@@ -2965,6 +3134,7 @@ def build_form_plan(
                                 reason = (loc.get("upload_unsupported_sample_formats") or {}).get(fmt)
                                 skipped.append({
                                     "field": field, "kind": kind, "format": fmt,
+                                    "assertions": assertion_weight([assertion]),
                                     "reason": "无可用的有效样本：%s" % (reason or "未支持构造"),
                                 })
                     else:
@@ -3021,12 +3191,18 @@ def build_form_plan(
                 if key in covered_visibility:
                     continue
                 skipped.append({"field": field,
+                                "assertions": assertion_weight([assertion]),
                                 "reason": "条件显示组合未在计划中构建：%s" % (
                                     str(assertion.get("when") or "")[:48])})
             else:
                 # 兜底：任何未支持的断言类型都必须显式登记，绝不静默丢弃
                 # （否则会出现"既没执行、也没报告为未执行"的黑洞）
                 skipped.append({"field": field,
+                                # rev193：不支持的 kind 通常不在 assertion_count 里 ⇒ 权重 0。
+                                # 记 1 会让 planned 没算它的同时多减 1，恒等式转成负缺口。
+                                "assertions": assertion_weight([assertion]),
+                                "kind": kind,
+                                "case_id": case.get("identifier") or "",
                                 "reason": f"本版不支持类型 {kind or '(none)'}"})
 
     checks.extend(toggle_checks)
@@ -3117,15 +3293,44 @@ def build_form_plan(
     # ⚠️ 运行期会真实创建一条记录（「保存→重开」语义的必然副作用）。
     echo_checks, echo_check_rejects = parse_echo_checks(loc.get("echo_checks"))
     for item in echo_checks:
+        # rev195（2026-10-23，TR-806 实测「题目1：请输入标题」）：预填项原按**可见标签**
+        # 找字段行，而问卷题目卡片里的标签是「标题」、规则字段名是「题目标题」——
+        # 两者对不上 ⇒ 题目标题根本没填，保存被前端拦住，却报成「列表未找到记录行」。
+        # 字段定位器里本来就有精确选择器（`[class*=questionCard] input[maxlength="50"]`），
+        # 这里按 label → fields 键解析后一并下发，执行器优先用选择器、找不到才退回标签匹配。
+        # 只做**显式配置**的映射（走 aliases 解析），不做模糊猜测。
+        resolved_required: list[dict[str, Any]] = []
+        for rf in item["required_fields"]:
+            rf_out = dict(rf)
+            fld = fields.get(_resolve_field_name(rf["label"])) or {}
+            hint = str(fld.get("selector_hint") or "").strip()
+            if hint:
+                rf_out["selector"] = hint
+                rf_out["scope"] = str(fld.get("scope") or "")
+                # 字段侧声明的控件类型更接近真相：配置里常统一写 input，
+                # 而真实控件是复选组/下拉（业务类型实测就是这种）。
+                fld_kind = str(fld.get("kind") or "").strip()
+                if fld_kind and rf_out.get("kind") in (None, "", "input"):
+                    if fld_kind in ("checkbox_group", "multi_select", "radio", "select", "textarea"):
+                        rf_out["kind"] = fld_kind
+                rf_out["field_kind"] = fld_kind
+            resolved_required.append(rf_out)
         checks.append({
             "type": "echo_check",
             "name": item["name"],
             "list_url": item["list_url"] or str(loc.get("list_url") or ""),
             "new_button": item["new_button"],
             "fields": item["fields"],
-            "required_fields": item["required_fields"],
+            "required_fields": resolved_required,
             "save_button": item["save_button"],
             "row_match": item["row_match"],
+            # rev189：保存后要按标题搜索定位新记录（新记录未必在当前页），
+            # 搜索框 placeholder 与列表检查同源，不从配置重复声明。
+            "search_placeholder": list(loc.get("search_placeholder") or []),
+            # rev191：保存前的前置动作（如「新增题目」）与字段检查同源下发。
+            # 实测 TR-804：问卷无题目时保存被 SUT 拦住（notices=「请至少新增1个题目」），
+            # 而该动作在子功能配置里本来就有，只是 echo 通道没消费。
+            "pre_actions": parse_pre_actions(loc.get("pre_actions"))[0],
             "rule": item["rule_ref"],
             "case_id": item["case_id"],
             "rule_id": item["rule_id"],
@@ -3204,7 +3409,16 @@ def build_form_plan(
         #   emitted = executable + scenario_executed + unexplained_emitted
         # 旧实现只在 COMPILED_COVERAGE 里给 assertions、在 SUMMARY 里给 total，
         # 两个数分别属于不同快照，读者无法判断"计划→执行"是否有丢失（实测 TR-747：7/5/6/2）。
-        "planned_assertions": int(manifest.get("assertion_count") or 0),
+        "planned_assertions": plan_assertion_count(manifest),
+        # rev193（2026-10-23，TR-801 实测 unexplained_plan=9）：跳过侧必须按**断言条数**
+        # 汇总，不能用 ``skipped_count``（记录条数）。一条用例整条落不了地时只写 1 条
+        # skip 记录，却可能承载 N 条断言（详见 COUNTED_ASSERTION_KINDS 处的推导）。
+        # 恒等式改成：
+        #   planned = (executable - config_only) + default_covered + skipped_assertion_count
+        # ``skipped_count`` 仍保留（"跳过了几条配置项"是配置方关心的另一个数）。
+        "skipped_assertion_count": sum(
+            int(s.get("assertions") or 0) for s in skipped
+        ),
         # rev167：被 defaults 观测覆盖的 default 断言数（covered_defaults 的 size）。
         # 这类断言不走独立检查（default_selected 带 owners 代为取证），但对账的
         # planned 里有它们——不显式列出来，TR-784 那样的 unexplained_plan=4 假缺口
@@ -7612,6 +7826,27 @@ _FORM_EXECUTOR_TS = r"""
           const formRoot: any = await formRootOf();
           const itemByLabel = (rt: any, label: string) => rt.locator('.ant-form-item')
             .filter({hasText: new RegExp(escRe(label))}).first();
+          // rev191：前置动作（如「新增题目」）——与字段检查同一份配置，按需点击。
+          for (const pa of (check.pre_actions || [])) {
+            const times = Math.max(1, Number(pa.times || 1));
+            const labels: string[] = (pa.labels || []).map((x: any) => String(x));
+            let done = 0;
+            for (let t = 0; t < times; t++) {
+              let clicked = false;
+              for (const lb of labels) {
+                const b = formRoot.locator('button, a').filter({hasText: new RegExp(escRe(lb))}).first();
+                if (await b.count().catch(() => 0)) {
+                  await b.click({timeout: 8000}).catch(() => undefined);
+                  clicked = true;
+                  break;
+                }
+              }
+              if (!clicked) break;
+              done += 1;
+              await page.waitForTimeout(Number(pa.wait_ms || 800));
+            }
+            stageMark('pre_action', {labels: labels.slice(0, 2), done, times});
+          }
           // ③ 关联字段选对象（记录所选，作为回显比对的期望）
           const pickedByField: Record<string, string[]> = {};
           let fieldFail = '';
@@ -7629,6 +7864,84 @@ _FORM_EXECUTOR_TS = r"""
               await item.locator('input:visible').first()
                 .fill(val, {timeout: 5000}).catch(() => undefined);
               pickedByField[label] = [val];
+              continue;
+            }
+            // rev187：modal 形态——radio/复选门控 → 按钮唤起弹窗 → 勾行 → 确认关闭。
+            // 真实 SUT（问卷适用门店/商品）没有表单项内的 .ant-select，旧路径恒 unverified。
+            if (String(f.picker || 'select') === 'modal') {
+              const gateTxt = String(f.gate || '');
+              if (gateTxt) {
+                const gate = item.locator('.ant-radio-wrapper, .ant-checkbox-wrapper')
+                  .filter({hasText: new RegExp(escRe(gateTxt))}).first();
+                if (!await gate.count().catch(() => 0)) {
+                  fieldFail = `字段「${label}」未找到门控选项「${gateTxt}」`;
+                  break;
+                }
+                await gate.click({timeout: 8000}).catch(() => undefined);
+                await page.waitForTimeout(1200);
+              }
+              const pbRe = new RegExp(String(f.picker_button || '选\\s*择|添\\s*加'), 'i');
+              let pickerBtn = item.locator('button').filter({hasText: pbRe}).first();
+              if (!await pickerBtn.count().catch(() => 0)) {
+                pickerBtn = formRoot.locator('button').filter({hasText: pbRe}).first();
+              }
+              if (!await pickerBtn.count().catch(() => 0)) {
+                pickerBtn = page.locator('button').filter({hasText: pbRe}).first();
+              }
+              if (!await pickerBtn.count().catch(() => 0)) {
+                fieldFail = `字段「${label}」未找到唤起按钮（正则 ${f.picker_button}）`;
+                break;
+              }
+              await pickerBtn.click({timeout: 8000}).catch(() => undefined);
+              await page.waitForTimeout(2000);
+              const panel: any = page.locator('.ant-modal:visible, .ant-drawer:visible').last();
+              if (!await panel.count().catch(() => 0)) {
+                fieldFail = `字段「${label}」选择面板未出现（点了唤起按钮但无弹窗）`;
+                break;
+              }
+              stageMark('panel_open', {field: label});
+              const rws = panel.locator('table tbody tr');
+              const rn = await rws.count().catch(() => 0);
+              if (!rn) { fieldFail = `字段「${label}」弹窗内无可选行`; break; }
+              const col = String(f.row_text_column || '');
+              const want = kind === 'multi_select' ? Math.max(1, Number(f.pick || 2)) : 1;
+              const colIdx = col ? await panel.evaluate((p: any, c: string) => {
+                const hs = Array.from(p.querySelectorAll('thead th, .ant-table-thead th'));
+                return hs.findIndex((h: any) => String(h.textContent || '')
+                  .replace(/\s+/g, ' ').trim().indexOf(c) >= 0);
+              }, col).catch(() => -1) : -1;
+              const picked: string[] = [];
+              for (let i = 0; i < rn && picked.length < want; i++) {
+                const rw = rws.nth(i);
+                let cellText = norm(await rw.innerText().catch(() => ''));
+                if (!cellText) continue;
+                if (colIdx >= 0) {
+                  cellText = norm(await rw.locator('td').nth(colIdx).innerText().catch(() => '')) || cellText;
+                }
+                const cb = rw.locator('input[type=checkbox]').first();
+                if (await cb.count().catch(() => 0)) {
+                  await cb.check({timeout: 5000}).catch(async () => { await rw.click(); });
+                } else {
+                  await rw.click().catch(() => undefined);
+                }
+                picked.push(cellText.slice(0, 60));
+              }
+              await page.waitForTimeout(500);
+              const cfRe = new RegExp(
+                String(f.confirm_button || '添加并关闭|添\\s*加|确\\s*定|保\\s*存'), 'i');
+              const cf = panel.locator('button').filter({hasText: cfRe}).last();
+              if (!await cf.count().catch(() => 0)) {
+                fieldFail = `字段「${label}」弹窗未找到确认按钮（正则 ${f.confirm_button}）`;
+                break;
+              }
+              await cf.click({timeout: 8000}).catch(() => undefined);
+              await page.waitForTimeout(2000);
+              if (await page.locator('.ant-modal:visible, .ant-drawer:visible').count().catch(() => 0)) {
+                fieldFail = `字段「${label}」确认后弹窗未关闭（确认按钮可能命中了「添 加」而非「添加并关闭」）`;
+                break;
+              }
+              stageMark('picked', {field: label, picked: picked.slice(0, 4)});
+              pickedByField[label] = picked;
               continue;
             }
             const sel = item.locator('.ant-select:visible').first();
@@ -7699,15 +8012,69 @@ _FORM_EXECUTOR_TS = r"""
             continue;
           }
           // ④ 必填项预填（value 兼作重开定位锚）
+          // rev194（2026-10-23，TR-806 实测）：预填失败在旧版**完全静默**——字段行
+          // 找不到就 `continue`，随后保存被前端拦住，结论只剩「保存后列表未找到记录行」，
+          // 与"列表没刷新"无法区分（实际原因：题目标题没填上，SUT 提示「题目1：请输入标题」）。
+          // 现在逐字段记 prefill 结果，未落地的字段随保存失败结论一起给出。
+          const prefillTrace: any[] = [];
+          const prefillMiss: string[] = [];
           for (const rf of (check.required_fields || [])) {
-            const item = itemByLabel(formRoot, String(rf.label || ''));
-            if (await item.count().catch(() => 0)) {
-              const sel2 = (String(rf.kind) === 'textarea' ? 'textarea' : 'input') + ':visible';
-              await item.locator(sel2).first()
-                .fill(String(rf.value || ''), {timeout: 5000}).catch(() => undefined);
+            const rfLabel = String(rf.label || '');
+            const item = itemByLabel(formRoot, rfLabel);
+            // rev195：优先用字段定位器的精确选择器（label 与可见标签常不一致：
+            // 规则字段名「题目标题」，卡片里的 label 是「标题」），找不到再退回标签匹配。
+            const selHint = String(rf.selector || '');
+            const anchor = selHint ? page.locator(selHint).first() : item;
+            const anchorFound = await anchor.count().catch(() => 0);
+            if (!anchorFound) {
+              prefillTrace.push({
+                label: rfLabel, filled: false,
+                why: selHint ? `选择器未命中：${selHint}` : '未找到该字段行',
+              });
+              prefillMiss.push(`${rfLabel}（${selHint ? '选择器未命中' : '未找到字段行'}）`);
+              continue;
             }
+            if (String(rf.kind) === 'checkbox_group' || String(rf.kind) === 'radio') {
+              // rev187：复选组必填无法 fill，按 value 里的选项文本逐个点选（顿号/逗号分隔）
+              const opts = String(rf.value || '').split(/[、,，;；]/).map((s) => s.trim()).filter(Boolean);
+              let hit = 0;
+              for (const opt of opts) {
+                const cbx = anchor.locator('.ant-checkbox-wrapper, .ant-radio-wrapper')
+                  .filter({hasText: new RegExp(escRe(opt))}).first();
+                if (await cbx.count().catch(() => 0)) {
+                  const checked = await cbx.locator('input[type=checkbox], input[type=radio]')
+                    .first().isChecked().catch(() => false);
+                  if (!checked) await cbx.click({timeout: 5000}).catch(() => undefined);
+                  hit += 1;
+                }
+              }
+              prefillTrace.push({label: rfLabel, filled: hit > 0, picks: hit, want: opts.length,
+                                 via: selHint ? 'selector' : 'label'});
+              if (!hit) prefillMiss.push(`${rfLabel}（选项一个都没点中：${opts.join('/')}）`);
+              continue;
+            }
+            const sel2 = (String(rf.kind) === 'textarea' ? 'textarea' : 'input') + ':visible';
+            // rev187：预填值支持 {{RUN_TAG}}（否则重复运行同名，重开会定位到旧记录）
+            const wantVal = runTagValue(rfLabel, String(rf.value || ''));
+            // 选择器可能直接命中 input 本身，也可能命中字段行
+            let box = anchor;
+            if (selHint && await page.locator(`${selHint} ${sel2}`).first().count().catch(() => 0)) {
+              box = page.locator(`${selHint} ${sel2}`).first();
+            }
+            if (!await box.count().catch(() => 0)) {
+              prefillTrace.push({label: rfLabel, filled: false, why: '字段行内无 input/textarea'});
+              prefillMiss.push(`${rfLabel}（字段行内无可填控件）`);
+              continue;
+            }
+            await box.fill(wantVal, {timeout: 5000}).catch(() => undefined);
+            // 回读：填了不等于填上（受控组件/被格式化会吞值）
+            const gotVal = String(await box.inputValue().catch(() => '')).trim();
+            prefillTrace.push({label: rfLabel, filled: !!gotVal, value: gotVal.slice(0, 40),
+                               via: selHint ? 'selector' : 'label'});
+            if (!gotVal) prefillMiss.push(`${rfLabel}（填了但回读为空）`);
           }
-          // ⑤ 保存并确认成功（弹窗关闭或成功提示，二者取其一）
+          stageMark('prefill', {fields: prefillTrace});
+          // ⑤ 保存并确认成功（弹窗关闭 / 成功提示 / 离开表单页，三者取其一）
           const saveRe = new RegExp(String(check.save_button || '保\\s*存|Save|确\\s*定'), 'i');
           const saveBtn = formRoot.locator('button').filter({hasText: saveRe}).first();
           if (!await saveBtn.count().catch(() => 0)) {
@@ -7716,21 +8083,95 @@ _FORM_EXECUTOR_TS = r"""
                    `未找到保存按钮（正则 ${check.save_button}）`);
             continue;
           }
+          const urlBeforeSave = String(page.url() || '');
           await saveBtn.click({timeout: 8000}).catch(() => undefined);
           await page.waitForTimeout(2500);
+          // rev189：route_form 页面没有弹窗，「弹窗关闭」恒真 ⇒ 会把前端必填拦截误判成已保存。
+          // 先读字段级错误自带说明（这是"保存被拦"的直接证据），再判跳转/提示。
+          const explains: string[] = await page
+            .locator('.ant-form-explain, .ant-form-item-explain')
+            .allInnerTexts().catch(() => []);
+          const explainTxt = explains.map((s: string) => norm(s)).filter(Boolean).slice(0, 3).join('；');
+          if (explainTxt) {
+            echoStat.unverified += 1;
+            stageMark('save_blocked', {explains: explainTxt.slice(0, 120)});
+            recAll(check, nm, 'unverified',
+                   `保存被前端校验拦截：${explainTxt.slice(0, 160)}——需在 required_fields 补该必填项`);
+            continue;
+          }
+          const urlAfterSave = String(page.url() || '');
           const modalGone = !(await page.locator('.ant-modal:visible').count().catch(() => 0));
           const okToast = await page.locator(
             '.ant-message-success, .ant-message .anticon-check-circle').count().catch(() => 0);
-          if (!modalGone && !okToast) {
+          const leftForm = urlAfterSave !== urlBeforeSave;
+          // rev190：保存未通过时 SUT 未必给 .ant-form-explain（本 SUT 实测有时只弹
+          // warning toast 或仅给控件挂 has-error）。把任意类型提示文案与出错项标签
+          // 一起打点，避免"保存未确认"这类结论无法归因。
+          const notices: string[] = await page
+            .locator('.ant-message-notice, .ant-notification-notice')
+            .allInnerTexts().catch(() => []);
+          const errItems: string[] = await page
+            .locator('.ant-form-item.has-error .ant-form-item-label')
+            .allInnerTexts().catch(() => []);
+          const noticeTxt = notices.map((s: string) => norm(s)).filter(Boolean).slice(0, 2).join('；');
+          const errItemTxt = errItems.map((s: string) => norm(s)).filter(Boolean).slice(0, 4).join('、');
+          stageMark('save_result', {
+            left_form: leftForm, toast: !!okToast,
+            notices: noticeTxt.slice(0, 100), err_items: errItemTxt.slice(0, 100),
+            prefill_miss: prefillMiss.slice(0, 4),
+          });
+          // rev194：**成功信号与弹窗无关**。route_form 页没有弹窗 ⇒ `modalGone` 恒真，
+          // 旧版把「任意提示即拦截」挂在 `!modalGone` 上，等于永不生效（TR-806 实测：
+          // notices=「题目1：请输入标题」仍然报「保存后列表未找到记录行」）。
+          // 现在只看三件事：URL 是否离开表单页 / 是否有成功提示 / 是否真有拦截提示。
+          const saveConfirmed = okToast || leftForm;
+          const blockedByNotice = !saveConfirmed && !!noticeTxt;
+          const blockedNoSignal = !saveConfirmed && !noticeTxt && !modalGone;
+          const missNote = prefillMiss.length
+            ? `；预填未落地：${prefillMiss.slice(0, 3).join('，')}` : '';
+          if (blockedByNotice) {
             echoStat.unverified += 1;
             recAll(check, nm, 'unverified',
-                   '保存未确认（弹窗未关闭且无成功提示）——可能被必填拦截，现场见 ECHO_STAGE');
+                   `保存被拦截：${noticeTxt.slice(0, 140)}`
+                   + (errItemTxt ? `；出错字段：${errItemTxt}` : '') + missNote);
+            continue;
+          }
+          if (blockedNoSignal) {
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '保存未确认（弹窗未关闭、无任何提示、URL 未离开表单页）'
+                   + (errItemTxt ? `；出错字段：${errItemTxt}` : '') + missNote
+                   + '——现场见 ECHO_STAGE/save_result');
             continue;
           }
           // ⑥ 重开：列表里定位刚建的记录行 → 行内编辑/查看/详情
           const firstPicked = Object.values(pickedByField).flat()[0] || '';
-          const rowMatch = String(check.row_match || '') || firstPicked;
+          // rev187：行锚同样支持 {{RUN_TAG}}（默认取首个预填值，即带唯一化后缀的标题）
+          const firstReq = ((check.required_fields || [])[0] || {}).value || '';
+          const rowMatch = substRunTag(String(check.row_match || ''))
+            || substRunTag(String(firstReq)) || firstPicked;
           await waitRows(page, 20000);
+          // rev189：新记录未必落在当前页首屏（按优先级/创建时间排序时可能在后面），
+          // 只用「扫描当前页行」定位会误报"保存后列表未找到记录行"。先走列表搜索框。
+          if (rowMatch) {
+            const phs: string[] = (check.search_placeholder || []).slice(0, 3);
+            let box: any = null;
+            for (const ph of phs) {
+              const cand = page.locator(`input[placeholder*="${ph}"]`).first();
+              if (await cand.count().catch(() => 0)) { box = cand; break; }
+            }
+            if (!box) {
+              const cand = page.locator('input[placeholder*="搜索"], input[placeholder*="請輸入"], '
+                + 'input[placeholder*="请输入"]').first();
+              if (await cand.count().catch(() => 0)) box = cand;
+            }
+            if (box) {
+              await box.fill(rowMatch, {timeout: 5000}).catch(() => undefined);
+              await page.keyboard.press('Enter').catch(() => undefined);
+              await page.waitForTimeout(2500);
+              stageMark('row_searched', {value: rowMatch.slice(0, 40)});
+            }
+          }
           const row = rowMatch
             ? page.locator('.ant-table-row, .ant-table-tbody tr').filter({hasText: rowMatch}).first()
             : page.locator('.ant-table-row').first();
@@ -7740,15 +8181,78 @@ _FORM_EXECUTOR_TS = r"""
                    `保存后列表未找到记录行（匹配「${rowMatch.slice(0, 40)}」）——可能保存失败或列表未刷新`);
             continue;
           }
-          const editBtn = row.locator('button, a')
-            .filter({hasText: /编\s*辑|编\s*輯|Edit|查\s*看|详\s*情|詳\s*情/i}).first();
-          if (await editBtn.count().catch(() => 0)) {
-            await editBtn.click({timeout: 8000}).catch(() => undefined);
-          } else {
-            await row.locator('a, td').first().click({timeout: 8000}).catch(() => undefined);
+          // rev196（2026-10-23，TR-807 实测）：点「编辑」在旧实现里是**静默无效**的——
+          // `row.locator('a').click()` 的异常被 `.catch()` 吞掉（本 SUT 操作列是独立的一张
+          // 表「查看/编辑/启用/更多」，数据行里的 a 点不动），于是在**列表页**读回显，
+          // 报出「适用门店:编辑页字段不存在」；探针实测编辑页 9 个表单项、子表 2 行都在。
+          // 现在：三种点击策略 + **效果验证**（URL 变化 / 新开页 / 表单项数变多），
+          // 无效就明确报「编辑入口点击无效」，绝不在列表页上假装读到了回显。
+          const urlBeforeEdit = String(page.url() || '');
+          const pagesBeforeEdit = page.context().pages().length;
+          const itemsBeforeEdit = await page.locator('.ant-form-item').count().catch(() => 0);
+          const editEntered = async (): Promise<boolean> => {
+            if (page.context().pages().length > pagesBeforeEdit) return true;
+            if (String(page.url() || '') !== urlBeforeEdit) return true;
+            const n = await page.locator('.ant-form-item').count().catch(() => 0);
+            return n > itemsBeforeEdit;
+          };
+          const editTried: string[] = [];
+          for (const btn of [
+            row.locator('a, button').filter({hasText: /编\s*辑|编\s*輯|Edit/i}).first(),
+            row.locator('a, td').first(),
+          ]) {
+            if (await editEntered()) break;
+            if (!await btn.count().catch(() => 0)) continue;
+            editTried.push('locator');
+            await btn.click({timeout: 5000}).catch(() => undefined);
+            await page.waitForTimeout(1800);
           }
-          await page.waitForTimeout(2000);
-          const editRoot: any = await formRootOf();
+          if (!await editEntered()) {
+            // 坐标点击：操作列常与数据行分表渲染，locator 命中的节点可能被遮挡
+            const linkFor = row.locator('a').filter({hasText: /编\s*辑|编\s*輯|Edit/i}).first();
+            const bb = await linkFor.count().catch(() => 0)
+              ? await linkFor.boundingBox().catch(() => null) : null;
+            if (bb) {
+              editTried.push('mouse-on-link');
+              await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2);
+              await page.waitForTimeout(1800);
+            }
+          }
+          if (!await editEntered()) {
+            // 兜底：按「操作」列表头找到那张表，取同序号行的同名链接
+            const headTbl = page.locator('table').filter({has: page.locator('thead th', {hasText: '操作'})});
+            const actLink = headTbl.last().locator('tbody tr a')
+              .filter({hasText: /编\s*辑|编\s*輯|Edit/i}).first();
+            if (await actLink.count().catch(() => 0)) {
+              editTried.push('action-table');
+              await actLink.click({timeout: 5000}).catch(() => undefined);
+              await page.waitForTimeout(2000);
+            }
+          }
+          if (!await editEntered()) {
+            stageMark('edit_blocked', {tried: editTried, items: itemsBeforeEdit});
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `编辑入口点击无效（已尝试 ${editTried.join('/') || '无可用入口'}）：页面仍停在列表页，`
+                   + '读不到回显——需在 echo_checks 里补 edit_button 或核对操作列结构');
+            continue;
+          }
+          // rev196：编辑若在新标签页打开，回显必须在新页读（原实现只在当前页读）
+          const ctxPages = page.context().pages();
+          const editPage: any = ctxPages.length > pagesBeforeEdit
+            ? ctxPages[ctxPages.length - 1] : page;
+          if (editPage !== page) {
+            await editPage.waitForLoadState('domcontentloaded').catch(() => undefined);
+            await editPage.waitForTimeout(2500);
+            stageMark('edit_new_tab', {url: String(editPage.url() || '').slice(0, 80)});
+          }
+          const editRoot: any = await (async (p: any) => {
+            const m = p.locator('.ant-modal:visible').last();
+            if (await m.count().catch(() => 0)) return m;
+            return p;
+          })(editPage);
+          stageMark('edit_opened', {url: String(editPage.url() || '').slice(-60),
+                                    tried: editTried});
           // ⑦ 逐字段读回显并与所选比对（evaluate 内不得引用闭包变量，norm 内联）
           const missing: string[] = [];
           const echoed: Record<string, string[]> = {};
@@ -7759,8 +8263,47 @@ _FORM_EXECUTOR_TS = r"""
               missing.push(`${label}:编辑页字段不存在`);
               continue;
             }
-            const vals: string[] = await item.evaluate((it: any, lb: string) => {
+            const vals: string[] = await item.evaluate((it: any, arg: any) => {
               const nn = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+              const lb = String(arg.lb || '');
+              // rev187：subtable 形态——真实 SUT 把所选对象展开成表单下方一张明细表，
+              // 回显不在 select 里。取该表行文本（可按列名取值）作为回显证据。
+              if (String(arg.scope) === 'subtable') {
+                let node: any = it.closest('.ant-row') || it;
+                let tbl: any = null;
+                for (let hop = 0; hop < 6 && node && !tbl; hop++) {
+                  let sib: any = node.nextElementSibling;
+                  while (sib && !tbl) {
+                    if (sib.querySelector && sib.querySelector('table')) tbl = sib.querySelector('table');
+                    sib = sib.nextElementSibling;
+                  }
+                  if (!tbl) {
+                    const tw = node.parentElement;
+                    if (tw && tw !== node) {
+                      const inner = tw.querySelector('table');
+                      if (inner) tbl = inner;
+                    }
+                    node = tw;
+                  }
+                }
+                if (!tbl) return [];
+                let idx = -1;
+                const col = String(arg.col || '');
+                if (col) {
+                  const hs = Array.from(tbl.querySelectorAll('thead th'));
+                  idx = hs.findIndex((h: any) => nn(h.textContent).indexOf(col) >= 0);
+                }
+                const out: string[] = [];
+                const rws = Array.from(tbl.querySelectorAll('tbody tr'));
+                for (const r of rws) {
+                  const tds = Array.from((r as any).querySelectorAll('td'));
+                  if (!tds.length) continue;
+                  const txt = idx >= 0 && tds[idx]
+                    ? nn((tds[idx] as any).innerText) : nn((r as any).innerText);
+                  if (txt) out.push(txt);
+                }
+                return out;
+              }
               const ch = Array.from(it.querySelectorAll(
                 '.ant-select-selection__choice, .ant-select-selection__rendered li'));
               let vs = ch.map((c: any) => nn(c.textContent)).filter(Boolean);
@@ -7780,7 +8323,8 @@ _FORM_EXECUTOR_TS = r"""
                 if (full) vs = [full.slice(0, 60)];
               }
               return vs;
-            }, label).catch(() => []);
+            }, {lb: label, scope: String(f.echo_scope || 'item'),
+                col: String(f.echo_column || '')}).catch(() => []);
             echoed[label] = vals;
             for (const p of (pickedByField[label] || [])) {
               if (!vals.some((v: string) => v === p || v.indexOf(p) >= 0)) {
@@ -8854,6 +9398,14 @@ _FORM_EXECUTOR_TS = r"""
         rejected_at_plan: (FORM_PLAN.echo_check_rejects || []).length,
       },
       skipped_no_locator: FORM_PLAN.skipped_count,
+      // rev193（2026-10-23，TR-801 实测 unexplained_plan=9）：跳过侧按**断言条数**汇总。
+      // ``skipped_count`` 是记录条数（"跳过了几条配置项"），对账要的是断言条数——
+      // 一条 case 级 skip 可能承载 N 条断言，用记录条数会把 N−1 条读成"静默丢失"。
+      skipped_assertions: (
+        FORM_PLAN.skipped_assertion_count !== undefined
+          ? FORM_PLAN.skipped_assertion_count
+          : FORM_PLAN.skipped_count
+      ),
       // 只有一个数字无法复核："跳过 9 条"到底是哪几类原因
       skipped_by_reason: (() => {
         const counts: Record<string, number> = {};
@@ -8890,8 +9442,8 @@ _FORM_EXECUTOR_TS = r"""
     // rev130（F-3）：**覆盖对账行**——「这次到底验了几条」只留一个答案。
     // 旧产物的三个数分属编译期（COMPILED_COVERAGE.assertions）与运行期（SUMMARY.total），
     // 实测 TR-747 报 7 / 5 / 6 / 跳过 2，读者无法判断差额是「跳过」还是「丢了」。
-    // 恒等式：
-    //   planned   = (executable - config_only) + skipped_no_locator + unexplained_plan
+    // 恒等式（rev193 修订）：跳过侧与 planned 侧同为**断言条数**口径
+    //   planned   = (executable - config_only) + default_covered + skipped_assertions + unexplained_plan
     //   emitted   = executable + scenario_executed + submit_resubmitted + unexplained_emitted
     // rev139：把 `submit_resubmitted` 显式列出来。提交层对同一批检查会再写一条结果
     //（真实提交才算证据），旧公式把它算成"多发"，于是 balanced 恒为 false——
@@ -8900,7 +9452,11 @@ _FORM_EXECUTOR_TS = r"""
     // 等于把"没丢"报成"丢了 2 条"。
     const __plannedA = FORM_PLAN.planned_assertions || 0;
     const __execA = summary.plan_checks;
-    const __skipA = summary.skipped_no_locator;
+    // rev193（2026-10-23，TR-801 实测 unexplained_plan=9）：**跳过侧用断言条数**。
+    // 旧实现取 ``skipped_no_locator``（记录条数），而一条"整条用例都落不了地"的 skip
+    // 记录承载该用例的全部断言 ⇒ N−1 条断言既没检查也没被认领，恒等式报成静默缺口。
+    const __skipA = summary.skipped_assertions;
+    const __skipEntries = summary.skipped_no_locator;
     const __configA = summary.config_only_checks || 0;
     const __scenarioA = summary.negative_scenario_phase.executed;
     const __submitA = summary.submit_phase.emitted || 0;
@@ -8921,7 +9477,10 @@ _FORM_EXECUTOR_TS = r"""
       planned: __plannedA,
       executable: __execA,
       config_only: __configA,
-      skipped_no_locator: __skipA,
+      // rev193：``skipped_no_locator`` 保持"记录条数"口径不变（配置方看的是
+      // "有多少条配置项没落地"），对账用新增的 ``skipped_assertions``（断言条数）。
+      skipped_no_locator: __skipEntries,
+      skipped_assertions: __skipA,
       scenario_configured: (FORM_PLAN.negative_scenarios || []).length,
       scenario_executed: __scenarioA,
       submit_resubmitted: __submitA,
@@ -9005,6 +9564,10 @@ def render_form_executor(plan: dict[str, Any], *, default_phone: str = "18320101
          # COVERAGE_RECONCILE 打出 planned=0 / unexplained_plan=-3（明明有 3 条断言），
          # 对账行反而制造了新的误导。凡运行期要读的计划字段都必须在此登记。
          "planned_assertions": plan.get("planned_assertions") or 0,
+         # rev193（2026-10-23，TR-801 实测 unexplained_plan=9）：跳过侧**按断言条数**
+         # 汇总（一条 case 级 skip 承载 N 条断言）。漏登记这个键，执行器就只能退回
+         # ``skipped_count``（记录条数），TR-801 那种 9 条假缺口会原样复现。
+         "skipped_assertion_count": plan.get("skipped_assertion_count") or 0,
          # rev167：defaults 带 owners 的 default 断言数——对账恒等式要用
          #（漏登记的后果与 rev131/TR-748 同型：TR-785 default_covered 恒 0，
          # unexplained_plan=4 假缺口照旧）。

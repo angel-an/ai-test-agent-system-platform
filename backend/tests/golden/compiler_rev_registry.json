@@ -360,6 +360,48 @@
       "digest": "1f40f178d062",
       "date": "2026-10-23",
       "summary": "rev186: 配置保真·回显一致性独立通道（echo_checks：新建→选对象→保存→重开→逐字段比对回显；被拒 [echo-skip] 不静默；echo_phase 对账）"
+    },
+    {
+      "rev": "rev188",
+      "digest": "2ea653057aa1",
+      "date": "2026-10-23",
+      "summary": "rev188: echo 通道支持真实关联选择器形态（fields.gate 门控 + picker=modal 按钮唤起弹窗 + confirm_button 可配 + row_text_column + echo_scope=subtable 子表回显；required_fields 支持 checkbox_group；预填值与行锚支持 {{RUN_TAG}} 展开）；缺省值保持旧行为"
+    },
+    {
+      "rev": "rev189",
+      "digest": "9c2b499692a0",
+      "date": "2026-10-23",
+      "summary": "rev189: echo 保存判据与行定位修正（route_form 无弹窗 ⇒ 先读 .ant-form-explain 判必填拦截，再以 URL 离开/成功提示/弹窗关闭三选一确认；保存后先按 search_placeholder 搜索 row_match 再取行；新增 panel_open/picked/saved/row_searched/save_blocked 阶段打点）"
+    },
+    {
+      "rev": "rev190",
+      "digest": "e9cbea0c4a97",
+      "date": "2026-10-23",
+      "summary": ""
+    },
+    {
+      "rev": "rev192",
+      "digest": "4ccf60916b1d",
+      "date": "2026-10-23",
+      "summary": "rev192: echo 通道消费 pre_actions（保存前「新增题目」等前置动作，与字段检查同源配置）；保存结果以任意提示文案判定拦截（实测 notices=「请至少新增1个题目」），并打点 save_result（left_form/toast/notices/err_items）"
+    },
+    {
+      "rev": "rev194",
+      "digest": "9b65f22cb79c",
+      "date": "2026-10-23",
+      "summary": "rev194: ① 对账口径修复（含未产出产物的 rev193）——跳过侧按断言条数汇总，新增 skipped_assertion_count / planned 侧改用 FORM_CHECK_KINDS，消除 TR-801 的 unexplained_plan=9 假缺口与 range 断言的负缺口；② echo 保存判据与弹窗解耦（route_form 页 modalGone 恒真，旧守卫使拦截分支永不生效），改为只看 URL 离开/成功提示/拦截提示；③ 预填逐字段留痕（ECHO_STAGE prefill），未落地字段随保存失败结论给出"
+    },
+    {
+      "rev": "rev195",
+      "digest": "f9162abcdaec",
+      "date": "2026-10-23",
+      "summary": "rev195: echo 预填项复用字段定位器——按 label→fields 键显式解析（含 aliases）下发 selector/scope，执行器优先选择器、未命中退回标签匹配并标注 via；字段侧 kind 在配置只写 input 时补充纠正。修 TR-806「题目标题」标签不一致（卡片 label=标题）导致预填静默跳过、保存被前端拦截"
+    },
+    {
+      "rev": "rev196",
+      "digest": "9ff9853ee0f9",
+      "date": "2026-10-23",
+      "summary": "rev196: echo 重开编辑页前的那次点击要验证效果——三策略（行内 locator → 链接坐标点击 → 按「操作」表头定位动作表同序号行）+ 三条件判定（URL 变化/新开页/表单项数变多），无效则明确报「编辑入口点击无效」；编辑在新标签页打开时回显改在新页读。修 TR-807「适用门店:编辑页字段不存在」假阴性（实拍编辑页 9 项 + 子表 2 行俱全）"
     }
   ]
 }
