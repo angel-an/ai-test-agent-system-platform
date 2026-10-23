@@ -22,7 +22,11 @@ from app.api.v2.ai import (
     _build_requirement_cases,
     _build_expand_skip_warning,
 )
-from app.services.requirement_structure import FieldRule, extract_constraints
+from app.services.requirement_structure import (
+    FieldRule,
+    extract_condition,
+    extract_constraints,
+)
 
 
 def _rule(name: str, desc: str, field_type: str = "text", required: bool = False) -> FieldRule:
@@ -64,7 +68,6 @@ def test_expanded_scenario_always_carries_assertions(label, rule, point) -> None
 
 @pytest.mark.parametrize("label,rule,point", [
     ("无任何约束", _rule("备注", "选填"), "备注可以不填"),
-    ("仅精度", _rule("单价", "最多2位小数", "number"), "单价最多2位小数"),
 ])
 def test_unconstrained_field_is_not_expanded(label, rule, point) -> None:
     """三个维度都无约束 → 不扩写（正向用例仍保留，不丢需求）。"""
@@ -73,6 +76,20 @@ def test_unconstrained_field_is_not_expanded(label, rule, point) -> None:
     assert not [c for c in cases if c.keyword in ("反向", "边界")], f"{label} 不该扩写"
     assert skips and skips[0]["reason"] == "no_constraint"
     assert skips[0].get("field") == rule.name
+
+
+def test_precision_only_field_now_expands() -> None:
+    """rev183：`最多N位小数` 解析补齐后，「仅精度」字段不再属于"无约束"。
+
+    此前这条被登记为解析层缺口（用例标签写「仅精度」）。补上 `_DECIMAL_ALT_RE`
+    之后它必须能扩写，且扩出来的边界用例要带 `precision` 断言——否则就是把
+    "解析已支持"又退回成"静默不扩写"。
+    """
+    rule = _rule("单价", "最多2位小数", "number")
+    cases, _gaps, skips = _build(["单价最多2位小数"], [rule])
+    kinds = {a.get("kind") for c in cases for a in (c.custom_fields.get("assertions") or [])}
+    assert "precision" in kinds, f"应产出 precision 断言，实际 {kinds}"
+    assert not [s for s in skips if s.get("reason") == "no_constraint"], skips
 
 
 # ------------------------------------------------------------ 断言取值逻辑
@@ -106,10 +123,10 @@ def test_empty_buckets_yield_no_assertions() -> None:
 @pytest.mark.parametrize("label,rule,point,expect_keywords", [
     ("范围→反向+边界", _rule("金额", "范围[1,100]", "number"), "金额输入100时被拦截", {"反向", "边界"}),
     ("枚举→反向", _rule("类型", "必填；选项范围：A、B", required=True), "类型必选", {"反向"}),
-    # ⚠️ 格式类必须写成需求文档里的规范句式「文件格式仅支持：jpg、png」。
-    # 「仅支持jpg，png格式」这种口语写法 `extract_constraints` 抽不出 formats，
-    # 属于**解析层既有缺口**（不是 rev182 引入的，见文末 test_parser_gap_...）。
-    ("格式→边界", _rule("图片", "文件格式仅支持：jpg、png"), "图片文件格式仅支持jpg格式", {"边界"}),
+    # ⚠️ 格式类原先只能写规范句式「文件格式仅支持：jpg、png」；
+    # rev183 起口语写法「仅支持jpg，png格式」也能抽出 formats，两条都保留作回归。
+    ("格式→边界（规范句式）", _rule("图片", "文件格式仅支持：jpg、png"), "图片文件格式仅支持jpg格式", {"边界"}),
+    ("格式→边界（口语句式）", _rule("图片", "仅支持jpg，png格式"), "图片仅支持jpg、png格式", {"边界"}),
 ])
 def test_constraint_kinds_are_not_falsely_killed(label, rule, point, expect_keywords) -> None:
     cases, _gaps, _skips = _build([point], [rule])
@@ -189,22 +206,46 @@ def test_unlinked_is_reported_before_no_behavior() -> None:
     assert skips and skips[0]["reason"] == "unlinked", skips
 
 
-# ------------------------------------------------------------ 解析层缺口（不由本闸门负责）
+# ------------------------------------------------------------ 口语写法的约束识别
+#
+# rev183：原先这里登记了三条「解析层缺口」样本（仅支持jpg，png格式 / 最多2位小数 /
+# 仅当…显示），断言"抽不出"。解析层已补齐，样本改用例守护：现在必须抽得出。
+# 保留「反向清单」的位置——如果哪天又抽不出，这里会红，而不是让人以为是闸门的问题。
 
 
 @pytest.mark.parametrize("desc,kind", [
     ("仅支持jpg，png格式", "formats"),
-    ("最多2位小数", "precision"),
-    ("仅当业务类型为外卖时显示", "condition"),
+    ("文件格式仅支持jpg，png格式", "formats"),
+    ("最多2位小数", "decimal_places"),
+    ("保留两位小数", "decimal_places"),
+    ("最多保留2位小数", "decimal_places"),
 ])
-def test_parser_gap_is_not_reported_as_gate_bug(desc, kind) -> None:
-    """口语化写法抽不出约束 = `extract_constraints` 的缺口，不是扩写闸门的 bug。
+def test_colloquial_constraint_forms_are_extracted(desc, kind) -> None:
+    """口语化约束写法必须能抽出（rev183 补齐，回归守护）。"""
+    got = {c.kind for c in extract_constraints(desc)}
+    assert kind in got, f"`extract_constraints({desc!r})` 未抽出 {kind}（实际 {got}）"
 
-    登记这些样本的目的：如果哪天解析层补上了，这条测试会失败并提醒同步收窄
-    「跳过 = 无约束」的假设，而不是让缺口一直以"闸门误杀"的形态被误报。
+
+@pytest.mark.parametrize("desc", [
+    "仅当订单类型选择外卖时显示该字段",
+    "仅当选择外卖时，显示该字段",
+    "只有当门店类型=直营店时才显示该字段",
+])
+def test_colloquial_condition_guard_is_extracted(desc) -> None:
+    """「仅当…时显示」前置语式必须被识别（此前整条判"无条件"）。"""
+    assert extract_condition(desc), f"`extract_condition({desc!r})` 未识别条件"
+
+
+@pytest.mark.parametrize("desc", [
+    "暂不支持jpg格式",
+    "不支持上传pdf文件",
+    "格式要求：参照附件说明",
+])
+def test_negated_or_vague_format_is_not_treated_as_allowed(desc) -> None:
+    """被否定的格式 / 指向别处说明的措辞，不得当成"可用格式清单"。
+
+    否则会生成「上传 jpg 应成功」的反向断言——拿文档里被否定的例子当合法值，
+    跑绿了也是假通过。
     """
     got = {c.kind for c in extract_constraints(desc)}
-    assert kind not in got, (
-        f"`extract_constraints({desc!r})` 已能抽出 {kind}（实际 {got}）——"
-        f"请同步更新 test_constraint_kinds_are_not_falsely_killed 的口语样本"
-    )
+    assert "formats" not in got, f"`extract_constraints({desc!r})` 不该抽出 formats（实际 {got}）"

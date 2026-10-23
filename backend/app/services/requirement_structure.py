@@ -235,6 +235,14 @@ _RANGE_RE = re.compile(
     r"([\(\[])\s*([0-9]+(?:\.[0-9]+)?)\s*[,，]\s*([0-9]+(?:\.[0-9]+)?)\s*([\)\]])"
 )
 _DECIMAL_RE = re.compile(r"小数点后最多保留\s*([0-9]+)\s*位")
+#: 小数位数的其余三种真实写法（rev183，真实文档实测）：
+#: 「最多2位小数」「最多保留2位小数」「保留两位小数」「小数位数：2」。
+#: 原词表只认「小数点后最多保留N位」，实测整类精度约束被静默判「无约束」。
+_DECIMAL_ALT_RE = re.compile(
+    r"(?:小数点后|小數點後|小数|小數)?\s*"
+    r"(?:最多|最多保留|最多保留至|保留|限制|限制为|限制為|上限|不超过|不超過|精确到|精確到)?\s*"
+    r"([0-9]+|[一二两三四五六两])\s*(?:位|個位|个位)\s*小数"
+)
 #: 长度上限：兼容简体原文（"最多输入50个字"）与 CS 规格书的繁體列表式（"限制輸入50個字符"）
 _MAX_LENGTH_RE = re.compile(
     r"(?:最多输入|最多輸入|限制输入|限制輸入|限制|最多|上限|不超过|不超過|小於等於|小于等于)\s*"
@@ -256,6 +264,42 @@ _FILE_SIZE_RE = re.compile(
     re.IGNORECASE,
 )
 _FORMATS_RE = re.compile(r"文件格式(?:仅|僅)?支持[：:]\s*([^\n。；;]+)")
+#: 文件格式的**其余声明形态**（rev183，真实文档实测）：
+#: 「文件格式仅支持jpg，png格式」「仅支持jpg、png格式」「仅支持 jpg/png 格式」
+#: 「支持jpg、png格式上传」「上传格式支持：jpg，png」「支持的文件类型：jpg/png」。
+#: 原词表要求字面「文件格式支持：」，实测这几种写法全判「无约束」
+#: （小杨生煎问卷「3. 文件格式仅支持：jpg、png」能抽到，是因为它恰好带了冒号）。
+_EXT_LIST = (
+    r"(?P<exts>[A-Za-z0-9]{1,5}(?:\s*[、,，/／|｜]\s*\.?[A-Za-z0-9]{1,5})*)"
+)
+_FORMATS_ALT_RE = re.compile(
+    r"(?:(?:文件格式|檔案格式|附件格式|上[传傳]格式|文件[类類]型|檔案[類类]型|格式)"
+    r"\s*(?:[仅僅只]|可)?\s*(?:支持|支援|允许|允許|接受|限定|為|为|是)?"
+    r"|(?:[仅僅只]|可)?\s*(?:支持|支援|允许|允許|接受)\s*(?=[A-Za-z0-9]))"
+    r"\s*[：:]?\s*"
+    + _EXT_LIST +
+    r"\s*(?:格式|類型|类型|的文件|的檔案)?"
+)
+#: 扩展名白名单：只认「看起来就是扩展名」的短串，避免把中文短语当扩展名。
+_KNOWN_EXTS = {
+    "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "heic", "tif", "tiff",
+    "pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "rtf", "ppt", "pptx",
+    "zip", "rar", "7z", "mp4", "mov", "avi", "mp3", "wav", "json", "xml",
+}
+#: 中文数字 → 阿拉伯数字（「保留两位小数」）
+_CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+#: 格式清单被否定的语境：「不支持」「暂不支持」「禁止上传」「不可上传」——
+#: 命中的不是"可用格式"，不能反过来生成"该格式应被接受"的断言。
+_FORMAT_NEGATION_RE = re.compile(r"(?:不|未|禁|无法|無法)\s*(?:支持|支援|允许|允許|接受|上[传傳])")
+
+
+def _format_list_is_placeholder(text: str, formats: list[str]) -> bool:
+    """格式清单是否只是「被否定的例子」（不支持/禁止上传…）。"""
+    if not formats or not _FORMAT_NEGATION_RE.search(text or ""):
+        return False
+    # 只有否定语出现在格式词附近（同一句）时才让步，避免整段里别处的「不支持」误伤
+    sentence = re.split(r"[。\n]", text or "")[0]
+    return bool(_FORMAT_NEGATION_RE.search(sentence))
 #: 选项/枚举：兼容"选项范围：…"与"展示枚舉内容Dine-in，In-Store Takeaway…"、"支持選擇ETZ"
 #: 刻意**不含**裸「選項/选项」——正文里的"選項卡"之类会误命中
 #: FIX-2026-09-28：补冒号式枚举「枚舉：Active，Closed，Overdue」（CS 规格书 Status 字段的写法，
@@ -298,12 +342,58 @@ _OPTIONAL_TEXT_RE = re.compile(
 #: 「當店鋪狀態開啟時，顯示該字段」，此前全部识别不出 → 两文档「条件显示校验」用例数为 **0**。
 _CONDITION_RE = re.compile(
     r"((?:[當当])?[^\n。；;]{2,80}?)\s*(?:時|时)?\s*[，,]?\s*"
-    r"(?:顯示該字段|显示该字段|顯示該欄位|显示该栏位)"
+    r"(?:顯示該字段|显示该字段|顯示該欄位|显示该栏位|"
+    r"才顯示該字段|才显示该字段|才顯示|才显示|"
+    # rev184：裸「顯示/显示」**必须带字段宾语**（该字段/该栏位/此字段/此栏位/該項…）。
+    # rev183 曾把它写成 `顯示|显示|展示` 裸分支，结果真实文档里「固定显示，包括…」
+    # 「为空时显示"-"」这类**状态/交互描述**全被判成条件显示（8 个字段 cond 从 '' 变 '固定'），
+    # 「不需要展示路径」被判成 cond='也不需要' —— 会直接生成假的「条件显示校验」用例。
+    r"(?:顯示|显示|展示)(?:該|该|此|這|这)?(?:字段|欄位|栏位|項|项))"
+)
+#: rev183：条件声明的**前置语式**——「仅当…显示该字段」原来看不懂，
+#: 因为 `_CONDITION_RE` 要求条件短语 ≥2 字、且「仅当」贴着条件不构成可识别前缀，
+#: 实测「仅当订单类型选择外卖时显示该字段」整条被判"无条件"（条件显示用例因此为 0）。
+#: 这里把引导词单独抽出来：模式 = `[仅在]?(?:当|如果|若)…(时)…才?显示`。
+_CONDITION_GUARD_RE = re.compile(
+    r"(?:[仅僅只][当當]|[当當]|如果|若)\s*[^\n。；;]{2,80}?"
+    r"(?:[时時][，,]?\s*(?:才|則|则)?\s*(?:顯示|显示|展示|可[见見])"
+    r"|(?:才|則|则)\s*(?:顯示|显示|展示))"
 )
 #: 连接词（不得进入字段名）
 _CONNECTIVE_RE = re.compile(r"^(?:且|并且|并|和|以及|同时)+")
-#: 条件里的"X选择：值" / "X选中：值"
-_CONDITION_TERM_RE = re.compile(r"([\u4e00-\u9fa5A-Za-z]+)\s*(?:选择|选中)[：:]\s*([^且）\)\n。；;]+)")
+#: 条件里的"X选择：值" / "X选中：值" / "X=值"
+_CONDITION_TERM_RE = re.compile(
+    r"([\u4e00-\u9fa5A-Za-z]+)\s*(?:选择|选中|選中|選擇|为|為|是|=|：|:)\s*([^且）\)\n。；;，,]+)"
+)
+#: rev184：条件段的**语义门槛**。命中条件声明还不够，条件本身得是"条件"。
+#: 实测反例（真实 PDF，全部应为「无条件」）：
+#:   「固定显示，包括支付宝…」→「固定」不是条件；
+#:   「也不需要展示路径」→「也不需要」不是条件；
+#:   「为空时显示"-"」→ 是值的兜底显示，不是字段的条件显示。
+#: 正例必须至少具备一项：引导词（当/仅当/如果/若）、比较/状态谓词（选择/等于/大于/开启/
+#: 打开/勾选/满足/包含…）、或明确的数值比较符。
+_CONDITION_SEMANTIC_RE = re.compile(
+    r"(?:[當当]|如果|若|除非|一旦"
+    r"|选择|選擇|选中|選中|勾选|勾選|填写|填寫|输入|輸入|录入|錄入"
+    r"|等于|等於|!=|>=|<=|[><=＝]"
+    r"|开启|開啟|打开|打開|关闭|關閉|启用|啟用|禁用|停用"
+    r"|满足|滿足|符合|超过|超過|低于|低於|大于|大於|小于|小於"
+    r"|为|為|是|非|无|無|有值|为空|為空|不空|不为空|不為空"
+    r"|包含|包括|属于|屬於|不在|在)"
+)
+#: 明显的"展示/显示"描述词——出现即说明这句在讲展示方式而不是条件（「固定显示」「也不需要展示」）
+#: 但若同时出现引导词或比较谓词，则以语义门槛为准，不被这条否掉。
+_CONDITION_NEGATIVE_RE = re.compile(
+    r"^(?:固定|也不需要|不需要|无需|無需|不用|默认|默認|始终|始終|均|都)"
+)
+#: rev184：**兜底值显示**不是条件显示。「为空时显示"-"」「无值时展示"—」
+#: 讲的是"取不到值时页面显示什么"，不是"什么条件下才显示该字段"。
+#: 这是本 SUT 里最常见的一类描述（问卷 8 个只读字段全是这个句式）。
+_CONDITION_FALLBACK_RE = re.compile(
+    r"(?:为空|為空|无值|無值|不存在|未获取|未獲取|没[有獲获]|没有|无数据|無數據)"
+    r"\s*(?:时|時|的时候|的時候)?\s*[，,]?\s*(?:则|則|就|统一|統一)?\s*"
+    r"[“\"「『'‘]?\s*[-—–－/／]?\s*[”\"」』'’]?\s*$"
+)
 
 
 def extract_constraints(description: str) -> list[FieldConstraint]:
@@ -324,9 +414,22 @@ def extract_constraints(description: str) -> list[FieldConstraint]:
         ))
 
     match = _DECIMAL_RE.search(text)
+    digits: int | None = None
+    decimal_raw = ""
     if match:
-        out.append(FieldConstraint(kind="decimal_places", raw=match.group(0),
-                                   numbers=[float(match.group(1))]))
+        digits = int(match.group(1))
+        decimal_raw = match.group(0)
+    else:
+        # rev183：补「最多2位小数 / 最多保留2位小数 / 保留两位小数 / 小数位数：2」。
+        # 只认到「位小数」为止，绝不把「最多输入20个字」之类当成精度约束。
+        alt = _DECIMAL_ALT_RE.search(text)
+        if alt:
+            token = alt.group(1)
+            digits = int(token) if token.isdigit() else _CN_NUM.get(token)
+            decimal_raw = alt.group(0).strip()
+    if digits is not None:
+        out.append(FieldConstraint(kind="decimal_places", raw=decimal_raw,
+                                   numbers=[float(digits)]))
 
     match = _MAX_LENGTH_RE.search(text)
     if match:
@@ -346,17 +449,46 @@ def extract_constraints(description: str) -> list[FieldConstraint]:
                                    detail={"unit": match.group(2).upper()}))
 
     match = _FORMATS_RE.search(text)
+    formats: list[str] = []
+    formats_raw = ""
     if match:
+        # 捕获段会跨到下一条编号（"…jpg、png4. 单个文件大小不超过2M"）——
+        # 先按「文件大小」和「下一条编号」两处截断。注意编号正则不能带后顾断言：
+        # 「png4.」的 4 前一个字符是字母，带 (?<![A-Za-z0-9]) 就切不开，编号会粘成 token。
         raw_formats = re.split(r"[0-9]+\s*[、.]?\s*文件大小", match.group(1))[0]
+        raw_formats = re.split(r"\s*\d{1,2}\s*[.．、]\s*", raw_formats)[0]
         formats = [
             re.sub(r"^[0-9]+\s*[、.]?\s*", "", f).strip().lstrip(".")
             for f in re.split(r"[、,，/]", raw_formats)
             if f.strip()
         ]
         formats = [f for f in formats if f and not any(ch.isdigit() for ch in f)]
-        if formats:
-            out.append(FieldConstraint(kind="formats", raw="文件格式仅支持：" + "、".join(formats),
-                                       detail={"formats": formats}))
+        formats_raw = "文件格式仅支持：" + "、".join(formats) if formats else ""
+    if not formats:
+        # rev183：其余声明形态（「支持jpg、png格式上传」「仅支持jpg、png格式」
+        # 「上传格式支持：jpg，png」「支持的文件类型：jpg/png」…）。
+        # 只在「扩展名白名单」命中时采信，避免把「格式要求：参照附件说明」当格式清单。
+        alt = _FORMATS_ALT_RE.search(text)
+        if alt:
+            candidate = re.split(
+                r"\s*\d{1,2}\s*[.．、]\s*", alt.group("exts") or ""
+            )[0]
+            formats = [
+                f.strip().strip(".").lower()
+                for f in re.split(r"[、,，/／|｜]", candidate)
+                if f.strip()
+            ]
+            # 未登记的短串（"xml2"、"参照附件说明"）一律丢弃；全丢 = 不是格式声明
+            formats = [f for f in formats if f in _KNOWN_EXTS]
+            if formats:
+                formats_raw = alt.group(0).strip()
+    if formats and _format_list_is_placeholder(text, formats):
+        # 「暂不支持任何格式」「不支持上传」之类：白名单里的词只是"被否定的那个例子"，
+        # 不是可用格式清单。宁可判「无约束」，也不要拿它生成"上传 jpg 应成功"的假通过断言。
+        formats, formats_raw = [], ""
+    if formats:
+        out.append(FieldConstraint(kind="formats", raw=formats_raw,
+                                   detail={"formats": formats}))
 
     match = _OPTIONS_RE.search(text)
     if match:
@@ -439,34 +571,99 @@ def required_from_text(description: str) -> bool:
 def extract_condition(description: str) -> str:
     """抽取条件显示约束，例如"变动类型=企业储值充值 且 变更方式=批量导入"。
 
-    两种形态：
+    三种形态（rev183 补齐第三种）：
     - 「X选择：值」式 → 归一成 ``X=值``（可多条件用「 且 」连接）；
     - 无条件值可抽（"排隊打開顯示該字段"）→ 直接用原文条件短语（去掉「當/時」等虚词），
-      绝不因为"抽不出 X=值"就丢掉整条条件显示规则。
+      绝不因为"抽不出 X=值"就丢掉整条条件显示规则；
+    - 「仅当…时（才）显示该字段」→ 前置语式。此前只认后置的「…顯示該字段」，
+      「仅当」被当成普通两字前缀，条件短语长度不足或被逗号切断 ⇒ 整条判"无条件"，
+      「条件显示校验」用例数为 0（真实文档里这正是最常见的一种写法）。
+
+    rev184：补**语义门槛**。命中条件句式不等于真是条件——真实文档里
+    "固定显示，包括支付宝小程序"、"为空时显示"-""、"也不需要展示路径"
+    都会命中条件句式，但它们讲的是**展示方式/兜底值**，不是字段的条件显示。
+    这类误判会直接生成假的「条件显示校验」用例（断言验的是不存在的开关）。
     """
     text = _strip_zero_width(description or "")
-    match = _CONDITION_RE.search(text)
+    match = _CONDITION_RE.search(text) or _CONDITION_GUARD_RE.search(text)
     if not match:
         return ""
+    segment = _clean_condition_segment(match.group(0))
+    # 语义门槛：去掉引导词后，条件段里必须还有「条件语义」（谓词/比较/引导词）。
+    # 「固定显示」→ 削掉"显示"剩「固定」；「也不需要展示」→ 剩「也不需要」
+    # → 两者都不含任何条件谓词，直接判无条件。
+    probe = re.sub(r"^(?:[仅僅只][有當当]|[仅僅只][当當]|只有|[当當]|如果|若|一旦|除非)", "", segment).strip()
+    # 兜底值显示（「…为空时显示"-"」）先排除：它连「条件谓词」都算不上，
+    # 而且本 SUT 里大量出现（问卷只读字段全部是这个句式）——放过去会刷出 8 条假的条件显示用例。
+    if _CONDITION_FALLBACK_RE.search(probe):
+        return ""
+    if _CONDITION_NEGATIVE_RE.match(probe) and not re.search(
+        r"(?:选择|選擇|选中|選中|勾选|勾選|等于|等於|开启|開啟|打开|打開|[><=＝]|包含|满足|滿足|符合)",
+        probe,
+    ):
+        return ""
     clauses: list[str] = []
-    for term in _CONDITION_TERM_RE.finditer(match.group(1)):
+    for term in _CONDITION_TERM_RE.finditer(segment):
         name = _CONNECTIVE_RE.sub("", term.group(1).strip()).strip()
-        # 条件引导词不属于字段名（"当变动类型选择：X" → 字段名是"变动类型"）
-        name = re.sub(r"^[當当]\s*", "", name).strip()
+        # 条件引导词/介词不属于字段名（"当变动类型选择：X" → "变动类型"；"订单类型" 保留）
+        name = re.sub(r"^[當当仅僅只如果若]\s*", "", name).strip()
+        # 「且变更方式选择」：连接词可能残留在字段名开头（上一个条件的尾巴），先剥
+        name = re.sub(r"^(?:且|并且|并|以及|同时|和)", "", name).strip()
+        # 动作词是分隔符不是字段名，但**只剥最后一个**：
+        # 「变动类型选择」→「变动类型」；「变更方式选择」→「变更方式」；
+        # 「订单来源选择」→ 保持（"来源选择"本身就是字段名，剥了会变成另一个字段）。
+        verb = re.search(r"(?:选择|選擇|选中|選中)$", name)
+        if verb:
+            head = name[: verb.start()].strip()
+            if len(head) >= 3 and not re.search(r"(?:来源|來源)$", head):
+                name = head
+        # 只剩引导词（"仅当选择外卖" 里没有字段名）→ 不出 X=值，走原文短语
+        name = re.sub(r"^[有是]\s*", "", name).strip() if len(name) <= 3 else name
         value = _CONNECTIVE_RE.sub("", term.group(2).strip()).strip().rstrip("）)")
-        value = re.sub(r"[，,]$", "", value).strip()
-        if name and value:
+        value = re.sub(r"[，,]?$", "", value).strip()
+        # 条件值尾部的虚词不进断言（"选择外卖时" → "外卖"）
+        value = re.sub(r"(?:的)?(?:时候|时|時)$", "", value).strip()
+        if len(name) >= 2 and value and len(name) <= 20 and len(value) <= 30:
             clauses.append(f"{name}={value}")
     if clauses:
         condition = " 且 ".join(clauses)
         return re.sub(r"(?:\s*且\s*){2,}", " 且 ", condition)
-    return _condition_phrase(match.group(1))
+    return _condition_phrase(segment)
+
+
+#: 条件段尾部：谓语与时态虚词（「…时显示该字段」「…时才展示」「…则显示」）
+_CONDITION_TAIL_RE = re.compile(
+    r"\s*(?:"
+    r"(?:的)?(?:[时時]候|[时時])[，,]?\s*(?:才|則|则)?\s*(?:顯示|显示|展示|可[见見])?"
+    r"|(?:才|則|则)\s*(?:顯示|显示|展示)?"
+    r"|(?:顯示該字段|显示该字段|顯示該欄位|显示该栏位|顯示|显示|展示)"
+    r"|(?:才|則|则)"
+    r")\s*$"
+)
+
+
+def _clean_condition_segment(raw: str) -> str:
+    """把条件声明的整段先削成「只剩条件本身」。
+
+    「仅当订单类型选择外卖时显示该字段」若不先削掉引导词/谓语，
+    条件值会连成 "外卖时显示该字段"，直接进断言就会验错对象。
+    """
+    seg = _strip_zero_width(raw or "").strip()
+    # 顺序要紧：「只有当…」必须先剥「只有」再剥「当」，否则剩个孤零零的「有」
+    seg = re.sub(r"^(?:[仅僅只][有當当]|[仅僅只][当當]|[只][有]|[当當]|如果|若)\s*", "", seg).strip()
+    seg = re.sub(r"^(?:[仅僅只][当當]|[当當])\s*", "", seg).strip()
+    # 尾部谓语可能叠两层（"时才显示该字段"），循环削
+    for _ in range(3):
+        new = _CONDITION_TAIL_RE.sub("", seg).strip()
+        if new == seg:
+            break
+        seg = new
+    return seg.strip("，, ")
 
 
 def _condition_phrase(raw: str) -> str:
     """把「排隊打開且排隊集成方選擇GULU、QRS」「當店鋪狀態開啟」归一成条件短语。"""
-    phrase = _strip_zero_width(raw or "").strip()
-    phrase = re.sub(r"^[當当]\s*", "", phrase).strip()
+    phrase = _clean_condition_segment(raw)
     phrase = re.sub(r"且\s*[當当]", "且", phrase)
     # 只取最靠近「顯示該字段」的那一小句，避免把前文整段带进条件
     phrase = re.split(r"[，,；;]", phrase)[-1].strip()

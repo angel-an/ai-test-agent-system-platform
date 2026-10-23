@@ -404,9 +404,11 @@ class TestParsingDefectFixes:
 
         assert extract_condition("當店鋪狀態開啟時，顯示該字段支持設置營業狀態關閉日期") == "店鋪狀態開啟"
         assert extract_condition("排隊打開顯示該字段選項範圍：GULU、QRS") == "排隊打開"
+        # rev184：无冒号的繁体「X選擇值」式也被识别，且与「X选择：值」同走
+        # 「X=值」归一化——同一语义形态（繁简/有无冒号）产出统一口径。
         assert extract_condition(
             "排隊打開且排隊集成方選擇GULU、QRS時顯示該字段選項範圍：rolling"
-        ) == "排隊打開且排隊集成方選擇GULU、QRS"
+        ) == "排隊打開且排隊集成方=GULU、QRS"
         # 「X选择：值」式仍走归一化（既有行为不变）
         assert extract_condition(
             "当变动类型选择：企业储值充值）且变更方式选中：批量导入，显示该字段1、下载模板"

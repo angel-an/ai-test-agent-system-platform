@@ -65,6 +65,34 @@ UNMAPPED_MODULE = "未归属（非业务模块）"
 AMBIGUITY_DOCUMENT = "document_ambiguity"
 AMBIGUITY_MANUAL_SUPPLEMENT = "manual_supplement"
 
+#: 模糊词（rev183）：需求里这些词进不了断言——"尽量/适当"没有阈值，"等"没有闭集，
+#: "支持多种"没有数量。此前它们静默变成"需人工执行"，用户只看到"没自动覆盖"却
+#: 不知道是**文档写法**的问题。裁决：不做自动替换（替换会凭空造出阈值，跑绿也是假通过），
+#: 只在生成期点名，让写文档的人把"适当限制"改成"最多20字"。
+#: 刻意**不含**裸「等」——"等待""等于"会大面积误伤；只认「…等」列举未闭合的形态。
+_VAGUE_WORD_PATTERNS: list[tuple[str, "re.Pattern[str]", str]] = [
+    ("尽量", re.compile(r"尽量|盡量|尽可能|儘可能"), "「尽量/尽可能」无阈值，无法判定合格线"),
+    ("适当", re.compile(r"适当|適當|合理(?:的)?(?:范围|範圍|限制|长度|長度)?"), "「适当/合理」没有可判定的界"),
+    ("支持多种", re.compile(r"多种|多種|若干|一些|多个|多個"), "「多种/多个」没有闭集，枚举校验无法穷举"),
+    ("等等", re.compile(r"等等|等其[它他]|之类的|之類的"), "「等等/之类」取值未闭合"),
+    ("若干位", re.compile(r"若干位|若干個?|数量不限|數量不限|不限数量|不限數量"), "数量未给定，产出不了边界值"),
+    ("视情况", re.compile(r"视情况|視情況|看情况|酌情|自行判断|自行判斷"), "「视情况/酌情」把判定权交给了人，机器无法判"),
+    ("优化", re.compile(r"友好|友善|美观|美觀|优化|優化|流畅|流暢"), "体验类形容词，没有可观察的判定点"),
+]
+#: 需求点里出现这些"具体数值"就不算模糊（「尽量控制在20字以内」「3秒内」其实可判定）
+_CONCRETE_VALUE_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:个字|個字|字|位|条|條|个|個|次|天|秒|毫秒|分钟|分鐘|小时|小時|"
+    r"M|MB|G|GB|KB|%|px|元)"
+)
+#: rev184：这些「多」是在讲**结构/格式/数量关系**，不是"取值没列完"，不能算模糊词。
+#: 实测真实文档：「有多个用英文逗号分开」= 分隔规则（完全可判定），
+#: 却被「多个」命中并报「枚举校验无法穷举」——告警说错方向比不告警更糟。
+_VAGUE_MULTI_FALSE_POSITIVE_RE = re.compile(
+    r"多[个個条條项項]?\s*(?:用|以|之间|之間|分隔|隔开|隔開|拼接|合并|合併|并列|並列)"
+    r"|(?:英文|中文|逗号|逗號|分号|分號|顿号|頓號|空格|换行|換行)\s*多[个個]"
+    r"|多[个個]\s*(?:选项|選項)?\s*(?:之间|之間)\s*(?:用|以)"
+)
+
 #: 子章节标题 → 场景标签（同名用例靠它区分「哪个页面/哪张表」的同一字段）
 _SCENARIO_LABELS: tuple[tuple[str, str], ...] = (
     ("篩選查詢", "列表頁篩選查詢"),
@@ -257,6 +285,13 @@ async def generate_from_document(
     # 一排「需人工执行」再回头查原因。
     assertion_gap_warning = _build_assertion_gap_warning(assertion_gaps)
     expand_skip_warning = _build_expand_skip_warning(expand_skips)
+    # 模糊词（rev183）：不自动改写，只在生成期点名——「适当/尽量/多种」这类描述
+    # 是文档写法问题，凭空补一个阈值会把假通过写进断言。
+    vague_hits = scan_vague_words(
+        (structure.narrative_text if structure is not None else text) or text,
+        filename=source,
+    )
+    vague_warning = _build_vague_word_warning(vague_hits)
     assertability = _assertability_preview(text, structure, source)
     assertability_md = _render_assertability_markdown(
         assertability, len(structure.field_rules) if structure is not None else 0
@@ -275,6 +310,8 @@ async def generate_from_document(
         "assertion_gap_cases": assertion_gaps,
         "expand_skip_warning": expand_skip_warning,
         "expand_skip_points": expand_skips,
+        "vague_word_warning": vague_warning,
+        "vague_word_hits": vague_hits,
         "assertability_preview": assertability,
         "traceability_warning": (
             f"有 {len(untraced_case_titles)} 条用例未能确定功能点归属（多功能点需求不默认绑定 FP-001），"
@@ -387,10 +424,15 @@ def _build_minimal_cases(
         field_rules, filename, module_hint=module_hint or module)
     read_only_cases = _build_read_only_field_cases(
         field_rules, filename, module_hint=module_hint or module)
+    # rev185：關聯對象「配置保真」場景族——適用門店/適用商品這類關聯選擇器字段，
+    # 生成「選 N 個 → 保存 → 重開 → 逐字段比對回顯」端到端用例。字段級校驗
+    # （必填/取值/邊界）覆蓋不了保存→落庫→重開→回顯鏈路，此前整族缺失。
+    echo_cases = _build_persistence_echo_cases(
+        field_rules, filename, module_hint=module_hint or module)
     # 字段规则用例本身携带断言，不产生缺口；缺口只来自叙述条目回链失败的部分
     cases = _assign_case_metadata(narrative_cases + field_cases + companion_cases
             + filter_cases + import_cases + list_cases
-            + map_cases + read_only_cases + supplement_cases + export_cases,
+            + map_cases + read_only_cases + echo_cases + supplement_cases + export_cases,
             import_source, filename, structure)
     return _stamp_document_fingerprint(
         _resolve_duplicate_titles(cases), text), assertion_gaps, expand_skips
@@ -1457,6 +1499,171 @@ def _build_filter_field_cases(
     return cases
 
 
+#: rev185：通用「关联对象」实体名词表（框架级惯例，**不含任何项目/业务专有词**）。
+#: 关联选择器字段的实体在需求文档里高度重复：适用/关联/所属/指定/选择 + 门店/商品/分类…
+#: 这张表只做**识别**，不参与断言取值（取值永远是运行期真实数据）。
+_RELATION_ENTITY_NOUNS: tuple[str, ...] = (
+    "門店", "门店", "店鋪", "店铺", "商品", "貨品", "货品",
+    "分類", "分类", "品類", "品类", "類目", "类目", "標籤", "标签", "品牌",
+    "供應商", "供应商", "倉庫", "仓库", "商戶", "商户",
+    "員工", "员工", "職員", "职员", "角色", "部門", "部门",
+    "會員", "会员", "客戶", "客户", "優惠券", "优惠券", "卡券",
+    "活動", "活动", "頁面", "页面", "模板",
+    "門店分組", "门店分组", "商品分組", "商品分组",
+)
+
+#: 关联字段的「选择语义」动词/名词（出现在**字段名**里才算）
+_RELATION_NAME_RE = re.compile(
+    r"適用|适用|關聯|关联|所屬|所属|指定|選擇|选择|投放|參與|参与|應用|应用|綁定|绑定|使用範圍|使用范围"
+)
+#: 「选择器」类控件的类型/说明信号（出现在**类型列或说明列**）
+_RELATION_CONTROL_RE = re.compile(r"多選|多选|單選|单选|下拉|選擇器|选择器|選擇框|选择框|關聯|关联|彈窗|弹窗|穿梭框")
+#: 多选信号（决定端到端用例里"选 N 个"的 N 与追加/移除步骤）
+_RELATION_MULTI_RE = re.compile(r"多選|多选|可多選|可多选|多個|多个")
+#: 只读/系统生成字段不可配置，不做配置保真
+_NON_CONFIGURABLE_EDITABLE = ("否", "系統自動生成", "系统自动生成", "自動生成", "自动生成", "只讀", "只读")
+
+
+def _relation_field_profile(rule: Any) -> dict[str, Any] | None:
+    """识别「关联对象选择器」字段（rev185，通用）。
+
+    命中条件（满足其一，且字段名含实体名词）：
+      ① 字段名带选择语义动词（适用/关联/所属/指定/选择/投放/参与/应用/绑定…）；
+      ② 类型列/说明列出现选择器控件词（多选/单选/下拉/选择器/关联/弹窗/穿梭框）。
+    返回 ``{"entity", "multi", "inferred_type", "evidence"}``，未命中返回 None。
+    诚实边界：只做识别，不编造可选值——回显比对永远依赖运行期真实数据。
+    """
+    name = str(getattr(rule, "name", "") or "").strip()
+    type_text = str(getattr(rule, "field_type", "") or "").strip()
+    desc = str(getattr(rule, "description", "") or "").strip()
+    if not name:
+        return None
+    entity = next((e for e in _RELATION_ENTITY_NOUNS if e in name), None)
+    if not entity:
+        return None
+    has_verb = bool(_RELATION_NAME_RE.search(name))
+    has_control = bool(_RELATION_CONTROL_RE.search(f"{type_text} {desc}"))
+    if not (has_verb or has_control):
+        return None
+    multi = bool(_RELATION_MULTI_RE.search(f"{type_text} {desc}"))
+    label = f"关联{'多选' if multi else '单选'}-{entity}"
+    evidence_parts = []
+    if has_verb:
+        evidence_parts.append("字段名含选择语义")
+    if has_control:
+        evidence_parts.append("类型/说明含选择器控件词")
+    return {"entity": entity, "multi": multi, "inferred_type": label,
+            "evidence": "；".join(evidence_parts)}
+
+
+def _is_configurable_relation_rule(rule: Any) -> bool:
+    """可做配置保真的关联字段：非筛选区、非只读/系统生成。"""
+    if _is_filter_field_rule(rule):
+        return False
+    editable = str(getattr(rule, "editable", "") or "").strip()
+    if editable and any(m in editable for m in _NON_CONFIGURABLE_EDITABLE):
+        return False
+    kinds = {c.kind for c in (getattr(rule, "constraints", None) or [])}
+    if "read_only" in kinds:
+        return False
+    return True
+
+
+def _build_persistence_echo_cases(
+    field_rules: list,
+    filename: str,
+    *,
+    module_hint: str = "",
+    limit: int = 12,
+) -> list[TestCaseCreate]:
+    """關聯對象字段 → 「配置保真與回顯一致性」端到端用例（rev185）。
+
+    缺口來源（3194/3195 類缺陷的通用形態）：创建/编辑时选了特定门店/商品，
+    保存后重开，回显与配置不一致。字段级校验（必填/取值/边界）天生覆盖不了
+    「保存→落库→重开→回显」链路；此前生成器对关联选择器只产必填/取值用例，
+    配置保真场景整族缺失，只能靠人工发现。
+
+    通用形态（不含任何项目业务词）：每个关联字段一条端到端用例——
+    选 N 个具体对象 → 保存 → 重开编辑/查看 → 逐字段比对回显 → 列表行回显
+    → （多选）增删后再验证。executable_track=manual：回显比对需要运行期
+    真实对象数据；编译期 ``echo_checks`` 独立通道落地后可升 auto（与
+    filter_checks rev170 同形演进路线）。
+    """
+    cases: list[TestCaseCreate] = []
+    seen: set[str] = set()
+    for rule in field_rules or []:
+        if len(cases) >= limit:
+            break
+        profile = _relation_field_profile(rule)
+        if not profile or not _is_configurable_relation_rule(rule):
+            continue
+        name = str(getattr(rule, "name", "") or "").strip()
+        desc = str(getattr(rule, "description", "") or "").strip()
+        source = dict(getattr(rule, "source", None) or {})
+        key = f"{name}|{desc[:30]}|{source.get('table')}"
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        entity = profile["entity"]
+        multi = profile["multi"]
+        n = 2 if multi else 1
+        if multi:
+            steps = [
+                (f"新建记录：在「{name}」选择 {n} 个不同的{entity}（记下所选对象 A、B）",
+                 f"选择成功，已选 {entity} 数为 {n}"),
+                ("保存记录", "保存成功"),
+                ("重新打开该记录的编辑页（或查看页）",
+                 f"「{name}」完整回显步骤 1 所选的 {n} 个{entity}：无遗漏、无多余、名称逐个一致"),
+                ("返回列表页查看该记录行",
+                 f"列表中「{name}」的回显与配置一致（若列表不展示该字段则如实记录并跳过）"),
+                (f"再次编辑：移除其中 1 个{entity}、追加另 1 个{entity}，保存后重开",
+                 "回显按最新配置展示：被移除的对象不再出现、新追加的对象正常回显"),
+            ]
+        else:
+            steps = [
+                (f"新建记录：在「{name}」选择 1 个{entity}（记下所选对象 A）",
+                 "选择成功"),
+                ("保存记录", "保存成功"),
+                ("重新打开该记录的编辑页（或查看页）",
+                 f"「{name}」回显步骤 1 所选的{entity}，与配置一致"),
+                ("返回列表页查看该记录行",
+                 f"列表中「{name}」的回显与配置一致（若列表不展示该字段则如实记录并跳过）"),
+                (f"再次编辑：改选另 1 个{entity}，保存后重开",
+                 "回显按最新配置展示，旧值不残留"),
+            ]
+        rule_point = (f"关联对象「{name}」配置保真：保存后重开，回显与配置逐字段一致"
+                      f"（{'多选' if multi else '单选'}-{entity}）")
+        cases.append(TestCaseCreate(
+            name=f"{name}-配置保真与回显一致性校验"[:120],
+            preconditions=(f"已登录并进入新建/编辑页面；系统内存在至少 {n + 1} 个可选的{entity}数据"),
+            description=(
+                f"基于上传需求文档《{filename}》的字段说明生成；字段：{name}"
+                f"（{rule.field_type or profile['inferred_type']}）；场景：{rule_point}"
+                + (f"；识别依据：{profile['evidence']}" if not rule.field_type else "")
+            ),
+            priority=Priority.HIGH if multi else Priority.MEDIUM,
+            custom_fields={
+                "requirement_rule_id": _rule_id("PE", filename, key),
+                "requirement_rule": {"field": name,
+                                     "type": str(getattr(rule, "field_type", "") or ""),
+                                     "inferred_type": profile["inferred_type"],
+                                     "required": bool(getattr(rule, "required", False)),
+                                     "source": source,
+                                     "evidence": desc},
+                "persistence_echo_case": True,
+                "echo_spec": {"field": name, "entity": entity,
+                              "multi": multi, "sample_count": n},
+                # 诚实轨道：回显比对需运行期真实对象数据；echo_checks 编译通道落地后升 auto
+                "executable_track": "manual",
+                "source_file": filename,
+            },
+            test_case_steps=[
+                {"step": step, "result": result} for step, result in steps
+            ] or None,
+        ))
+    return cases
+
+
 #: rev107-2：導入規則條款的識別（編號條款 + 導入語義詞）
 _IMPORT_CLAUSE_RE = re.compile(r"^\s*(?:\d+|[a-zA-Z])\s*[、.．]\s*(.+)$")
 _IMPORT_CLAUSE_MARKERS = ("必填", "失敗", "重複", "保持", "最多", "導入", "导入",
@@ -2030,6 +2237,103 @@ def _build_assertion_gap_warning(gaps: list[dict[str, Any]]) -> str | None:
     )
 
 
+def scan_vague_words(text: str, filename: str = "") -> list[dict[str, Any]]:
+    """扫描需求文本里的模糊词，逐条给出「原句 + 词 + 为什么判不了 + 改写建议」（rev183）。
+
+    裁决背景（2026-10-21 用户裁定）：**不做自动替换**——把「适当限制」改成「最多20字」
+    等于凭空造阈值，用例跑绿也只是验证了自己编的数。改成生成期告警：
+    文档写法的问题要让写文档的人看见，而不是沉淀成一批「需人工执行」的静默用例。
+
+    返回结构（可 JSON 序列化）：`[{word, point, reason, suggestion}]`，同一需求点只报一次。
+    """
+    if not text:
+        return []
+    points = _extract_requirement_points(text, filename=filename) if filename else _split_sentences(text)
+    hits: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for point in points:
+        for label, pattern, reason in _VAGUE_WORD_PATTERNS:
+            hit = pattern.search(point)
+            if not hit:
+                continue
+            # 「必填，最多输入20个字，尽量控制在简短范围内」：整句有数值，但**含模糊词的那个分句**
+            # 并没有阈值。判据落在分句上，不能因为别处写了数字就放行。
+            clause = _clause_around(point, hit.start())
+            if _CONCRETE_VALUE_RE.search(clause):
+                continue
+            # 「有多个用英文逗号分开」是分隔规则，不是"取值没列完"（rev184 实测误报）
+            if label == "支持多种" and _VAGUE_MULTI_FALSE_POSITIVE_RE.search(
+                point[max(0, hit.start() - 6): hit.end() + 12]
+            ):
+                continue
+            key = f"{label}|{point[:40]}"
+            if key in seen:
+                continue
+            seen.add(key)
+            hits.append({
+                "word": label,
+                "point": point[:120],
+                "clause": clause[:60],
+                "reason": reason,
+                "suggestion": _vague_suggestion(label, point),
+            })
+            break  # 一个需求点只报最具体的那一个模糊词，避免同一句话被反复点名
+    return hits
+
+
+def _clause_around(text: str, index: int) -> str:
+    """取命中位置所在的分句（按逗号/分号/顿号切）。"""
+    left = max(
+        (text.rfind(sep, 0, index) for sep in "，,；;。"), default=-1
+    )
+    right_candidates = [
+        p for p in (text.find(sep, index) for sep in "，,；;。") if p != -1
+    ]
+    right = min(right_candidates) if right_candidates else len(text)
+    return text[left + 1: right].strip()
+
+
+def _vague_suggestion(label: str, point: str) -> str:
+    """给出可操作的改写方向（不是自动改写，只提示换成什么形态）。"""
+    table = {
+        "尽量": "改成具体上限，如「最多输入20个字」「不超过3个」",
+        "适当": "给出可判定的界，如「长度 1–50 字」「取值范围 [0,99999]」",
+        "支持多种": "列出全部合法取值（闭集），如「仅支持 jpg、png」",
+        "等等": "把取值列完，去掉「等等」",
+        "若干位": "写明数量，如「最多5张」",
+        "视情况": "写明触发条件，如「仅当订单类型=外卖时显示」",
+        "优化": "换成可观察的判定点，如「提交后 3 秒内出现成功提示」",
+    }
+    return table.get(label, "把描述换成可判定的阈值/闭集/触发条件")
+
+
+def _split_sentences(text: str) -> list[str]:
+    """无 filename 时的兜底切句（扫描用，不做需求点抽取）。"""
+    parts = re.split(r"[\n。；;]+", text or "")
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _build_vague_word_warning(hits: list[dict[str, Any]]) -> str | None:
+    """模糊词告警文案：点名句子 + 为什么判不了 + 怎么改（无命中返回 None）。"""
+    if not hits:
+        return None
+    by_word: dict[str, list[dict[str, Any]]] = {}
+    for item in hits:
+        by_word.setdefault(item.get("word") or "other", []).append(item)
+    parts: list[str] = []
+    for word, items in sorted(by_word.items(), key=lambda kv: -len(kv[1])):
+        sample = items[0]
+        parts.append(
+            f"「{word}」{len(items)} 处（{sample.get('reason')}；例：{(sample.get('point') or '')[:40]}）"
+        )
+    return (
+        f"需求文本中有 {len(hits)} 处模糊表述，无法据此生成可判定断言："
+        + "；".join(parts)
+        + "。这不影响用例生成，但对应条目只能人工执行——"
+        "把这些描述换成具体阈值/闭集/触发条件后重新生成，即可转自动校验。"
+    )
+
+
 def _assertability_preview(
     text: str, structure: "StructuredRequirement | None", filename: str
 ) -> list[dict[str, Any]]:
@@ -2189,6 +2493,11 @@ def _field_rule_cases(
     source_location = f"{filename}#字段说明表 第{rule.source.get('row', '?')}行"
     rule_id = _rule_id("FR", filename, f"{rule.name}|{rule.source.get('table')}|{rule.source.get('row')}")
     assertions = _rule_assertions(rule)
+    # rev185：类型标注补齐——文档未标注类型时，用通用关联对象识别给出推断标注，
+    # 让下游（控件类型判定 / echo_checks 通道）有类型可消费，而不是永远"未标注类型"。
+    _rel = _relation_field_profile(rule)
+    _type_label = rule.field_type or (
+        f"未标注类型，推断：{_rel['inferred_type']}" if _rel else "未标注类型")
     base_precondition = "已登录并进入需求描述的页面"
     if rule.condition:
         base_precondition += f"；{rule.condition}"
@@ -2204,7 +2513,7 @@ def _field_rule_cases(
             name=title[:120],
             description=(
                 f"基于上传需求文档《{filename}》的字段说明生成；字段：{rule.name}"
-                f"（{rule.field_type or '未标注类型'}）"
+                f"（{_type_label}）"
                 + (f"；显示条件：{rule.condition}" if rule.condition else "")
             ),
             preconditions=base_precondition,
@@ -2224,6 +2533,8 @@ def _field_rule_cases(
                 "requirement_rule": {
                     "field": rule.name,
                     "type": rule.field_type,
+                    # rev185：推断标注（未标注类型 + 关联选择器识别命中时非空）
+                    "inferred_type": _rel["inferred_type"] if _rel else "",
                     "required": rule.required,
                     "condition": rule.condition,
                     "source": rule.source,
