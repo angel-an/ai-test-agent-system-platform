@@ -408,6 +408,24 @@
       "digest": "4ff6c5eb7524",
       "date": "2026-10-23",
       "summary": "rev197: 对账行补「跳过明细」——skipped_fields（字段 → {weight,count,reasons}）进 COVERAGE_RECONCILE，直接回答「改哪一行 fields」；skipped_detail（逐条 field/case_id/scope/kinds/weight/reason，限 40 条带 truncated）留在 summary。只加观测不改判定：恒等式与跳过口径均未动。动机是 TR-801 只报「无定位器:8」查不到是哪 8 个字段，得另写探针重编"
+    },
+    {
+      "rev": "rev198",
+      "digest": "1c3e466236b0",
+      "date": "2026-10-23",
+      "summary": "rev198: 覆盖度软校验吃别名表——field_labels 的 getByText 从「只认文档字段名」改为按 [文档名, ...field_locators.aliases] 逐候选匹配，命中任一即计 found；靠别名命中的另记 field_labels_alias_used / _count（最多 8 条），与「页面真有该文案」分开看。修 field_labels_found 恒为 0 的噪声（别名配了却不算命中）。软校验仍不判定失败，真未命中照旧进 field_labels_missing"
+    },
+    {
+      "rev": "rev199",
+      "digest": "504183282ff6",
+      "date": "2026-10-23",
+      "summary": "rev199: 列表域规则文本 → 可机检断言（29 条用例原本 0 断言）。parse_list_rule 只翻结构化形态：声明了列数的列清单（支持「（15列）：」与「顯示15欄位（…）」两种写法）、给全「列名+方向」的排序；声明与解析数不符即拒绝并列出差在哪，不补齐不猜。compile_cases 合成断言单列状态 synthesized / synthesized_assertion_count / list_rule_synthesis（与需求给出的断言分开计，显式断言优先）。build_form_plan 把列契约变成会判失败的断言（assert_on_mismatch + allow_extra_columns：需求只声明「显示哪 N 列」，多出的操作/勾选列不算失败），排序下发 locators.sort_checks（column+direction 去重、owners 合并）。执行侧新增 render_sort_checks/SORT_PHASE：点列头→重采样→按数值/日期/字典序判单调，不可比较只判 unverified；列名+方向都没给的（「点击列头…结果有序」）与缺真实检索值的（「按 Case No. 过滤」）显式进 needs_input"
+    },
+    {
+      "rev": "rev200",
+      "digest": "f7115a27c971",
+      "date": "2026-10-23",
+      "summary": "rev200: 组类必填（checkbox_group）把「找到控件」与「勾上了」分开——命中口径改为回读 isChecked（点击前读一次、点后再读一次），勾上数不足 opts 长度即记 miss 并写明「勾上 m/n」；旧口径 count()>0 即命中会让覆盖层挡住点击时产生「已预填」假象，保存被前端拦住后整条回显链路退化成 unverified。value 为空时构造最小合法值（勾第一个可用选项）并标 via=auto_first_option，不参与回显比对（只为推进链路，不冒充业务选择）"
     }
   ]
 }

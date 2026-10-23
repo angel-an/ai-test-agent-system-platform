@@ -64,6 +64,9 @@ _SUMMARY_ALLOWED_KEYS = (
 _COVERAGE_ALLOWED_KEYS = (
     "cases", "rule_cases", "narrative_cases", "dangling_rule_ids", "assertions",
     "form_executable_checks", "pending_locator", "field_labels_found", "field_labels_total",
+    # rev198：靠别名命中的标签数。归档时保留计数（明细是字段名数组，体积与敏感度都
+    # 不值得进证据摘要），回答"当时的 found 是硬命中还是别名救回来的"。
+    "field_labels_alias_used_count",
 )
 _MAX_SAMPLE_ITEMS = 5
 _MAX_SAMPLE_CHARS = 80

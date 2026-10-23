@@ -452,7 +452,29 @@ from app.services.web_upload_fixtures import (
 #:     `skipped_fields`（字段 → {weight, count, reasons}，进对账行，直接回答"改哪一行 fields"）
 #:     与 `skipped_detail`（逐条 field/case_id/scope/kinds/weight/reason，限 40 条带 truncated，
 #:     留在 summary）。**只加观测，不改任何判定**——跳过与否、恒等式口径都没动。
-COMPILER_REV = "rev197"
+#:   - rev198（2026-10-23，`field_labels_found` 恒为 0 的软校验噪声）：覆盖度里的字段标签
+#:     软校验只拿**文档字段名**去 `getByText`，而配置方其实早就在 `field_locators.aliases`
+#:     登记了「文档名 → 页面定位器键」的对应关系。别名表不参与，就出现「别名配了、字段页面上
+#:     确实有、found 仍是 0」——读数的人只能怀疑字段不存在。本版让别名参与候选：
+#:     每个标签按 `[文档名, ...别名]` 逐个试，命中任一即计 found；命中的不是文档名时
+#:     记进 `field_labels_alias_used`（最多 8 条）——**别名救回来**与**页面真有该文案**
+#:     必须能分开看，否则又把噪声换成另一种噪声。软校验仍不判定失败。
+#:   - rev199（2026-10-23，29 条列表域用例恒为 0 断言）：执行侧早就够用（列契约 +
+#:     `COLUMN_DIFF` + `assert_on_mismatch`、`filter_checks`、`list_checks`），缺的是**上游**。
+#:     本版把规则文本翻成断言：①`parse_list_rule` 只认结构化形态（声明列数的列清单、
+#:     给全"列名+方向"的排序），声明与解析数不符就**拒绝并说明差在哪**，不补齐不猜；
+#:     ②`compile_cases` 合成断言并单列状态 `synthesized`（与"需求给出的断言"分开计）；
+#:     ③`build_form_plan` 把列契约变成**会判失败**的断言（`allow_extra_columns` 只放过多出的列，
+#:     因为需求只声明"要显示哪 N 列"），排序下发 `sort_checks`；
+#:     ④ 翻不动的显式进 `untranslatable`/`needs_input`——"为什么这 29 条还没断言"必须有答案。
+#:   - rev200（2026-10-23，组类必填把整条回显链路拖成 unverified）：`required_fields` 的
+#:     `checkbox_group` 旧实现拿 **`count() > 0` 当命中**——控件找到就算填了，覆盖层挡住
+#:     点击时"看起来填了、其实没勾"，保存照样被前端拦住，后面 save/reopen 全线退化成
+#:     unverified，看起来像回显不一致。本版：①**回读 `isChecked` 才算**，勾上数不足即记
+#:     miss（写明勾上几个/要几个）；②`value` 为空时**构造最小合法值**（勾第一个可用选项），
+#:     trace 标 `via: "auto_first_option"` 且**不参与回显比对**——只为让链路能往下走，
+#:     不冒充业务选择；要精确验证就显式配 value。
+COMPILER_REV = "rev200"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -483,6 +505,10 @@ _DIGEST_FUNCTIONS: tuple[str, ...] = (
     # 决定运行期选哪一行 ⇒ 与 rev137 的 parse_pre_actions 同源，必须纳入 digest。
     "parse_row_pick",
     "parse_list_checks",
+    # rev199：规则文本 → 列表断言（列契约/排序）的解析语义直接决定生成什么断言、
+    # 判不判失败 ⇒ 与 parse_list_checks 同源，必须纳入 digest。
+    "parse_list_rule",
+    "_has_rule_list_assertions",
     # rev170：filter_checks 的解析语义（option 必填 / expect_in 缺省 / reset 正则）
     # 直接决定运行期选哪个选项、断言哪列 ⇒ 与 parse_list_checks 同源，必须纳入 digest。
     "parse_filter_checks",
@@ -1270,9 +1296,167 @@ def is_list_scope_field(name: Any) -> bool:
     return text.startswith(_LIST_SCOPE_PREFIXES)
 
 
+# --------------------------------------------------------------------------
+# 列表域规则文本 → 断言（rev199）
+# --------------------------------------------------------------------------
+# 背景（2026-10-23，2890 条用例全量扫描）：``requirement_rule.field`` 属列表域的只有
+# 29 条，其中**带断言的 0 条**。执行侧其实早就够用（列契约 + ``COLUMN_DIFF`` +
+# ``assert_on_mismatch``、``filter_checks``、``list_checks``），真正缺的是**上游**：
+# 把「列表顯示欄位（15列）：店鋪編號、…」这类规则文本翻成可执行断言。
+#
+# 设计原则（宁可少翻，不造证据）：
+#   1. 只翻**结构化、可核对**的形态：声明了列数的列清单、明确的排序方向/列名；
+#   2. 声明与解析不一致（声明 15 列、解析出 14 个）→ **拒绝**并说明差在哪，
+#      不补齐、不猜、不把"看起来像列名"的词当列；
+#   3. 翻不动的（「按 X 过滤应返回匹配结果」缺真实检索值、粒度太粗的筛选规格）
+#      显式进 ``untranslatable`` / ``needs_input`` —— 让配置方看到"这条为什么没断言"，
+#      而不是在覆盖度里静静消失。
+#: 列表域可机检断言的 kind。**不**并入 ``LOCATOR_DEPENDENT_KINDS``：它们依赖列表页
+#: 表头/筛选控件，不依赖字段定位器表（并进去会把 pending_locator 抬高，制造假缺口）。
+LIST_CHECK_KINDS: frozenset[str] = frozenset({"column_contract", "sort_order", "filter_result"})
+
+#: 声明列数：``（15列）`` / ``(15欄)`` / ``（15 列）``
+_COLUMN_DECL_RE = re.compile(r"[（(]\s*(\d+)\s*[列欄栏]\s*[）)]")
+#: 另一种声明：``顯示15欄位（編號/名稱/…）`` —— 数字在词前、括号里直接就是列清单
+#: （实测 TC-700980 是这种写法；只用括号正则会把整条列清单漏掉，只剩排序）。
+_COLUMN_DECL_BARE_RE = re.compile(r"(?:顯示|显示)\s*(\d+)\s*[欄栏]?\s*位?\s*[（(：:]")
+#: 排序：``按更新時間近→遠`` / ``按創建時間遠→近`` / ``按名稱升序``
+_SORT_ORDER_RE = re.compile(
+    r"按\s*([^；;，,。：:、/]{1,24}?)\s*"
+    r"(近\s*(?:→|->|至)\s*[遠远]|[遠远]\s*(?:→|->|至)\s*近|升序|降序|正序|倒序|遞增|遞減|递增|递减)"
+)
+_DESC_HINTS = ("近→遠", "近->遠", "近→远", "近->远", "近至遠", "降序", "倒序", "遞減", "递减")
+_ASC_HINTS = ("遠→近", "远→近", "遠->近", "远->近", "升序", "正序", "遞增", "递增")
+#: 列表主体名：``「店鋪」`` / ``YL-主数据管理``（只做记录，不参与判定）
+_SUBJECT_RE = re.compile(r"(?:^|[\s，,；;])[「『]([^」』]{1,40})[」』]")
+
+
+def _split_column_names(segment: str) -> list[str]:
+    """把列清单切成列名。
+
+    分隔符按**出现次数**取主分隔符：真实文本里既有 ``、``（中文顿号）也有 ``/``
+    （繁简混排的 PRD 常见），混用会把 ``POS Payment Code`` 切坏。
+    """
+    text = segment.strip()
+    if not text:
+        return []
+    best_sep, best_count = "", 0
+    for sep in ("、", "/", "，", ","):
+        count = text.count(sep)
+        if count > best_count:
+            best_sep, best_count = sep, count
+    parts = text.split(best_sep) if best_sep else [text]
+    return [p.strip(" \t　：:；;。") for p in parts if p.strip(" \t　：:；;。")]
+
+
+def parse_list_rule(field: Any, text: Any) -> dict[str, Any]:
+    """把一条列表域规则文本翻成断言，并**如实记录翻不动的部分**。
+
+    返回::
+
+        {"field": "列表顯示欄位", "subject": "店鋪",
+         "columns": [...], "column_count_declared": 15,
+         "sort": {"column": "更新時間", "direction": "desc"} | None,
+         "assertions": [{"kind": "column_contract"|"sort_order", ...}],
+         "untranslatable": [{"text": ..., "reason": ...}],
+         "needs_input": [{"text": ..., "need": ...}]}
+
+    ``assertions`` 里的每条都带 ``origin="rule_text"``：这是**由文档规则文本合成**的，
+    与需求里显式给出的断言不是一回事，统计口径必须能分开（见 ``compile_cases``）。
+    """
+    field_name = str(field or "").strip()
+    raw = str(text or "").strip()
+    out: dict[str, Any] = {
+        "field": field_name, "text": raw, "subject": "", "columns": [],
+        "column_count_declared": 0, "sort": None,
+        "assertions": [], "untranslatable": [], "needs_input": [],
+    }
+    if not raw:
+        out["untranslatable"].append({"text": "", "reason": "规则文本为空"})
+        return out
+
+    subject = _SUBJECT_RE.search(raw)
+    if subject:
+        out["subject"] = subject.group(1).strip()
+
+    # ---- 1) 列清单（必须有"N列/欄位"声明；声明与解析数不符即拒绝） ----
+    decl = _COLUMN_DECL_RE.search(raw)
+    bare_mode = False
+    tail_start = -1
+    if decl:
+        tail_start = decl.end()
+    else:
+        bare = _COLUMN_DECL_BARE_RE.search(raw)
+        if bare:
+            decl, tail_start, bare_mode = bare, bare.end() - 1, True
+    if decl:
+        declared = int(decl.group(1))
+        out["column_count_declared"] = declared
+        tail = raw[tail_start:]
+        if bare_mode:
+            # 裸型的列清单**就在括号里**，按右括号截断；括号型的列清单在括号外，
+            # 不能截——列名自身就含半角括号（``店鋪名稱(EN)``），一截就断在半个列名上。
+            tail = re.split(r"[）)]", tail, maxsplit=1)[0]
+        tail = re.split(r"[；;。]", tail, maxsplit=1)[0]
+        tail = tail.lstrip(" \t　：:（(")
+        columns = _split_column_names(tail)
+        if not columns:
+            out["untranslatable"].append({
+                "text": raw[:80], "reason": f"声明了 {declared} 列但列清单为空（冒号后无可切分内容）"})
+        elif len(columns) != declared:
+            # 不补齐：多一个少一个都说明文本与实现/配置对不上，硬补会把差异抹平
+            out["untranslatable"].append({
+                "text": raw[:80],
+                "reason": f"声明 {declared} 列，解析出 {len(columns)} 列（{'、'.join(columns)}）",
+            })
+        else:
+            out["columns"] = columns
+            out["assertions"].append({
+                "kind": "column_contract", "field": field_name, "rule": raw,
+                "data": columns, "origin": "rule_text",
+            })
+
+    # ---- 2) 排序（列名 + 方向都要有；只说"结果有序"不算） ----
+    sort = _SORT_ORDER_RE.search(raw)
+    if sort:
+        column = sort.group(1).strip(" 　：:")
+        token = re.sub(r"\s+", "", sort.group(2))
+        direction = "desc" if any(h in token for h in _DESC_HINTS) else "asc"
+        if any(h in token for h in _ASC_HINTS):
+            direction = "asc"
+        if column:
+            out["sort"] = {"column": column, "direction": direction, "token": token}
+            out["assertions"].append({
+                "kind": "sort_order", "field": field_name, "rule": raw,
+                "data": {"column": column, "direction": direction,
+                         "source_text": token},
+                "origin": "rule_text",
+            })
+    elif "排序" in raw or "有序" in raw:
+        out["needs_input"].append({
+            "text": raw[:80],
+            "need": "排序检查需要「点哪一列 + 期望方向」；本条只说了结果有序，未给列名与方向",
+        })
+
+    # ---- 3) 搜索/筛选：可机检但缺运行期输入（真实检索值 / 控件定位） ----
+    if re.search(r"(?:按\s*[^；;，,。]{1,24}?\s*)?过\s*滤", raw) or "搜索" in raw or "搜尋" in raw:
+        if not out["assertions"]:
+            out["needs_input"].append({
+                "text": raw[:80],
+                "need": "结果集断言需要一条真实检索值（如某 Case No.），配置里没有 ⇒ 暂不可机检",
+            })
+
+    if not out["assertions"] and not out["needs_input"] and not out["untranslatable"]:
+        # 剩下的是粒度太粗的规格描述（长度限制/模糊匹配/日期范围/多维组合）
+        out["untranslatable"].append({
+            "text": raw[:120],
+            "reason": "筛选项规格描述（长度/模糊/范围/组合），未给可断言的输入输出对",
+        })
+    return out
+
+
 def parse_columns(locators: dict[str, Any] | None) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """把列配置归一成一份**契约**，返回 ``(契约|None, 被拒条目)``。
-
     契约形状（将来列表检查生成器的唯一输入）::
 
         {"table_scope": ".ant-table-thead th",
@@ -2174,13 +2358,53 @@ def compile_cases(cases: Iterable[Any]) -> dict[str, Any]:
     这三类的总数恒等于 ``case_count``（与四指标口径一致：生成用例数 ≠ 可自动执行用例数）。
     """
     compiled: list[CompiledCase] = []
+    #: rev199：列表域规则文本 → 断言的合成流水。**逐条留证**：翻成功的说清"翻成了什么"，
+    #: 翻不动的说清"为什么"，避免 29 条用例在覆盖度里"0 断言"却没人知道卡在哪。
+    list_synthesis: list[dict[str, Any]] = []
     for case in cases:
         fields = getattr(case, "custom_fields", None) or {}
         rule = fields.get("requirement_rule") or {}
         assertions = list(fields.get("assertions") or [])
         rule_id = fields.get("requirement_rule_id") or ""
+        field_name = str(rule.get("field") or "")
+        synthesized = False
+        # rev199：列表域用例在库里断言数为 0，但规则文本里有结构化的列清单/排序方向。
+        # 只在**没有显式断言**时才合成——已有断言时以需求为准，推断不得覆盖需求。
+        if not assertions and field_name and is_list_scope_field(field_name):
+            parsed = parse_list_rule(
+                field_name, rule.get("rule") or rule.get("description") or "")
+            if parsed["assertions"]:
+                assertions = parsed["assertions"]
+                synthesized = True
+                list_synthesis.append({
+                    "identifier": getattr(case, "identifier", "") or "",
+                    "field": field_name,
+                    "subject": parsed["subject"],
+                    "columns": len(parsed["columns"]),
+                    "sort": parsed["sort"],
+                    "assertions": [a["kind"] for a in parsed["assertions"]],
+                    "untranslatable": parsed["untranslatable"],
+                    "needs_input": parsed["needs_input"],
+                })
+            elif parsed["untranslatable"] or parsed["needs_input"]:
+                # 翻不动也要留痕：这是"为什么这 29 条里还有 N 条没断言"的唯一答案
+                list_synthesis.append({
+                    "identifier": getattr(case, "identifier", "") or "",
+                    "field": field_name,
+                    "subject": parsed["subject"],
+                    "columns": 0,
+                    "sort": None,
+                    "assertions": [],
+                    "untranslatable": parsed["untranslatable"],
+                    "needs_input": parsed["needs_input"],
+                })
         kind = "rule" if assertions or rule else "narrative"
-        if kind == "rule":
+        if synthesized:
+            # 合成断言可自动执行，但**不是**需求给出的断言：单独一个状态，
+            # 免得「文档给了 3 条断言」与「平台从规则文本推了 3 条」混成一个数。
+            compile_status = "synthesized"
+            compile_reason = f"由规则文本合成 {len(assertions)} 条可机检断言（列契约/排序）"
+        elif kind == "rule":
             compile_status = "compiled"
             compile_reason = f"携带 {len(assertions)} 条断言" if assertions else "携带规则体"
         elif rule_id:
@@ -2195,7 +2419,7 @@ def compile_cases(cases: Iterable[Any]) -> dict[str, Any]:
             name=getattr(case, "name", "") or "",
             rule_id=rule_id,
             kind=kind,
-            field=str(rule.get("field") or ""),
+            field=field_name,
             steps=_steps_of(case),
             assertions=assertions,
             compile_status=compile_status,
@@ -2208,6 +2432,15 @@ def compile_cases(cases: Iterable[Any]) -> dict[str, Any]:
     soft_assertions = sum(
         1 for c in compiled for a in c.assertions if a.get("kind") in SOFT_CHECK_KINDS
     )
+    # rev199：列表域断言**单独计数**——它们不进 ``assertion_count``（那是"需求给出的
+    # 可定位断言数"），也不进 ``locator_depended_assertion_count``（不依赖字段定位器）。
+    list_assertions = sum(
+        1 for c in compiled for a in c.assertions
+        if a.get("kind") in LIST_CHECK_KINDS and a.get("origin") == "rule_text"
+    )
+    synthesized_assertions = sum(
+        1 for c in compiled for a in c.assertions if a.get("origin") == "rule_text"
+    )
     field_labels: list[str] = []
     for c in compiled:
         if c.field and c.field not in field_labels:
@@ -2219,9 +2452,11 @@ def compile_cases(cases: Iterable[Any]) -> dict[str, Any]:
         c.rule_id for c in compiled
         if c.rule_id and c.kind != "rule"
     ]
-    uncompiled = [c for c in compiled if c.compile_status != "compiled"]
+    # synthesized 是"可自动执行"的一种（断言由规则文本合成），不算未编译
+    uncompiled = [c for c in compiled if c.compile_status not in ("compiled", "synthesized")]
     case_status_counts = {
         "compiled": sum(1 for c in compiled if c.compile_status == "compiled"),
+        "synthesized": sum(1 for c in compiled if c.compile_status == "synthesized"),
         "dangling_rule": sum(1 for c in compiled if c.compile_status == "dangling_rule"),
         "narrative": sum(1 for c in compiled if c.compile_status == "narrative"),
     }
@@ -2244,9 +2479,20 @@ def compile_cases(cases: Iterable[Any]) -> dict[str, Any]:
         "rule_ids": rule_ids,
         "dangling_rule_ids": dangling_rule_ids,
         "field_labels": field_labels,
+        # ---- rev199：列表域合成口径（与"文档给出的断言"分开计）----
+        #: 由规则文本成功翻出可机检断言的用例数
+        "synthesized_case_count": case_status_counts["synthesized"],
+        #: 合成断言总条数（column_contract / sort_order）
+        "synthesized_assertion_count": synthesized_assertions,
+        #: 其中属于列表域 kind 的条数（当前 == synthesized_assertion_count，单列是为了
+        #: 将来出现别的来源时口径不漂）
+        "list_assertion_count": list_assertions,
         "assertion_count": locator_assertions + soft_assertions,
         "soft_assertion_count": soft_assertions,
         "locator_depended_assertion_count": locator_assertions,
+        #: rev199：逐条合成记录（成功的说翻成了什么，失败的说明为什么）。
+        #: 这是"29 条列表域用例为什么还是 0 断言"的唯一可追溯答案。
+        "list_rule_synthesis": list_synthesis,
     }
 
 
@@ -2263,13 +2509,21 @@ def render_manifest_block(manifest: dict[str, Any], *, var_name: str = "COMPILED
 def render_coverage_snippet(*, scope_var: str = "appScope",
                             manifest_var: str = "COMPILED_CASES",
                             form_executable_checks: int = 0,
-                            assertion_checks: int = 0) -> str:
+                            assertion_checks: int = 0,
+                            field_aliases: Mapping[str, Any] | None = None) -> str:
     """渲染"编译覆盖度"输出片段。
 
     - 文档字段名做**软校验**（只统计、不判定失败，避免措辞差异造成假失败）；
     - ``pending_locator`` 扣掉表单执行器**真正执行**的那部分断言，避免把已执行的
       断言继续算作"未执行"；软校验单独记名，不冒充"已执行断言"。
+    - ``field_aliases``（rev198）：定位器配置里的「文档字段名 → 定位器键」别名表。
+      软校验按 `[文档名, ...别名]` 逐候选匹配——别名表配了却不算命中，等于让
+      配置方为一条已经解决的差异反复解释（实测 found=0 全是这种）。
     """
+    alias_payload = json.dumps(
+        dict(field_aliases) if isinstance(field_aliases, Mapping) else {},
+        ensure_ascii=False,
+    )
     return f"""
   // ---- 编译覆盖度（来自文档生成的用例/规则；软校验不判定失败）----
   // rev116（2026-10-19，实测 `店鋪名稱(CN）` 命中 0/3）：文档标签与页面文案常常只差
@@ -2290,17 +2544,35 @@ def render_coverage_snippet(*, scope_var: str = "appScope",
     if (tokens.length && tokens[tokens.length - 1] === '\\\\*') tokens.pop();
     return new RegExp(tokens.join('\\\\s*'));
   }};
+  // rev198：别名表参与软校验。配置里的 `aliases`（文档字段名 → 定位器键）此前只有
+  // 字段级检查在用；覆盖度这一段只认文档名，于是"别名早就配好了"在读数上仍表现为未命中。
+  const __fieldAliases: Record<string, unknown> = {alias_payload};
+  const __labelCandidates = (label: string): string[] => {{
+    const raw = __fieldAliases[label];
+    const list = Array.isArray(raw) ? raw : (typeof raw === 'string' ? [raw] : []);
+    const extra = list.map((x) => String(x || '')).filter((x) => x && x !== label);
+    return [label, ...extra];
+  }};
   let __labelHits = 0;
   const __labelMiss: string[] = [];
+  const __labelAliasUsed: Array<{{label: string, matched: string}}> = [];
   for (const label of {manifest_var}.field_labels) {{
-    try {{
-      if (await {scope_var}.getByText(__labelRe(label)).first().count()) {{
-        __labelHits += 1;
-      }} else {{
-        __labelMiss.push(label);
+    let __matched = '';
+    for (const __cand of __labelCandidates(label)) {{
+      try {{
+        if (await {scope_var}.getByText(__labelRe(__cand)).first().count()) {{
+          __matched = __cand;
+          break;
+        }}
+      }} catch {{
+        // 单个候选查询失败不影响整体
       }}
-    }} catch {{
-      // 单个标签查询失败不影响整体
+    }}
+    if (__matched) {{
+      __labelHits += 1;
+      if (__matched !== label) __labelAliasUsed.push({{label, matched: __matched}});
+    }} else {{
+      __labelMiss.push(label);
     }}
   }}
   console.log('COMPILED_COVERAGE ' + JSON.stringify({{
@@ -2316,6 +2588,10 @@ def render_coverage_snippet(*, scope_var: str = "appScope",
     field_labels_total: {manifest_var}.field_labels.length,
     //: 未命中的标签名（最多 8 个）：区分"页面没有该字段"与"标签写法不一致"
     field_labels_missing: __labelMiss.slice(0, 8),
+    //: rev198：靠别名命中的标签（最多 8 条）。与 missing 分开看——这一类不是缺字段，
+    // 而是文档名与页面文案不同名，且别名表已经把差异填平了。
+    field_labels_alias_used: __labelAliasUsed.slice(0, 8),
+    field_labels_alias_used_count: __labelAliasUsed.length,
     sample_rule_ids: {manifest_var}.rule_ids.slice(0, 5),
   }}));
 """
@@ -2323,11 +2599,13 @@ def render_coverage_snippet(*, scope_var: str = "appScope",
 
 __all__ = [
     "CompiledCase",
+    "LIST_CHECK_KINDS",
     "LOCATOR_DEPENDENT_KINDS",
     "RECHARGE_FORM_LOCATORS",
     "SOFT_CHECK_KINDS",
     "build_form_plan",
     "compile_cases",
+    "parse_list_rule",
     "render_coverage_snippet",
     "render_form_executor",
     "render_manifest_block",
@@ -2754,6 +3032,18 @@ def _suggest_fields(needle: Any, candidates: Iterable[Any], limit: int = 3) -> l
     return [name for _score, name in scored[:limit]]
 
 
+def _has_rule_list_assertions(manifest: Mapping[str, Any] | None) -> bool:
+    """manifest 里是否存在**由规则文本合成**的列表域断言（列契约/排序）。
+
+    只认 ``origin == "rule_text"``：需求里显式给的断言不算，它们走原有的字段级通道。
+    """
+    for case in ((manifest or {}).get("cases") or []):
+        for assertion in (case.get("assertions") or []):
+            if assertion.get("origin") == "rule_text" and assertion.get("kind") in LIST_CHECK_KINDS:
+                return True
+    return False
+
+
 def build_form_plan(
     manifest: dict[str, Any],
     locators: dict[str, Any] | None = None,
@@ -2781,7 +3071,9 @@ def build_form_plan(
     fields = loc.get("fields") or {}
     # rev178：只有列表域通道（无表单字段）也必须能生成计划——否则配了 list_url /
     # action_matrix_checks 的子功能会在这里被早退成"什么都没有"。
-    if not fields and not has_channel_config(loc):
+    # rev199：由规则文本合成的列表断言同理——只有列契约/排序（没有 fields、没有任何
+    # 通道配置）的用例，正是"29 条列表域用例"的典型形态，早退会把它们原样丢掉。
+    if not fields and not has_channel_config(loc) and not _has_rule_list_assertions(manifest):
         return None
 
     checks: list[dict[str, Any]] = []
@@ -2801,8 +3093,88 @@ def build_form_plan(
     #: "配了 N 条、命中 M 条"，避免用"配置存在"冒充"已生效"。
     alias_hits: dict[tuple[str, str], int] = {}
     #: 列契约（N3，2026-10-18）：与预览接口共用**同一个**解析函数。
-    #: 本期只用于诊断/配置校对，不产生检查（尚无列表检查执行器）。
+    #: rev199 起它不只是诊断：manifest 里由规则文本合成的 ``column_contract`` 断言会在这里
+    #: 变成**会判失败**的契约（``assert_on_mismatch`` + ``allow_extra_columns``）。
     columns_contract, column_rejects = parse_columns(loc)
+
+    # ---- rev199：消费列表域合成断言（列契约 / 排序）----
+    # 只认 ``origin == "rule_text"``：需求里显式给出的断言不会走到这里，两种来源不混。
+    rule_column_sets: list[dict[str, Any]] = []
+    rule_sorts: list[dict[str, Any]] = []
+    for _case in (manifest.get("cases") or []):
+        for _a in (_case.get("assertions") or []):
+            if _a.get("origin") != "rule_text":
+                continue
+            _kind = _a.get("kind")
+            if _kind == "column_contract":
+                _cols = [str(x) for x in (_a.get("data") or []) if str(x or "").strip()]
+                if _cols:
+                    rule_column_sets.append({
+                        "case_id": str(_a.get("case_id") or _case.get("identifier") or ""),
+                        "rule_id": str(_case.get("rule_id") or ""),
+                        "columns": _cols,
+                    })
+            elif _kind == "sort_order":
+                _data = _a.get("data") or {}
+                if _data.get("column"):
+                    rule_sorts.append({
+                        "case_id": str(_a.get("case_id") or _case.get("identifier") or ""),
+                        "rule_id": str(_case.get("rule_id") or ""),
+                        "column": str(_data.get("column")),
+                        "direction": "desc" if _data.get("direction") == "desc" else "asc",
+                    })
+
+    column_assert_source = ""
+    column_contract_conflicts: list[dict[str, Any]] = []
+    if rule_column_sets:
+        # 同一子功能里多条用例常重复同一份列清单（实测 15 列被 3 条用例各写一次）。
+        # 以**第一条**为准；与它不一致的列集不合并、不猜，记成冲突给配置方看。
+        primary = rule_column_sets[0]["columns"]
+        for item in rule_column_sets[1:]:
+            if item["columns"] != primary:
+                column_contract_conflicts.append({
+                    "case_id": item["case_id"], "configured": len(item["columns"]),
+                    "configured_preview": item["columns"][:6],
+                    "adopted": len(primary),
+                })
+        if columns_contract is None:
+            columns_contract = {
+                "table_scope": "", "source": "rule_text", "notes": [], "column_count": len(primary),
+                "items": [{"key": c, "header_text": c, "aliases": []} for c in primary],
+                # 需求明确列出"要显示哪 N 列" ⇒ 列缺失/顺序变化应当判失败（不再只是诊断）。
+                "assert_on_mismatch": True,
+                # 但**多出的列不算失败**：页面常带"操作"列/勾选列，需求列清单不含它们。
+                "allow_extra_columns": True,
+            }
+            column_assert_source = "rule_text"
+        else:
+            # 显式契约优先（列名可能带英文表头、更细）；只把"要不要判失败"打开。
+            columns_contract = {**columns_contract, "assert_on_mismatch": True,
+                                "allow_extra_columns": columns_contract.get(
+                                    "allow_extra_columns", True)}
+            column_assert_source = "explicit+rule_text"
+
+    #: 排序检查（rev199）：按 column+direction 去重——同一列表页被多条用例重复要求排序时，
+    #: 没必要点同一个列头 N 次；owners 合并，证据仍能落到每条用例上。
+    sort_checks: list[dict[str, Any]] = []
+    _sort_index: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in rule_sorts:
+        key = (item["column"], item["direction"])
+        owner = {"case_id": item["case_id"], "rule_id": item["rule_id"]}
+        if key in _sort_index:
+            _sort_index[key]["owners"].append(owner)
+            continue
+        entry = {
+            "name": f"sort:{item['column']}:{item['direction']}",
+            "column": item["column"],
+            "direction": item["direction"],
+            "list_url": str(loc.get("list_url") or ""),
+            "max_rows": 30,
+            "source": "rule_text",
+            "owners": [owner],
+        }
+        _sort_index[key] = entry
+        sort_checks.append(entry)
 
     def _resolve_field_name(name: str) -> str:
         """文档字段名 → 定位器键。仅按**显式别名表**解析，不做模糊匹配。"""
@@ -3450,9 +3822,16 @@ def build_form_plan(
         # "配了、检查还是 unverified"，又开始怀疑定位器。
         "pre_actions": pre_actions,
         "pre_action_rejects": pre_action_rejects,
-        # 列契约：本期仅供诊断/配置校对（没有列表检查执行器），不产生检查。
+        # 列契约：rev199 起，规则文本合成的 ``column_contract`` 会把它变成**会判失败**的
+        # 断言（``assert_on_mismatch``）；显式配置的契约仍然优先，只把开关打开。
         "columns": columns_contract,
         "column_rejects": column_rejects,
+        #: 列断言的来源：""（无）/ "rule_text"（由需求规则文本合成）/ "explicit+rule_text"
+        "column_assert_source": column_assert_source,
+        #: 多条用例列清单互不相同 → 只采用第一条，其余如实列出（不合并、不猜）
+        "column_contract_conflicts": column_contract_conflicts,
+        #: 排序检查条数（进脚本后由 SORT_PHASE 执行）
+        "sort_check_count": len(sort_checks),
         # 运行期唯一化（A2 / rev124）：配置里写了 ``{{RUN_TAG}}`` 的字段，运行期换成
         # 本次运行的唯一值；``run_tag_gap`` 列出"真实落库但值固定"的字段（不可重复跑）。
         "run_tag": run_tag_usage(negative_scenarios),
@@ -3469,6 +3848,11 @@ def build_form_plan(
         {k: v for k, v in loc.items() if k != "columns_legacy"}
         if "columns_legacy" in loc else loc
     )
+    # rev199：排序检查随 locators 下发（执行器读 FORM_PLAN.locators.sort_checks）。
+    # 走 locators 而不是新增顶层键，是因为 ``FORM_PLAN`` 是**白名单字典**——新增顶层键
+    # 必登记，漏登记的后果实测过（rev131/TR-748：planned=0）。locators 原样透传，无此风险。
+    if sort_checks:
+        plan_locators = {**plan_locators, "sort_checks": sort_checks}
 
     if not checks and not negative_scenarios:
         # 没有可执行检查时**不返回 None**：那样会把 skipped 现场一并丢掉
@@ -3476,14 +3860,21 @@ def build_form_plan(
         #  资产审计里也没有 skipped_assertions，只剩一句"无定位器"无从下手）。
         # 这里返回一个 executable=False 的计划：调用方据此**不注入执行器**（避免为 0 条检查
         # 打开表单、把环境问题变成硬失败），但审计与运行期现场仍然完整。
+        # rev199：列契约/排序断言的判定在**列表通道**（COLUMN_DIFF / SORT_PHASE），
+        # 不在这里的 checks 里。有它们时不能返回 None，否则 19 条"只要求列清单"的
+        # 用例会连计划都没有，产物里既无契约也无排序断言。
+        list_asserts_only = bool(column_assert_source or sort_checks)
         if (not skipped and not negative_scenario_rejects
                 and not list_check_rejects and not export_check_rejects
                 and not filter_check_rejects and not action_matrix_rejects
-                and not echo_check_rejects):
+                and not echo_check_rejects and not list_asserts_only):
             return None
         return {"locators": plan_locators, "checks": [], "skipped": skipped,
                 "check_count": 0, "skipped_count": len(skipped),
-                "assertion_check_count": 0, "executable": False,
+                "assertion_check_count": 0,
+                # executable 只表达"是否注入表单执行器"；列表通道由模板单独注入，
+                # 所以这里保持 False（不为 0 条字段检查打开表单）。
+                "executable": False,
                 "negative_scenarios": [], "negative_scenario_rejects": negative_scenario_rejects,
                 "list_checks": [], "list_check_rejects": list_check_rejects,
                 "export_check_rejects": export_check_rejects,
@@ -8042,21 +8433,46 @@ _FORM_EXECUTOR_TS = r"""
             }
             if (String(rf.kind) === 'checkbox_group' || String(rf.kind) === 'radio') {
               // rev187：复选组必填无法 fill，按 value 里的选项文本逐个点选（顿号/逗号分隔）
-              const opts = String(rf.value || '').split(/[、,，;；]/).map((s) => s.trim()).filter(Boolean);
-              let hit = 0;
+              let opts = String(rf.value || '').split(/[、,，;；]/).map((s) => s.trim()).filter(Boolean);
+              // rev200：组类必填**没给 value** 时，保存会被前端拦住、整条链路退化成 unverified
+              // （实测 5 条里就有这种）。这里构造"最小合法值"——勾第一个可用选项，
+              // 只为让链路能往下走。**不冒充业务选择**：trace 标 via=auto_first_option，
+              // 不参与回显比对；要精确验证就显式配 value。
+              const autoPick = opts.length === 0;
+              if (autoPick) {
+                const firstWrap = anchor.locator('.ant-checkbox-wrapper, .ant-radio-wrapper').first();
+                if (await firstWrap.count().catch(() => 0)) {
+                  const t = String(await firstWrap.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+                  if (t) opts = [t.slice(0, 30)];
+                }
+              }
+              // 计数口径：**勾上才算**（回读 isChecked）。旧实现 count()>0 就算命中，
+              // 覆盖层挡住点击时会"看起来填了、其实没勾"，保存照样被拦。
+              const checkedNow: string[] = [];
               for (const opt of opts) {
                 const cbx = anchor.locator('.ant-checkbox-wrapper, .ant-radio-wrapper')
                   .filter({hasText: new RegExp(escRe(opt))}).first();
-                if (await cbx.count().catch(() => 0)) {
-                  const checked = await cbx.locator('input[type=checkbox], input[type=radio]')
-                    .first().isChecked().catch(() => false);
-                  if (!checked) await cbx.click({timeout: 5000}).catch(() => undefined);
-                  hit += 1;
+                if (!await cbx.count().catch(() => 0)) continue;
+                const box = cbx.locator('input[type=checkbox], input[type=radio]').first();
+                let checked = await box.isChecked().catch(() => false);
+                if (!checked) {
+                  await cbx.click({timeout: 5000}).catch(() => undefined);
+                  checked = await box.isChecked().catch(() => false);
                 }
+                if (checked) checkedNow.push(opt);
               }
-              prefillTrace.push({label: rfLabel, filled: hit > 0, picks: hit, want: opts.length,
-                                 via: selHint ? 'selector' : 'label'});
-              if (!hit) prefillMiss.push(`${rfLabel}（选项一个都没点中：${opts.join('/')}）`);
+              const complete = opts.length > 0 && checkedNow.length === opts.length;
+              prefillTrace.push({
+                label: rfLabel, filled: complete,
+                picks: checkedNow.length, want: opts.length,
+                values: checkedNow.slice(0, 6),
+                via: autoPick ? 'auto_first_option' : (selHint ? 'selector' : 'label'),
+              });
+              if (!complete) {
+                prefillMiss.push(
+                  `${rfLabel}（勾上 ${checkedNow.length}/${opts.length} 个选项`
+                  + `${autoPick ? '，自动构造值失败' : ''}：${opts.join('/') || '无可选项'}）`);
+              }
               continue;
             }
             const sel2 = (String(rf.kind) === 'textarea' ? 'textarea' : 'input') + ':visible';

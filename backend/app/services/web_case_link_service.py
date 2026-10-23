@@ -393,6 +393,9 @@ type ColumnContract = {
   notes?: string[];
   //: 仅当配置显式要求时才因列头不一致判失败（默认关闭，见文件头注释）
   assert_on_mismatch?: boolean;
+  //: rev199：需求列清单只要求"这些列都在、顺序对"，页面多出的列（操作/勾选）不算失败。
+  //: 由规则文本合成的契约恒为 true；显式契约默认沿用旧口径（多出列算不一致）。
+  allow_extra_columns?: boolean;
 } | null;
 const COLUMN_CONTRACT: ColumnContract = @@COLUMNS_JSON@@;
 
@@ -479,12 +482,16 @@ async function columnDiag(scope: ClickScope, label: string): Promise<void> {
   for (let i = 1; i < hitIndex.length; i += 1) {
     if (hitIndex[i] <= hitIndex[i - 1]) { orderMonotonic = false; break; }
   }
-  const verdict = (missing.length || extra.length || !orderMonotonic) ? 'mismatch' : 'match';
+  // rev199：``allow_extra_columns`` —— 需求文本只声明"要显示哪 N 列"，
+  // 页面多出的「操作」「勾选」列不是需求违背。不开这个开关就判失败，会造出整批假失败。
+  const allowExtra = !!(COLUMN_CONTRACT && COLUMN_CONTRACT.allow_extra_columns === true);
+  const unexpected = allowExtra ? 0 : extra.length;
+  const verdict = (missing.length || unexpected || !orderMonotonic) ? 'mismatch' : 'match';
   console.log('COLUMN_DIFF ' + JSON.stringify({
     label, verdict, source: (COLUMN_CONTRACT && COLUMN_CONTRACT.source) || '',
     configured: items.length, page_count: picked.headers.length, matched: matched.length,
     missing_in_page: missing.slice(0, 20), extra_in_page: extra.slice(0, 20),
-    order_monotonic: orderMonotonic,
+    allow_extra_columns: allowExtra, order_monotonic: orderMonotonic,
   }));
   if (verdict !== 'match' && COLUMN_CONTRACT && COLUMN_CONTRACT.assert_on_mismatch === true) {
     expect(verdict, `列头与配置不一致：缺失=${missing.join('/') || '无'}；多出=${extra.join('/') || '无'}`).toBe('match');
@@ -497,6 +504,204 @@ async function columnDiag(scope: ClickScope, label: string): Promise<void> {
 def render_column_diag(columns_json: str = "null") -> str:
     """渲染列头只读比对块。``columns_json`` 由编译期列契约序列化而来（可为 null）。"""
     return _COLUMN_DIAG_TEMPLATE.replace("@@COLUMNS_JSON@@", columns_json or "null")
+
+
+# ==========================================================================
+# 列表排序断言（rev199）
+# ==========================================================================
+# 背景：29 条列表域用例在库里断言数为 0，其中 3 条的规则文本给了**列名 + 方向**
+# （「按更新時間近→遠」）。这类断言此前无处可去：``list_checks`` 验"记录是否可见"，
+# ``filter_checks`` 验"筛选后取值集合"，都不看**排序**。
+#
+# 判定口径（宁可 unverified，不假失败）：
+#   · 点列头 → 等一次重排 → 读该列前 N 行取值 → 按方向判单调（允许相等）；
+#   · 取值既不是数字也不是可解析日期 → **unverified**（"无法比较"不是"排序错"）；
+#   · 只有"样本足够 + 可比 + 单调不成立"才判失败；
+#   · 失败不中断在同一步：全部跑完再统一抛，避免第一条就把后面的检查吞掉。
+_SORT_DIAG_TEMPLATE = r"""
+// ---- 列表排序断言开始（rev199，由需求规则文本合成；勿手改）-------------------
+type SortCheckSpec = {
+  name?: string; column: string; direction: 'asc' | 'desc';
+  max_rows?: number; list_url?: string; owners?: Array<{case_id?: string; rule_id?: string}>;
+};
+const SORT_CHECKS: SortCheckSpec[] = @@SORT_CHECKS_JSON@@;
+
+//: 取值归一：全角空格/多空白压成一个，去掉千分位逗号
+function normSortValue(value: unknown): string {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+}
+
+//: 排序比较：先按数值（去千分位），再按日期，最后按字符串。
+//: 返回 null 表示**这一列不可比较**（不是"排序错"）。
+function sortCompare(a: string, b: string): number | null {
+  const na = Number(a.replace(/[, ]/g, ''));
+  const nb = Number(b.replace(/[, ]/g, ''));
+  if (a !== '' && b !== '' && Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+  // 日期分支必须先看形态：``Date.parse('A-2')`` 在 V8 里会**返回一个数**（不是 NaN），
+  // 于是「編號 A-2 / A-10」这类文本列会被当成日期比出 -20908800000 的荒谬结果。
+  const isoish = (s: string) =>
+    /^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(s) || /^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(s);
+  if (isoish(a) && isoish(b)) {
+    const da = Date.parse(a.replace(/\//g, '-'));
+    const db = Date.parse(b.replace(/\//g, '-'));
+    if (Number.isFinite(da) && Number.isFinite(db)) return da - db;
+  }
+  // 纯文本列（編號/名稱）：字典序是**合法可判**的，尤其是"編號"这类定长编码
+  if (/^[\x20-\x7e\u4e00-\u9fff()（）\-_#]+$/.test(a)
+      && /^[\x20-\x7e\u4e00-\u9fff()（）\-_#]+$/.test(b)) {
+    return a < b ? -1 : (a > b ? 1 : 0);
+  }
+  return null;
+}
+
+async function sortColumnSample(
+  scope: ClickScope, column: string, maxRows: number,
+): Promise<{ ok: boolean; why?: string; rows?: number; colIndex?: number; values?: string[]; heads?: string[] }> {
+  const spec = { column, maxRows };
+  return await scope.evaluate((cfg: any) => {
+    const norm = (s: any) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+    let dataRows: any[] = [];
+    let bestCols = 0;
+    Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'), (tb: any) => {
+      const rs = Array.prototype.filter.call(tb.children, (tr: any) =>
+        tr.querySelector('td') && tr.offsetParent !== null);
+      if (!rs.length) return;
+      const n = rs[0].querySelectorAll('td').length;
+      if (n > bestCols) { bestCols = n; dataRows = rs; }
+    });
+    if (!dataRows.length) return { ok: false, why: 'no_rows' };
+    let heads: string[] = [];
+    Array.prototype.forEach.call(document.querySelectorAll('.ant-table-thead'), (th: any) => {
+      const hs = Array.prototype.map.call(th.querySelectorAll('th'), (e: any) => norm(e.innerText));
+      if (hs.length === bestCols) heads = hs;
+    });
+    if (!heads.length) {
+      heads = Array.prototype.map.call(
+        document.querySelectorAll('.ant-table-thead th'), (e: any) => norm(e.innerText));
+    }
+    // 表头文案常带排序图标/空格，用"包含"兜底（与列契约的精确匹配不同：这里只定位列）
+    const want = norm(cfg.column);
+    let ci = heads.indexOf(want);
+    if (ci < 0) ci = heads.findIndex((h: string) => h && (h.indexOf(want) >= 0 || want.indexOf(h) >= 0));
+    if (ci < 0) return { ok: false, why: 'column_not_found', heads: heads.slice(0, 12) };
+    const vals = dataRows.slice(0, cfg.maxRows)
+      .map((r: any) => norm((r.querySelectorAll('td')[ci] || {}).innerText));
+    return { ok: true, rows: dataRows.length, colIndex: ci, values: vals };
+  }, spec).catch((e: any) => ({ ok: false, why: 'eval_error', err: String(e).slice(0, 80) }));
+}
+
+async function sortDiag(scope: ClickScope, label: string): Promise<void> {
+  if (!SORT_CHECKS.length) return;
+  const stat: any = { checks: SORT_CHECKS.length, pass: 0, unverified: 0, failed: 0 };
+  const failures: string[] = [];
+  for (const check of SORT_CHECKS) {
+    const nm = String(check.name || `sort:${check.column}:${check.direction}`);
+    try {
+      const before = await sortColumnSample(scope, check.column, Number(check.max_rows || 30));
+      if (!before.ok) {
+        stat.unverified += 1;
+        console.log('SORT_TRACE ' + JSON.stringify({name: nm, column: check.column,
+          direction: check.direction, verdict: 'unverified', why: before.why,
+          heads: before.heads}));
+        continue;
+      }
+      const idx = Number(before.colIndex || 0);
+      const ths = scope.locator('.ant-table-thead > tr:first-child > th');
+      const th = ths.nth(idx);
+      const thCount = await th.count().catch(() => 0);
+      if (!thCount) {
+        stat.unverified += 1;
+        console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified', why: 'header_cell_missing'}));
+        continue;
+      }
+      // antd 列头是 升序→降序→取消 三态，第一次点击的方向取决于**默认排序状态**。
+      // 只点一次就下结论，会把"默认已是降序、这一下变成升序"误判成排序失效。
+      // 先点一次判；若结果**完全反向单调**（说明点到了另一方向），再点一次重判。
+      const judge = (vals: string[]) => {
+        const nz = vals.filter((v) => v !== '');
+        const cmps: number[] = [];
+        let uncomparable = false;
+        for (let i = 1; i < nz.length; i += 1) {
+          const d = sortCompare(nz[i - 1], nz[i]);
+          if (d == null) { uncomparable = true; break; }
+          cmps.push(d);
+        }
+        return {nz, cmps, uncomparable};
+      };
+      const wantDesc = check.direction === 'desc';
+      const dirOk = (cmps: number[]) => cmps.findIndex((d) => (wantDesc ? d < 0 : d > 0)) < 0;
+      const reversed = (cmps: number[]) => cmps.length > 0
+        && cmps.every((d) => (wantDesc ? d > 0 : d < 0));
+      const thClick = async () => {
+        await th.click({timeout: 8000}).catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 1200));
+        return await sortColumnSample(scope, check.column, Number(check.max_rows || 30));
+      };
+      let sample = await thClick();
+      if (!sample.ok) {
+        stat.unverified += 1;
+        console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified',
+          why: sample.why || 'resample_failed'}));
+        continue;
+      }
+      let judged = judge(sample.values || []);
+      if (!judged.uncomparable && judged.nz.length >= 2 && !dirOk(judged.cmps)
+          && reversed(judged.cmps)) {
+        const second = await thClick();
+        if (second.ok) {
+          sample = second;
+          judged = judge(sample.values || []);
+        }
+      }
+      const values = judged.nz;
+      const cmpList = judged.cmps;
+      const uncomparable = judged.uncomparable;
+      if (values.length < 2) {
+        stat.unverified += 1;
+        console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified',
+          why: 'too_few_rows', rows: values.length}));
+        continue;
+      }
+      if (uncomparable) {
+        stat.unverified += 1;
+        console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified',
+          why: 'values_not_comparable', sample: values.slice(0, 5)}));
+        continue;
+      }
+      const badIdx = cmpList.findIndex((d) => (wantDesc ? d < 0 : d > 0));
+      const ok = badIdx < 0;
+      console.log('SORT_TRACE ' + JSON.stringify({
+        name: nm, column: check.column, direction: check.direction,
+        rows: values.length, values: values.slice(0, 8),
+        verdict: ok ? 'match' : 'mismatch',
+        first_break: ok ? null : {at: badIdx + 1, prev: values[badIdx], cur: values[badIdx + 1]},
+      }));
+      if (ok) {
+        stat.pass += 1;
+      } else {
+        stat.failed += 1;
+        failures.push(`${check.column} 应按 ${wantDesc ? '近→遠（降序）' : '遠→近（升序）'}，`
+          + `但第 ${badIdx + 1}/${values.length} 行起为 ${values[badIdx]} → ${values[badIdx + 1]}`);
+      }
+    } catch (error) {
+      stat.unverified += 1;
+      console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified',
+        why: 'exception', err: String(error).slice(0, 160)}));
+    }
+  }
+  console.log('SORT_PHASE ' + JSON.stringify({...stat, label}));
+  // 全部跑完再抛：第一条失败就把后面几条吞掉的话，修一次跑一次永远收不了口
+  expect(failures, `列表排序断言未通过（${failures.length} 条）：${failures.slice(0, 3).join('；')}`)
+    .toEqual([]);
+}
+// ---- 列表排序断言结束（勿删）-------------------------------------------------
+"""
+
+
+def render_sort_checks(checks_json: str = "[]") -> str:
+    """渲染列表排序断言块。``checks_json`` 由编译期 sort_checks 序列化而来。"""
+    return _SORT_DIAG_TEMPLATE.replace("@@SORT_CHECKS_JSON@@", checks_json or "[]")
+
 
 
 #: P2 配置 lint（2026-10-21）：最近几轮真实翻车的故障模式全部是**配置错误在运行期才暴露**
@@ -2492,6 +2697,14 @@ class WebCaseLinkService:
             render_coverage_snippet(
                 form_executable_checks=(form_plan or {}).get("check_count", 0),
                 assertion_checks=(form_plan or {}).get("assertion_check_count", 0),
+                # rev198：软校验也吃别名表（文档字段名 → 定位器键）。取自已解析的
+                # plan.locators（顶层与嵌套两层在解析期已合并）；无计划时为 None，
+                # 候选只剩文档名，行为同旧版。
+                field_aliases=(
+                    ((form_plan or {}).get("locators") or {}).get("aliases")
+                    if isinstance((form_plan or {}).get("locators"), dict)
+                    else None
+                ),
             )
             if manifest_block else ""
         )
@@ -2508,6 +2721,12 @@ class WebCaseLinkService:
         # 列头只读比对（N3 第 2 步）：列契约来自编译期 `parse_columns`，此处只序列化注入，
         # **不**据此产生任何检查/断言（是否判失败由契约里的 assert_on_mismatch 决定，默认关）。
         columns_json = json.dumps((form_plan or {}).get("columns"), ensure_ascii=False)
+        # rev199：列表排序断言（由需求规则文本合成，见 build_form_plan 的 sort_checks）。
+        # 与列契约分开注入：排序要点击列头，列比对明确"不点击、不提交"。
+        sort_checks_json = json.dumps(
+            ((form_plan or {}).get("locators") or {}).get("sort_checks") or [],
+            ensure_ascii=False,
+        )
         # 模板必须与用例业务**正向匹配**：无匹配时 `_resolve_web_template_key` 抛
         # [unsupported_web_template]，绝不退回其它业务模板
         # （早期实现默认套「储值免单」，实测 PR-9 的 CS Module 批次因此产出内容错误的脚本）。
@@ -2571,6 +2790,7 @@ class WebCaseLinkService:
                 coverage_snippet=coverage_snippet,
                 form_executor=form_executor,
                 columns_json=columns_json,
+                sort_checks_json=sort_checks_json,
             )
         raise ValueError(
             f"[unsupported_web_template] 未知的 Web 脚本模板键: {template_key}"
@@ -3053,6 +3273,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         coverage_snippet: str = "",
         form_executor: str = "",
         columns_json: str = "null",
+        sort_checks_json: str = "[]",
     ) -> str:
         """YL 主數據管理（店鋪/商品/支付方式主數據）业务模板。
 
@@ -3080,6 +3301,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         required_click_js = render_required_click()
         frame_diag_js = render_frame_diag()
         column_diag_js = render_column_diag(columns_json)
+        sort_diag_js = render_sort_checks(sort_checks_json)
         return f"""import {{ test, expect, type BrowserContext, type FrameLocator, type Locator, type Page }} from '@playwright/test';
 
 const LOGIN_URL = process.env.WEB_TEST_BASE_URL || {json.dumps(base_url, ensure_ascii=False)};
@@ -3098,6 +3320,8 @@ type ClickScope = Page | FrameLocator;
 {frame_diag_js}
 
 {column_diag_js}
+
+{sort_diag_js}
 
 // ---- 菜单定位（与 cs_module 模板同一套，rev64 语义）------------------------
 // antd SubMenu 是开关语义：先读 aria-expanded，已展开绝不重复点击。
@@ -3383,6 +3607,10 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
   // 列头只读比对（N3 第 2 步）：渲染成功后**只读**一次表头，不点击、不提交、不造数据。
   // 未配列时也会输出 COLUMN_HEADERS —— 这是采集真实列头、反补配置的入口。
   await columnDiag(scope, 'yl-list');
+
+  // 列表排序断言（rev199）：由需求规则文本合成「按某列近→遠」时才有内容（空数组直接返回）。
+  // 放在列比对之后：先用同一张表的表头定位列，再点列头判单调。
+  await sortDiag(scope, 'yl-list');
 
   // rev71：注入的 form_executor / coverage_snippet 引用变量名统一为 appScope
   const appScope = scope as any;
