@@ -41,6 +41,21 @@ class _MockEngine:
         return {}
 
 
+class _FakeTask:
+    """最小 Task 替身。
+
+    端点现在必须持有任务引用（rev186：不持引用会被 GC 回收），并注册
+    ``add_done_callback`` 清理引用集，因此替身需实现该方法，否则 mock 与
+    真实 asyncio.Task 形态不符。
+    """
+
+    def __init__(self, coro):
+        coro.close()  # 不真正启动执行
+
+    def add_done_callback(self, _cb):
+        return None
+
+
 async def test_execute_run_guard_branch_no_name_error(monkeypatch):
     """守卫分支 + 导入正确性：真实调用 execute_test_run 不再 500。"""
     import asyncio
@@ -52,8 +67,7 @@ async def test_execute_run_guard_branch_no_name_error(monkeypatch):
 
     def _fake_create_task(coro):
         created.append(True)
-        coro.close()  # 不真正启动执行
-        return object()
+        return _FakeTask(coro)
 
     monkeypatch.setattr(asyncio, "create_task", _fake_create_task)
     resp = await tr_mod.execute_test_run(
@@ -90,7 +104,7 @@ async def test_execute_run_rejects_deprecated_cases(monkeypatch):
     monkeypatch.setattr(tr_mod, "_get_execution_engine", lambda: _MockEngine())
     scheduled: list[bool] = []
     monkeypatch.setattr(
-        asyncio, "create_task", lambda coro: (scheduled.append(True), coro.close(), object())[2]
+        asyncio, "create_task", lambda coro: (scheduled.append(True), _FakeTask(coro))[1]
     )
     with pytest.raises(HTTPException) as exc:
         await tr_mod.execute_test_run(

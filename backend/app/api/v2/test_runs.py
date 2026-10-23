@@ -6,12 +6,17 @@
 """
 
 from typing import Optional, Any, Dict
+import asyncio
 import io
 import logging
 import re
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
+
+#: rev186：后台执行任务引用集——asyncio.create_task 返回的 Task 必须持有，
+#: 否则可能被 GC 回收（api_test_executor 同源缺陷 2026-10-23 实锤）。
+_BACKGROUND_TASKS: set = set()
 
 from fastapi import APIRouter, Depends, Query, status, HTTPException
 from fastapi.responses import StreamingResponse
@@ -167,9 +172,13 @@ async def execute_test_run(
 
     # 启动执行（后台异步执行）
     engine = _get_execution_engine()
-    # 使用 asyncio.create_task 后台执行，避免阻塞响应
+    # 使用 asyncio.create_task 后台执行，避免阻塞响应。
+    # rev186：必须持有任务引用——asyncio 文档明确要求，否则任务可能被 GC 回收
+    # （api_test_executor 同源缺陷 2026-10-23 实锤：未持引用 + 复用请求 session 双重翻车）
     import asyncio
-    asyncio.create_task(engine.execute_run(test_run.id, trigger="manual"))
+    _task = asyncio.create_task(engine.execute_run(test_run.id, trigger="manual"))
+    _BACKGROUND_TASKS.add(_task)
+    _task.add_done_callback(_BACKGROUND_TASKS.discard)
 
     return SuccessResponse(
         success=True,

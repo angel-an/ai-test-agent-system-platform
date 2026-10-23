@@ -16,6 +16,10 @@ from app.repositories.scheduled_run_repo import ScheduledRunRepository
 
 router = APIRouter(prefix="/projects/{project_identifier}/scheduled-runs")
 
+#: rev186：后台触发任务引用集——asyncio.create_task 返回的 Task 必须持有，
+#: 否则可能被事件循环 GC 回收（api_test_executor 同源缺陷 2026-10-23 实锤）。
+_BACKGROUND_TASKS: set = set()
+
 
 class CreateScheduledRunRequest(BaseModel):
     name: str
@@ -114,7 +118,10 @@ async def trigger_scheduled_run(
     run = await repo.get_by_id(UUID(run_id))
     if not run:
         raise HTTPException(status_code=404, detail="定时运行不存在")
-    asyncio.create_task(_execute_scheduled_run(run_id))
+    # rev186：必须持有任务引用，否则可能被 GC 回收（api_test_executor 同源缺陷实锤）
+    _task = asyncio.create_task(_execute_scheduled_run(run_id))
+    _BACKGROUND_TASKS.add(_task)
+    _task.add_done_callback(_BACKGROUND_TASKS.discard)
     return SuccessResponse(data={"run_id": run_id, "status": "triggered"})
 
 
