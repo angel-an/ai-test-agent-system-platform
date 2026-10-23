@@ -12,6 +12,8 @@ export { AIGenerateFromDocumentDialog } from "./ai-generate-from-document-dialog
 export { AIGenerateResultDialog } from "./ai-generate-result-dialog";
 export { AIChatDialog } from "./ai-chat-dialog";
 export { ExportDialog } from "./export-dialog";
+export { CaseArtifactPanel, ArtifactSummaryBar } from "./case-artifact-panel";
+export type { CaseArtifactPanelProps } from "./case-artifact-panel";
 export { RequirementQualityPanel } from "./requirement-quality-panel";
 export type { RequirementQualityPanelProps } from "./requirement-quality-panel";
 

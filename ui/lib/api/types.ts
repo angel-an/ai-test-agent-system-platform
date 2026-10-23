@@ -214,6 +214,11 @@ export interface TestCaseInfo {
   tp_code?: string;
   risk_level?: string;
   case_kind?: string;
+  //: 需求出处（如「字段说明表 第3行」），生成期写入，成果物面板用它回答"这条从哪来"
+  source_location?: string | null;
+  requirement_id?: string | null;
+  feature_id?: string | null;
+  acceptance_id?: string | null;
 }
 
 // 创建测试用例请求

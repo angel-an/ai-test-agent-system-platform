@@ -24,6 +24,7 @@ import {
   Filter,
   MessageSquare,
   Loader2,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -91,6 +92,11 @@ interface TestCaseListProps {
   onQuickCreateTestCase?: (title: string, template: TestCaseTemplate) => void;
   onAIGenerate?: () => void;
   onAIGenerateFromDocument?: () => void;
+  /**
+   * 查看成果物：把当前这一页用例按「成果物视图」集中展示
+   * （断言/字段规则/是否已进冒烟/为何需人工执行），而不必逐条点开详情。
+   */
+  onViewArtifacts?: () => void;
   onOpenAIChat?: () => void;
   aiChatOpen?: boolean;
   folderName?: string;
@@ -160,6 +166,7 @@ export function TestCaseList({
   onQuickCreateTestCase,
   onAIGenerate,
   onAIGenerateFromDocument,
+  onViewArtifacts,
   onOpenAIChat,
   aiChatOpen,
   folderName,
@@ -605,6 +612,19 @@ export function TestCaseList({
               从文档生成
             </Button>
           )}
+          {/* 成果物视图：当前页用例的断言/字段规则/冒烟编译情况集中可读 */}
+          {onViewArtifacts && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onViewArtifacts}
+              disabled={testCases.length === 0}
+              data-testid="view-artifacts-btn"
+            >
+              <Layers className="mr-2 h-4 w-4" />
+              查看成果物
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={onCreateTestCase}>
             <Plus className="mr-2 h-4 w-4" />
             新建用例
@@ -932,6 +952,7 @@ export function TestCaseList({
                   从文档生成
                 </Button>
               )}
+              {/* 成果物视图在空状态下无意义（列表为空即生成成果物为空），故不提供 */}
               {/* 空状态导入入口：与工具栏共用同一 hidden input / handler */}
               {onImportTestCases && (
                 <Button

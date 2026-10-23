@@ -52,7 +52,24 @@ interface AIGenerateFromDocumentDialogProps {
   folderId?: string | null;
   onSuccess?: (
     testCases: TestCaseInfo[],
-    extra?: { assertionGapWarning?: string | null }
+    extra?: {
+      assertionGapWarning?: string | null;
+      /** 模糊词告警（rev183）：文档里「适当/尽量/多种」这类无阈值写法，不自动替换只点名 */
+      vagueWordWarning?: string | null;
+      /** 模糊词命中明细 */
+      vagueWordHits?: Array<{
+        word: string;
+        point: string;
+        clause: string;
+        reason: string;
+        suggestion: string;
+      }> | null;
+      /** 生成来源文件（成果物面板标题用） */
+      sourceFileName?: string | null;
+      /** 本批次 Web 冒烟编译回执（成果物面板警示用） */
+      compileReceiptText?: string | null;
+      webLoopError?: string | null;
+    }
   ) => void;
   onOpenChat?: (params: {
     prompt: string;
@@ -610,8 +627,9 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
           toast.success(`成功生成 ${generatedCases.length} 个测试用例`);
         }
         // 断言缺口说明（生成期即点名）：哪些需求点提取不出可判定断言、
-        // 对应用例将标记「需人工执行」、怎么补——交给父页面持久提示，
-        // 因为本弹窗成功后会立即关闭，弹窗内提示看不到。
+        // 对应用例将标记「需人工执行」、怎么补。
+        // 本弹窗成功后会立即关闭，所以这些上下文一并交给父页面，
+        // 由「生成成果物」面板承接展示（标题/断言/编译回执/为何需人工执行）。
         const assertionGapWarning = gated?.assertion_gap_warning ?? null;
         if (assertionGapWarning) {
           toast.warning("部分用例无法提取可判定断言，已标记「需人工执行」", {
@@ -619,7 +637,24 @@ ${additionalPrompt.trim() ? `\n补充说明：\n${additionalPrompt.trim()}\n` : 
             duration: 15000,
           });
         }
-        onSuccess?.(generatedCases, { assertionGapWarning });
+        // 模糊词告警（rev183）：不自动替换（替换=凭空造阈值，跑绿也是假通过），
+        // 只在生成期点名，把文档写法问题退回给写文档的人。
+        const vagueWordWarning = gated?.vague_word_warning ?? null;
+        const vagueWordHits = gated?.vague_word_hits ?? null;
+        if (vagueWordWarning) {
+          toast.warning(`需求文本有 ${vagueWordHits?.length ?? 0} 处模糊表述`, {
+            description: vagueWordWarning,
+            duration: 15000,
+          });
+        }
+        onSuccess?.(generatedCases, {
+          assertionGapWarning,
+          vagueWordWarning,
+          vagueWordHits,
+          sourceFileName: file?.name ?? null,
+          compileReceiptText: webLoopWarning,
+          webLoopError,
+        });
         onOpenChange(false);
         resetForm();
       } else {

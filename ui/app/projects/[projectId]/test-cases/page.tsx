@@ -16,6 +16,7 @@ import {
   AIGenerateDialog,
   AIGenerateFromDocumentDialog,
   ExportDialog,
+  CaseArtifactPanel,
 } from "@/components/test-cases";
 import type { FolderTreeRef } from "@/components/test-cases";
 import {
@@ -287,6 +288,24 @@ export default function TestCasesPage() {
   const [aiGenerateDialogOpen, setAiGenerateDialogOpen] = React.useState(false);
   const [aiGenerateFromDocDialogOpen, setAiGenerateFromDocDialogOpen] = React.useState(false);
 
+  // 生成成果物面板：生成完成后立即展示这批用例的可核对视图
+  // （标题/步骤/断言/字段规则/是否已进冒烟/为什么需要人工执行）。
+  const [artifactOpen, setArtifactOpen] = React.useState(false);
+  const [artifactCases, setArtifactCases] = React.useState<TestCaseInfo[]>([]);
+  const [artifactFileName, setArtifactFileName] = React.useState<string | null>(null);
+  const [artifactGeneratedAt, setArtifactGeneratedAt] = React.useState<string | null>(null);
+  const [artifactCompileReceipt, setArtifactCompileReceipt] = React.useState<string | null>(null);
+  const [artifactWebLoopError, setArtifactWebLoopError] = React.useState<string | null>(null);
+  // 模糊词告警（rev183）：文档写法的问句，不自动替换，只在成果物里点名
+  const [artifactVagueWarning, setArtifactVagueWarning] = React.useState<string | null>(null);
+  const [artifactVagueHits, setArtifactVagueHits] = React.useState<Array<{
+    word: string;
+    point: string;
+    clause: string;
+    reason: string;
+    suggestion: string;
+  }> | null>(null);
+
   // 选中的知识空间ID（用于AI生成时传递）
   const [selectedKnowledgeSpaceId, setSelectedKnowledgeSpaceId] = React.useState<string>("");
 
@@ -344,9 +363,27 @@ export default function TestCasesPage() {
   };
 
   // AI生成成功回调
+  /**
+   * 生成完成 → 立刻用「成果物面板」承接结果。
+   * 原来只弹 toast + 刷新列表，用户看不到生成物本身（标题/断言/是否可自动跑），
+   * 只能到列表里逐条点开找；现在第一眼看到的就是成果物。
+   */
   const handleAIGenerateSuccess = (
     testCases: TestCaseInfo[],
-    extra?: { assertionGapWarning?: string | null }
+    extra?: {
+      assertionGapWarning?: string | null;
+      vagueWordWarning?: string | null;
+      vagueWordHits?: Array<{
+        word: string;
+        point: string;
+        clause: string;
+        reason: string;
+        suggestion: string;
+      }> | null;
+      sourceFileName?: string | null;
+      compileReceiptText?: string | null;
+      webLoopError?: string | null;
+    }
   ) => {
     toast.success(t("testCases.aiGenerateSuccess", { count: testCases.length.toString() }));
     // 断言缺口持久提示：生成期就说明哪些用例无法自动执行、怎么补充，
@@ -357,6 +394,14 @@ export default function TestCasesPage() {
         duration: 20000,
       });
     }
+    setArtifactCases(testCases);
+    setArtifactFileName(extra?.sourceFileName ?? null);
+    setArtifactGeneratedAt(new Date().toLocaleString());
+    setArtifactCompileReceipt(extra?.compileReceiptText ?? null);
+    setArtifactWebLoopError(extra?.webLoopError ?? null);
+    setArtifactVagueWarning(extra?.vagueWordWarning ?? null);
+    setArtifactVagueHits(extra?.vagueWordHits ?? null);
+    setArtifactOpen(true);
     loadTestCases();
     folderTreeRef.current?.refresh();
   };
@@ -674,6 +719,18 @@ export default function TestCasesPage() {
               onQuickCreateTestCase={handleQuickCreateTestCase}
               onAIGenerate={() => setAiGenerateDialogOpen(true)}
               onAIGenerateFromDocument={() => setAiGenerateFromDocDialogOpen(true)}
+              onViewArtifacts={() => {
+                // 当前页用例按成果物视图集中展示；文件名/回执属于「本批次生成」，
+                // 存量浏览时清掉，避免把上一批的回执错挂在这一页头上。
+                setArtifactCases(testCases);
+                setArtifactFileName(selectedFolderName ?? null);
+                setArtifactGeneratedAt(null);
+                setArtifactCompileReceipt(null);
+                setArtifactWebLoopError(null);
+                setArtifactVagueWarning(null);
+                setArtifactVagueHits(null);
+                setArtifactOpen(true);
+              }}
               onOpenAIChat={() => setAiChatOpen(true)}
               aiChatOpen={aiChatOpen}
               folderName={selectedFolderName}
@@ -915,6 +972,23 @@ export default function TestCasesPage() {
         folderId={selectedFolderId}
         onSuccess={handleAIGenerateSuccess}
         onOpenChat={handleOpenAIChatFromDialog}
+      />
+
+      {/* 生成成果物面板：生成完成即弹出；关闭后仍可从上方「查看成果物」重开 */}
+      <CaseArtifactPanel
+        open={artifactOpen}
+        onOpenChange={setArtifactOpen}
+        testCases={artifactCases}
+        fileName={artifactFileName}
+        generatedAt={artifactGeneratedAt}
+        compileReceiptText={artifactCompileReceipt}
+        webLoopError={artifactWebLoopError}
+        vagueWordWarning={artifactVagueWarning}
+        vagueWordHits={artifactVagueHits}
+        onGoToList={() => {
+          setAiGenerateFromDocDialogOpen(false);
+          loadTestCases();
+        }}
       />
 
       {/* 导出对话框 */}

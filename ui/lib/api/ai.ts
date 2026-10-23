@@ -80,6 +80,16 @@ export interface AIGenerateQualityGateInfo {
     assertable: boolean;
     matched_field?: string | null;
   }>;
+  /** 模糊词生成期告警（rev183）：不自动替换，只点名「适当/尽量/多种」这类无阈值写法 */
+  vague_word_warning?: string | null;
+  /** 模糊词命中明细：词 + 原句 + 为什么判不了 + 改写建议 */
+  vague_word_hits?: Array<{
+    word: string;
+    point: string;
+    clause: string;
+    reason: string;
+    suggestion: string;
+  }>;
 }
 
 // AI辅助填充测试用例字段的请求参数
@@ -211,9 +221,14 @@ export interface WebCompileReceipt {
   negative_scenario_count?: number;
   assertion_check_count?: number;
   skipped_assertion_count?: number;
+  /** 依赖定位器才能跑的断言数：与「跳过断言」并排看，才知道缺的是定位器还是结构 */
   locator_depended_assertion_count?: number;
+  /** @deprecated rev147 起后端改名为 locator_depended_assertion_count，仅旧产物仍带此键 */
+  pending_locator_count?: number;
   allow_upload_checks?: boolean;
   warnings?: string[];
+  /** 配置 lint（字段别名悬挂等）：配了但不生效的项会在这里点名 */
+  config_warnings?: Array<{ rule?: string; target?: string; message?: string }>;
 }
 
 // 从提示词生成测试用例
