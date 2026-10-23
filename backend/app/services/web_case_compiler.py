@@ -446,7 +446,13 @@ from app.services.web_upload_fixtures import (
 #:     本版：三策略点击（行内 locator → 链接坐标点击 → 按「操作」表头定位动作表同序号行）
 #:     + **效果验证**（URL 变化 / 新开页 / 表单项数变多），仍无效则明确报「编辑入口点击无效」；
 #:     编辑若在新标签页打开，回显改在新页读（旧实现只读当前页）。
-COMPILER_REV = "rev196"
+#:   - rev197（2026-10-23，"跳过 N 条"查不到是哪 N 条）：对账行原先只有
+#:     `skipped_by_reason`（按原因计数）。TR-801 打出 `{"无定位器": 8}` 后，要定位是哪 8 个
+#:     字段只能自己写探针、把 54 条用例和子功能配置读出来重编一遍。本版补两个视图：
+#:     `skipped_fields`（字段 → {weight, count, reasons}，进对账行，直接回答"改哪一行 fields"）
+#:     与 `skipped_detail`（逐条 field/case_id/scope/kinds/weight/reason，限 40 条带 truncated，
+#:     留在 summary）。**只加观测，不改任何判定**——跳过与否、恒等式口径都没动。
+COMPILER_REV = "rev197"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -9415,6 +9421,39 @@ _FORM_EXECUTOR_TS = r"""
         }
         return counts;
       })(),
+      // rev197：**按字段聚合**——配置方要回答的是"我该改哪一行 fields"，
+      // 所以给「字段 → 原因/权重/条数」而不是一长串逐条记录（逐条在 skipped_detail）。
+      // 空字段（case 级 skip：整条用例所有断言都落不了地）聚成 "(case级)"。
+      skipped_fields: (() => {
+        const agg: Record<string, any> = {};
+        for (const s of (FORM_PLAN.skipped || [])) {
+          const key = String(s.field || '') || '(case级)';
+          const cur = agg[key] || (agg[key] = {weight: 0, count: 0, reasons: [] as string[]});
+          cur.weight += Number(s.assertions || 0);
+          cur.count += 1;
+          const reason = String(s.reason || '').slice(0, 20);
+          if (reason && cur.reasons.indexOf(reason) < 0) cur.reasons.push(reason);
+        }
+        return agg;
+      })(),
+      // rev197（2026-10-23）：**明细**——聚合计数只说明"该修哪一类"，
+      // 明细才说明"改哪一行配置"。动机是一次实测：TR-801 只输出
+      // `skipped_by_reason: {"无定位器": 8}`，为了知道那 8 条是哪几个字段，
+      // 只能自己写探针把 54 条用例和子功能配置读出来重编一遍。
+      // 限 40 条 + truncated 标记：这段要随脚本下发，不能无界增长。
+      skipped_detail: (() => {
+        const all: any[] = (FORM_PLAN.skipped || []) as any[];
+        const cap = 40;
+        const items = all.slice(0, cap).map((s: any) => ({
+          field: String(s.field || ''),
+          case_id: String(s.case_id || ''),
+          scope: String(s.scope || 'form'),
+          kinds: Array.isArray(s.kinds) ? s.kinds.join('/') : '',
+          weight: Number(s.assertions || 0),
+          reason: String(s.reason || 'unknown'),
+        }));
+        return {items: items, total: all.length, truncated: all.length > items.length};
+      })(),
       plan_checks: FORM_PLAN.checks.length,
       attributed_checks: FORM_PLAN.checks.filter(
         (c: any) => c.case_id || (Array.isArray(c.owners) && c.owners.length)).length,
@@ -9492,6 +9531,9 @@ _FORM_EXECUTOR_TS = r"""
       unexplained_emitted: __unexplainedEmitted,
       balanced: __unexplainedPlan === 0 && __unexplainedEmitted === 0,
       skipped_by_reason: summary.skipped_by_reason,
+      // rev197：字段级视图进对账行（紧凑）；逐条明细留在 COMPILED_ASSERTION_SUMMARY，
+      // 避免对账行被几十条记录撑爆、反而看不清恒等式本身。
+      skipped_fields: summary.skipped_fields,
     }));
     // 结构性失败（blocked）视为硬失败：定位器失效必须暴露，而不是静默通过
     expect(summary.blocked, `编译断言执行受阻：${summary.blocked} 项`).toBe(0);

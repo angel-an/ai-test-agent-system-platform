@@ -402,6 +402,12 @@
       "digest": "9ff9853ee0f9",
       "date": "2026-10-23",
       "summary": "rev196: echo 重开编辑页前的那次点击要验证效果——三策略（行内 locator → 链接坐标点击 → 按「操作」表头定位动作表同序号行）+ 三条件判定（URL 变化/新开页/表单项数变多），无效则明确报「编辑入口点击无效」；编辑在新标签页打开时回显改在新页读。修 TR-807「适用门店:编辑页字段不存在」假阴性（实拍编辑页 9 项 + 子表 2 行俱全）"
+    },
+    {
+      "rev": "rev197",
+      "digest": "4ff6c5eb7524",
+      "date": "2026-10-23",
+      "summary": "rev197: 对账行补「跳过明细」——skipped_fields（字段 → {weight,count,reasons}）进 COVERAGE_RECONCILE，直接回答「改哪一行 fields」；skipped_detail（逐条 field/case_id/scope/kinds/weight/reason，限 40 条带 truncated）留在 summary。只加观测不改判定：恒等式与跳过口径均未动。动机是 TR-801 只报「无定位器:8」查不到是哪 8 个字段，得另写探针重编"
     }
   ]
 }
