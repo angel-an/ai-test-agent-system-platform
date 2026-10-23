@@ -6,6 +6,7 @@
 错误形态是 antd v3（.ant-form-explain + control.has-error）。
 """
 import ast
+import re
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "app" / "services" / "web_case_compiler.py"
@@ -22,7 +23,12 @@ def _py() -> str:
 
 def test_rev_bumped():
     src = _py()
-    assert 'COMPILER_REV = "rev180"' in src
+    match = re.search(r'COMPILER_REV = "rev(\d+)"', src)
+    assert match, "COMPILER_REV 定义丢失"
+    # 只要求「不早于引入本测试的那一版」，不钉死具体版本号。
+    # 历史教训：这里曾被追成字面量 ``"rev180"``，此后每 bump 一次就误红一次，
+    # 从 rev181 一路红到 rev196（无人跑门禁集，红线被埋了 16 个版本）。
+    assert int(match.group(1)) >= 140
     ast.parse(src)  # 语法完好
 
 

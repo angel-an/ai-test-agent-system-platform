@@ -159,6 +159,8 @@ def main() -> int:
         f"| clean clone 核心子集 | {'、'.join(f'`{c}`' for c in clone_subset)} 在仅检出提交内容的目录内执行，"
         "用于证明提交快照可运行 |",
         "| P1 专项 | `tests/api/test_contract_driven_p1.py`，P1 单独验收后另立基线 |",
+        "| 编译器门禁集 | `scripts\\run_compiler_gate.py`（改 `web_case_compiler` 后必跑，约 2 分钟），"
+        "口径见 `docs/编译器门禁测试集.md` |",
         "",
         "> 历史数字（638 / 642 / 649）来自不同轮次与不同命令，**已作废**，引用时请使用本文件的数字。",
         "",

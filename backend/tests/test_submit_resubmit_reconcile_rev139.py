@@ -58,7 +58,11 @@ class TestSubmitResubmitAccounting:
         script = _script()
         seg = script.split("COVERAGE_RECONCILE", 1)[0][-1200:]
         assert "const __submitA = summary.submit_phase.emitted || 0;" in seg
-        assert "summary.total - (__execA + __scenarioA + __submitA)" in seg
+        # 减数用 **emitted_raw**（rev165 起）：summary.total 已剔除被提交层覆盖的
+        # 过程态，拿它做减法会把「少发过程态」误读成异常。此处曾长期钉 ``summary.total -``，
+        # 自 rev165 改实现后一直是红的（无人跑门禁集）。恒等式的语义没变：
+        # 「实际写出的行数 = 执行层 + 负路径 + 重提交层」。
+        assert "summary.emitted_raw - (__execA + __scenarioA + __submitA)" in seg
         rec = script.split("COVERAGE_RECONCILE", 1)[1][:700]
         assert "submit_resubmitted: __submitA" in rec
 
