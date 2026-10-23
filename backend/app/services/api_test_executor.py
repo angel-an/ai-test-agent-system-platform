@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config.database import async_session_factory
 from app.models.api_test import APITest, APITestRun, APITestResult
 from app.repositories.api_test_repo import (
     APITestRepository,
@@ -44,6 +45,9 @@ class APITestExecutor:
         self.api_test_repo = APITestRepository(session)
         self.api_test_run_repo = APITestRunRepository(session)
         self.api_test_result_repo = APITestResultRepository(session)
+        # 持有后台任务强引用：asyncio 事件循环只保留弱引用，
+        # 不持引用的任务可能在执行中被 GC 回收（Python 官方文档明确要求保存引用）
+        self._background_tasks: set = set()
 
     async def execute_test(
         self,
@@ -82,14 +86,19 @@ class APITestExecutor:
 
         run_id = test_run.id
 
-        # 3. 在后台执行测试
-        asyncio.create_task(
+        # 立即提交：后台任务使用独立会话，若该行未提交，后台任务读不到 run 记录
+        await self.session.commit()
+
+        # 3. 在后台执行测试（保存强引用，防止任务被 GC）
+        task = asyncio.create_task(
             self._execute_in_background(
                 run_id=run_id,
                 api_test=api_test,
                 execution_config=execution_config or {},
             )
         )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
         return str(run_id)
 
@@ -111,6 +120,41 @@ class APITestExecutor:
         6. Save results to database
         7. Update run status
         """
+        # 后台任务必须使用独立新会话：execute_test 返回后请求作用域的 session 已结束，
+        # 复用它会在首次 SQL 时抛 InvalidRequestError(session in 'prepared' state)，
+        # 且 except 分支同样失败 → run 永停 pending、error_message 为 null（2026-10-23 实测堆栈）。
+        async with async_session_factory() as bg_session:
+            self.session = bg_session
+            self.api_test_repo = APITestRepository(bg_session)
+            self.api_test_run_repo = APITestRunRepository(bg_session)
+            self.api_test_result_repo = APITestResultRepository(bg_session)
+            # api_test 是请求 session 里的 ORM 对象，挂载到后台会话（load=False 不发 SQL）
+            api_test = await bg_session.merge(api_test, load=False)
+            try:
+                await self._execute_in_background_locked(run_id, api_test, execution_config)
+                # 后台会话无请求级依赖注入代为提交，必须显式 commit，
+                # 否则 close 时整个事务 ROLLBACK，run 状态永远停在 pending（2026-10-23 实测）
+                await bg_session.commit()
+            except Exception as outer_err:
+                await bg_session.rollback()
+                logger.error("API 测试后台执行失败 run_id=%s: %s", run_id, outer_err, exc_info=True)
+                try:
+                    row = await self.api_test_run_repo.get_by_id(run_id)
+                    if row is not None:
+                        await self.api_test_run_repo.update(
+                            row, status="failed", error_message=str(outer_err)
+                        )
+                        await bg_session.commit()
+                except Exception as write_err:
+                    logger.error("回写 run 失败状态时出错 run_id=%s: %s", run_id, write_err)
+
+    async def _execute_in_background_locked(
+        self,
+        run_id: UUID,
+        api_test: APITest,
+        execution_config: Dict[str, Any],
+    ):
+        """在后台会话内执行测试主体（由 _execute_in_background 调用）。"""
         try:
             # 1. 更新状态为 RUNNING
             await self.api_test_run_repo.update(
@@ -136,15 +180,15 @@ class APITestExecutor:
                 config_file = temp_path / "playwright.config.ts"
                 config_file.write_text(playwright_config, encoding="utf-8")
 
-                # 4. 执行测试
+                # 4. 执行测试（传 Path：子方法内做 work_dir / "xxx" 拼接，str 会 TypeError）
                 result = await self._run_playwright_test(
-                    temp_dir, execution_config
+                    temp_path, execution_config
                 )
 
                 # 5. 生成 Allure 报告（先生成，后续处理 IDP 时传入 report_url）
                 report_path = await self._generate_allure_report(
                     run_id=run_id,
-                    work_dir=temp_dir,
+                    work_dir=temp_path,
                 )
 
                 # 6. 解析结果并保存（此时 report_path 已生成，可传入缺陷描述）
@@ -171,14 +215,19 @@ class APITestExecutor:
                 )
 
         except Exception as e:
-            # 更新为失败状态
-            await self.api_test_run_repo.update(
-                await self.api_test_run_repo.get_by_id(run_id),
-                status="failed",
-                error_message=str(e)
-            )
-            # 记录错误日志
-            print(f"测试执行失败: {e}")
+            # 更新为失败状态（回写自身也要兜底，绝不让异常逃出后台任务）
+            try:
+                await self.api_test_run_repo.update(
+                    await self.api_test_run_repo.get_by_id(run_id),
+                    status="failed",
+                    error_message=str(e)
+                )
+            except Exception as update_err:
+                logger.error(
+                    "回写 run 失败状态时出错 run_id=%s: %s（原始错误: %s）",
+                    run_id, update_err, e,
+                )
+            logger.error("API 测试后台执行失败 run_id=%s: %s", run_id, e, exc_info=True)
 
     def _generate_playwright_config(self, execution_config: Dict[str, Any]) -> str:
         """生成 Playwright 配置文件"""
@@ -222,9 +271,18 @@ export default defineConfig({{
             dict: 测试结果
         """
         try:
+            # 解析 npx 绝对路径：Windows 下 CreateProcess 不解析 .cmd，
+            # 裸 "npx" 会 FileNotFoundError（2026-10-23 实测）
+            npx_exe = shutil.which("npx") or shutil.which("npx.cmd")
+            if not npx_exe:
+                return {
+                    "status": "failed",
+                    "error": "npx 不可用：PATH 中未找到 Node.js/npx，请安装 Node.js 或配置 PATH",
+                }
+
             # 检查 npx 是否可用
             npx_check = subprocess.run(
-                ["npx", "--version"],
+                [npx_exe, "--version"],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -242,7 +300,7 @@ export default defineConfig({{
             # 运行 Playwright 测试，使用 Allure 报告
             result = subprocess.run(
                 [
-                    "npx", "playwright", "test",
+                    npx_exe, "playwright", "test",
                     "--reporter=@playwright/test/allure-playwright",  # 使用 Allure 报告器
                     f"--output={work_dir}/allure-results",  # Allure 结果目录
                 ],

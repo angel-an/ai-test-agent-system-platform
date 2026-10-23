@@ -288,7 +288,13 @@ class TestRunTestCaseRepository:
         test_case_id: UUID,
         configuration_id: Optional[int] = None,
     ) -> Optional[TestRunTestCase]:
-        """获取特定测试运行中的测试用例"""
+        """获取特定测试运行中的测试用例
+
+        历史缺陷（2026-10-23 修复）：本类内曾定义第二个同名方法（无 configuration_id
+        形参），Python 后定义覆盖先定义，导致 test_result_service 传 3 个实参时抛
+        TypeError(...takes 3 positional arguments but 4 were given)，批量结果回写
+        全部失败。保留本版本（configuration_id 可缺省）以同时兼容 2 参与 3 参调用方。
+        """
         conditions = [
             TestRunTestCase.test_run_id == test_run_id,
             TestRunTestCase.test_case_id == test_case_id,
@@ -426,18 +432,6 @@ class TestRunTestCaseRepository:
         result = await self.session.execute(stmt)
         await self.session.flush()
         return result.scalar_one()
-
-    async def get_by_test_run_and_case(
-        self,
-        test_run_id: UUID,
-        test_case_id: UUID,
-    ) -> Optional[TestRunTestCase]:
-        """按 (运行, 用例) 取关联行。"""
-        stmt = select(TestRunTestCase).where(
-            TestRunTestCase.test_run_id == test_run_id,
-            TestRunTestCase.test_case_id == test_case_id,
-        )
-        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def apply_case_result(
         self,
