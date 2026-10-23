@@ -390,7 +390,7 @@ from app.services.web_upload_fixtures import (
 #:     「无 fields + 只有场景 → 无计划」的既有契约（``test_no_fields_means_no_plan``
 #:     红）。判定面收敛为 list_url / list_checks / filter_checks / action_matrix_checks /
 #:     export_checks 五项。
-COMPILER_REV = "rev180"
+COMPILER_REV = "rev186"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -424,6 +424,9 @@ _DIGEST_FUNCTIONS: tuple[str, ...] = (
     # rev170：filter_checks 的解析语义（option 必填 / expect_in 缺省 / reset 正则）
     # 直接决定运行期选哪个选项、断言哪列 ⇒ 与 parse_list_checks 同源，必须纳入 digest。
     "parse_filter_checks",
+    # rev186：echo_checks 的解析语义（fields 必填 / kind 域 / pick 缺省）直接决定
+    # 运行期选几个对象、读哪些回显 ⇒ 与 parse_filter_checks 同源，必须纳入 digest。
+    "parse_echo_checks",
     # rev173：状态×操作矩阵的解析语义（status_in 必填 / confirm 结构 / 数组字段校验）
     # 直接决定运行期断言哪些操作 ⇒ 同源，必须纳入 digest。
     "parse_action_matrix_checks",
@@ -1549,6 +1552,115 @@ def parse_filter_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
 
 
 # ==========================================================================
+# 「配置保真·回显一致性」独立通道（``extra_config.echo_checks``，rev186 新增）
+# ==========================================================================
+# 背景（2026-10-23，3194/3195 类缺陷：选特定门店/商品保存后回显不一致）：
+# 字段级校验（必填/取值/边界）天生覆盖不了「选对象→保存→重开→回显比对」链路，
+# 生成层 rev185 已产出该场景族（executable_track=manual）。本通道把它变成
+# 可执行：与 filter_checks（rev170）同形——配置驱动、独立阶段、被拒不静默。
+#
+# ⚠️ 副作用声明：本通道会**真实创建一条记录**（这是「保存→重开」语义的必然）。
+# 运行期以 required_fields 的 RUN_TAG 值作定位锚，便于事后清理。
+def parse_echo_checks(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """解析 ``extra_config.echo_checks``，返回 ``(可用检查, 被拒检查)``。
+
+    单条配置字段：
+      ``name``             断言名（缺省 ``echo:<首个 field.label>``）
+      ``list_url``         列表页直链（缺省回退 ``locators.list_url``；两者都空 → 运行期 unverified）
+      ``new_button``       新建按钮正则（缺省 新增/新建/添加/New/Create）
+      ``fields``           关联字段表（**必填，≥1 项**）：
+                           ``label`` 页面字段文案（必填）；``kind`` ∈ multi_select|select|input
+                           （缺省 select）；``pick`` 选几个（缺省 multi=2 / 单=1）；
+                           ``option_labels`` 目标对象文本候选（缺省取面板前 N 项，自洽比对）
+      ``required_fields``  保存前预填项：``[{label, kind(input|textarea), value}]``；
+                           其 ``value`` 兼作重开时的行定位锚（建议含 RUN_TAG）
+      ``save_button``      保存按钮正则（缺省 保存/确定/Save）
+      ``row_match``        重开时用于定位记录行的文本（缺省取首个 required_fields.value）
+      ``case_id`` / ``rule_id``  证据归属
+    """
+    if raw is None or raw == "":
+        return [], []
+    if not isinstance(raw, list):
+        return [], [{"value": "", "reason": "echo_checks 必须是数组",
+                     "detail": type(raw).__name__}]
+    items: list[dict[str, Any]] = []
+    rejects: list[dict[str, Any]] = []
+    valid_kinds = ("multi_select", "select", "input")
+    for index, entry in enumerate(raw):
+        try:
+            if not isinstance(entry, dict):
+                rejects.append({"value": "", "reason": "回显检查必须是对象",
+                                "detail": f"index={index}"})
+                continue
+            raw_fields = entry.get("fields")
+            if not isinstance(raw_fields, list) or not raw_fields:
+                rejects.append({"value": "", "reason": "缺少 fields（要比对回显的关联字段表）",
+                                "detail": f"index={index}"})
+                continue
+            fields: list[dict[str, Any]] = []
+            for fi, fld in enumerate(raw_fields):
+                if not isinstance(fld, dict):
+                    rejects.append({"value": "", "reason": "fields 项必须是对象",
+                                    "detail": f"index={index}.fields[{fi}]"})
+                    continue
+                label = str(fld.get("label") or "").strip()
+                if not label:
+                    rejects.append({"value": "", "reason": "fields 项缺少 label（页面字段文案）",
+                                    "detail": f"index={index}.fields[{fi}]"})
+                    continue
+                kind = str(fld.get("kind") or "select").strip()
+                if kind not in valid_kinds:
+                    rejects.append({"value": "", "reason": "fields.kind 取值非法",
+                                    "detail": f"index={index}.fields[{fi}] kind={kind} "
+                                              f"（可选 {'/'.join(valid_kinds)}）"})
+                    continue
+                try:
+                    pick = int(fld.get("pick") or (2 if kind == "multi_select" else 1))
+                except (TypeError, ValueError):
+                    pick = 2 if kind == "multi_select" else 1
+                if kind == "input":
+                    pick = 0
+                fields.append({
+                    "label": label,
+                    "kind": kind,
+                    "pick": max(pick, 0),
+                    "option_labels": [s for s in _as_str_list(fld.get("option_labels")) if s],
+                })
+            if not fields:
+                rejects.append({"value": "", "reason": "fields 全部无效",
+                                "detail": f"index={index}"})
+                continue
+            required_fields: list[dict[str, Any]] = []
+            for ri, rf in enumerate(entry.get("required_fields") or []):
+                if not isinstance(rf, dict) or not str(rf.get("label") or "").strip():
+                    rejects.append({"value": "", "reason": "required_fields 项缺少 label",
+                                    "detail": f"index={index}.required_fields[{ri}]"})
+                    continue
+                required_fields.append({
+                    "label": str(rf.get("label")).strip(),
+                    "kind": "textarea" if str(rf.get("kind") or "") == "textarea" else "input",
+                    "value": str(rf.get("value") or ""),
+                })
+            items.append({
+                "name": str(entry.get("name") or f"echo:{fields[0]['label']}"),
+                "list_url": str(entry.get("list_url") or ""),
+                "new_button": str(entry.get("new_button")
+                                  or r"新\s*增|新\s*建|添\s*加|New|Create"),
+                "fields": fields,
+                "required_fields": required_fields,
+                "save_button": str(entry.get("save_button") or r"保\s*存|Save|确\s*定"),
+                "row_match": str(entry.get("row_match") or ""),
+                "case_id": str(entry.get("case_id") or ""),
+                "rule_id": str(entry.get("rule_id") or ""),
+                "rule_ref": str(entry.get("rule_ref") or "配置保真与回显"),
+            })
+        except Exception as exc:  # noqa: BLE001  配置畸形不得阻断编译
+            rejects.append({"value": "", "reason": "回显检查解析异常",
+                            "detail": f"{type(exc).__name__}: {exc}"[:200]})
+    return items, rejects
+
+
+# ==========================================================================
 # 「导出」独立通道（``extra_config.export_checks``，rev148 新增）
 # ==========================================================================
 # 背景（2026-10-20 需求追溯实测）：导出 11 列走表单字段通道，天生无 required/options
@@ -2307,6 +2419,9 @@ TEMPLATE_FORM_LOCATORS: dict[str, dict[str, Any]] = {
 #: 与 ``test_no_fields_means_no_plan`` 保护的既有契约冲突 —— 那次裁判是错的，已撤回。
 CHANNEL_ONLY_CONFIG_KEYS: tuple[str, ...] = (
     "list_url", "list_checks", "filter_checks", "action_matrix_checks", "export_checks",
+    # rev186：配置保真·回显一致性通道——只有 echo_checks、没有 fields 的定位器表
+    # 同样要生成计划（与 filter_checks 同口径：通道配置本身就是"有配置"）
+    "echo_checks",
 )
 
 
@@ -2374,6 +2489,9 @@ NON_LOCATOR_CONFIG_KEYS: tuple[str, ...] = REGISTRATION_META_KEYS + ("negative_s
                                                                      # rev173：状态×操作矩阵通道
                                                                      # 同为行为配置，不进定位器键
                                                                      "action_matrix_checks",
+                                                                     # rev186：配置保真·回显通道
+                                                                     # 同为行为配置，不进定位器键
+                                                                     "echo_checks",
                                                                      # rev119：字段级上传放行
                                                                      # 是**行为配置**，不是选择器；
                                                                      # 列进 locator_keys 会让配置方
@@ -2994,6 +3112,26 @@ def build_form_plan(
             "source": "locator_config",
         })
 
+    # 「配置保真·回显一致性」独立通道（rev186）：新建→选对象→保存→重开→逐字段比对回显。
+    # 与 filter_checks（rev170）同形：配置驱动、独立阶段、被拒不静默（[echo-skip]）。
+    # ⚠️ 运行期会真实创建一条记录（「保存→重开」语义的必然副作用）。
+    echo_checks, echo_check_rejects = parse_echo_checks(loc.get("echo_checks"))
+    for item in echo_checks:
+        checks.append({
+            "type": "echo_check",
+            "name": item["name"],
+            "list_url": item["list_url"] or str(loc.get("list_url") or ""),
+            "new_button": item["new_button"],
+            "fields": item["fields"],
+            "required_fields": item["required_fields"],
+            "save_button": item["save_button"],
+            "row_match": item["row_match"],
+            "rule": item["rule_ref"],
+            "case_id": item["case_id"],
+            "rule_id": item["rule_id"],
+            "source": "locator_config",
+        })
+
     # 「状态×操作矩阵」独立通道（rev173）：按状态定位行 → 断言行内操作集 →
     # 更多菜单枚举 → 确认框验证（点取消还原）。与 list/filter/export 同形。
     action_matrix_checks, action_matrix_rejects = parse_action_matrix_checks(
@@ -3120,7 +3258,8 @@ def build_form_plan(
         # 打开表单、把环境问题变成硬失败），但审计与运行期现场仍然完整。
         if (not skipped and not negative_scenario_rejects
                 and not list_check_rejects and not export_check_rejects
-                and not filter_check_rejects and not action_matrix_rejects):
+                and not filter_check_rejects and not action_matrix_rejects
+                and not echo_check_rejects):
             return None
         return {"locators": plan_locators, "checks": [], "skipped": skipped,
                 "check_count": 0, "skipped_count": len(skipped),
@@ -3130,6 +3269,7 @@ def build_form_plan(
                 "export_check_rejects": export_check_rejects,
                 "filter_check_rejects": filter_check_rejects,
                 "action_matrix_rejects": action_matrix_rejects,
+                "echo_check_rejects": echo_check_rejects,
                 **plan_extras}
     return {"locators": plan_locators, "checks": checks, "skipped": skipped,
             "check_count": len(checks), "skipped_count": len(skipped),
@@ -3142,6 +3282,7 @@ def build_form_plan(
             "export_check_rejects": export_check_rejects,
             "filter_check_rejects": filter_check_rejects,
             "action_matrix_rejects": action_matrix_rejects,
+            "echo_check_rejects": echo_check_rejects,
             **plan_extras}
 
 
@@ -4086,7 +4227,7 @@ _FORM_EXECUTOR_TS = r"""
     // ——它们各自 goto 列表 URL 后直接断言，硬开表单会让纯列表子功能（会员限购商品管理：
     // 只有列表页、无任何表单字段）在入口阶段就硬失败
     // （TR-797 实测：`无法打开表单：定位器未配置表单入口（flow=recharge_modal）`）。
-    const LIST_DOMAIN_KINDS = ['list_visible', 'export_check', 'filter_check', 'action_matrix'];
+    const LIST_DOMAIN_KINDS = ['list_visible', 'export_check', 'filter_check', 'action_matrix', 'echo_check'];
     const hasFormFieldChecks = planChecks.some(
       (c: any) => LIST_DOMAIN_KINDS.indexOf(String((c && c.type) || '')) < 0);
     let modal: any = null;
@@ -4693,9 +4834,10 @@ _FORM_EXECUTOR_TS = r"""
     for (const check of FORM_PLAN.checks) {
       checkIndex += 1;
       if (check.type === 'upload_file') continue;   // 由独立阶段处理（见下）
-      // 由独立阶段处理（runListChecks / runExportChecks / runFilterChecks / runActionMatrix，写入之后）
+      // 由独立阶段处理（runListChecks / runExportChecks / runFilterChecks / runActionMatrix / runEchoChecks，写入之后）
       if (check.type === 'list_visible' || check.type === 'export_check'
-          || check.type === 'filter_check' || check.type === 'action_matrix') continue;
+          || check.type === 'filter_check' || check.type === 'action_matrix'
+          || check.type === 'echo_check') continue;
       const name = `${check.type}:${check.field}${check.option ? '=' + check.option : ''}${check.data ? ' [' + check.data + ']' : ''}`;
       currentRuleId = (check as any).rule_id || '';
       currentCaseId = (check as any).case_id || '';
@@ -5816,6 +5958,8 @@ _FORM_EXECUTOR_TS = r"""
     const filterStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
     // rev173：状态×操作矩阵独立阶段（行操作集断言 + 更多菜单 + 确认框验证）分开计数
     const mxStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
+    // rev186：配置保真·回显独立阶段（新建→选对象→保存→重开→逐字段比对回显）分开计数
+    const echoStat = {configured: 0, executed: 0, pass: 0, unverified: 0};
     async function runNegativeScenarios(): Promise<void> {
       const scenarios: any[] = Array.isArray(FORM_PLAN.negative_scenarios)
         ? FORM_PLAN.negative_scenarios : [];
@@ -7410,6 +7554,264 @@ _FORM_EXECUTOR_TS = r"""
       console.log('FILTER_PHASE ' + JSON.stringify(filterStat));
     }
 
+    // ===== 「配置保真·回显一致性」独立通道（rev186）：新建 → 选对象 → 保存 → 重开 →
+    // 逐字段比对回显。⚠️ 会**真实创建一条记录**（required_fields 的 value 建议含
+    // RUN_TAG 以便事后清理）。判定口径与 filter 通道一致：现场/数据问题 → unverified，
+    // 回显缺配置对象 → unverified（业务断言未通过，不判 pass）=====
+    async function runEchoChecks(): Promise<void> {
+      const page = appPageForNav();
+      const stageMark = (st: string, extra: any = {}) => {
+        try {
+          console.log('ECHO_STAGE ' + JSON.stringify({
+            stage: st, url: String(page.url() || '').slice(0, 110), ...extra,
+          }));
+        } catch { /* 页面已销毁 */ }
+      };
+      const items: any[] = (FORM_PLAN.checks || []).filter((c: any) => c.type === 'echo_check');
+      echoStat.configured = items.length;
+      for (const rej of (FORM_PLAN.echo_check_rejects || []).slice(0, 20)) {
+        console.log('[echo-skip] ' + JSON.stringify(rej));
+      }
+      if (!items.length) return;
+      const norm = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+      const escRe = (s: string) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const formRootOf = async (): Promise<any> => {
+        const m = page.locator('.ant-modal:visible').last();
+        if (await m.count().catch(() => 0)) return m;
+        const d = page.locator('.ant-drawer:visible').last();
+        if (await d.count().catch(() => 0)) return d;
+        return page;
+      };
+      for (const check of items) {
+        const nm = String(check.name || 'echo');
+        echoStat.executed += 1;
+        try {
+          const url = String(check.list_url || '');
+          if (!url) {
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '未配置列表页 URL（echo_checks[].list_url 或 locators.list_url）');
+            continue;
+          }
+          // ① 进列表页
+          stageMark('goto_begin');
+          await page.goto(resolveListUrl(url, page), {timeout: 30000, waitUntil: 'domcontentloaded'}).catch(() => undefined);
+          stageMark('goto_done');
+          await waitRows(page, 30000);
+          // ② 点「新建」打开表单
+          const nbRe = new RegExp(String(check.new_button || '新\\s*增|新\\s*建|添\\s*加|New|Create'), 'i');
+          const newBtn = page.locator('button').filter({hasText: nbRe}).first();
+          if (!await newBtn.count().catch(() => 0)) {
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `未找到新建按钮（正则 ${check.new_button}）——需按页面实际入口调整 new_button`);
+            continue;
+          }
+          await newBtn.click({timeout: 8000}).catch(() => undefined);
+          await page.waitForTimeout(1200);
+          const formRoot: any = await formRootOf();
+          const itemByLabel = (rt: any, label: string) => rt.locator('.ant-form-item')
+            .filter({hasText: new RegExp(escRe(label))}).first();
+          // ③ 关联字段选对象（记录所选，作为回显比对的期望）
+          const pickedByField: Record<string, string[]> = {};
+          let fieldFail = '';
+          for (const f of (check.fields || [])) {
+            const label = String(f.label || '');
+            const kind = String(f.kind || 'select');
+            const item = itemByLabel(formRoot, label);
+            if (!await item.count().catch(() => 0)) {
+              fieldFail = `未找到字段「${label}」的表单项（表单可见控件见 ECHO_STAGE）`;
+              break;
+            }
+            if (kind === 'input') {
+              const val = (Array.isArray(f.option_labels) && f.option_labels.length)
+                ? String(f.option_labels[0]) : String(f.pick || '');
+              await item.locator('input:visible').first()
+                .fill(val, {timeout: 5000}).catch(() => undefined);
+              pickedByField[label] = [val];
+              continue;
+            }
+            const sel = item.locator('.ant-select:visible').first();
+            if (!await sel.count().catch(() => 0)) {
+              fieldFail = `字段「${label}」下未找到选择器控件`;
+              break;
+            }
+            await sel.click({timeout: 8000}).catch(() => undefined);
+            await page.waitForTimeout(900);
+            const dd = page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').last();
+            const lis = dd.locator('li[role=option], .ant-select-dropdown-menu-item:visible');
+            const n2 = await lis.count().catch(() => 0);
+            if (!n2) {
+              fieldFail = `字段「${label}」下拉面板未出现（可能为远程搜索型，需先输入关键字）`;
+              break;
+            }
+            const texts: string[] = [];
+            for (let i = 0; i < n2; i++) {
+              texts.push(norm(await lis.nth(i).innerText().catch(() => '')));
+            }
+            const want = kind === 'multi_select' ? Math.max(1, Number(f.pick || 2)) : 1;
+            const labels: string[] = Array.isArray(f.option_labels)
+              ? f.option_labels.map((s: any) => String(s)) : [];
+            const picked: string[] = [];
+            const chosenIdx: number[] = [];
+            // 先按候选精确→包含（防子串误选），不足再取面板前 N 项（自洽比对模式）
+            for (const mode of ['exact', 'contains']) {
+              for (const ol of labels) {
+                if (picked.length >= want) break;
+                for (let i = 0; i < texts.length; i++) {
+                  if (chosenIdx.indexOf(i) >= 0) continue;
+                  const hit = mode === 'exact' ? texts[i] === ol : texts[i].indexOf(ol) >= 0;
+                  if (hit) { chosenIdx.push(i); picked.push(texts[i]); break; }
+                }
+              }
+              if (picked.length >= want) break;
+            }
+            for (let i = 0; i < n2 && picked.length < want; i++) {
+              if (chosenIdx.indexOf(i) >= 0 || !texts[i]) continue;
+              chosenIdx.push(i); picked.push(texts[i]);
+            }
+            if (!picked.length) {
+              fieldFail = `字段「${label}」面板无可选项（条目 ${JSON.stringify(texts.slice(0, 6))}）`;
+              break;
+            }
+            for (const i of chosenIdx) {
+              await lis.nth(i).click({timeout: 5000}).catch(() => undefined);
+              if (kind !== 'multi_select') break;  // 单选点一个即收起
+            }
+            await page.keyboard.press('Escape').catch(() => undefined);
+            await page.waitForTimeout(400);
+            // 以 DOM 选中值为准（面板文本可能带分组前缀）
+            const selTexts: string[] = await item.evaluate((it: any) => {
+              const nn = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+              const ch = Array.from(it.querySelectorAll(
+                '.ant-select-selection__choice, .ant-select-selection__rendered li'));
+              const vs = ch.map((c: any) => nn(c.textContent)).filter(Boolean);
+              if (vs.length) return vs;
+              const sv = it.querySelector(
+                '.ant-select-selection-selected-value, .ant-select-selection__selected-value');
+              return sv && nn(sv.textContent) ? [nn(sv.textContent)] : [];
+            }).catch(() => []);
+            pickedByField[label] = selTexts.length ? selTexts : picked;
+          }
+          if (fieldFail) {
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified', fieldFail + '——现场见 ECHO_STAGE');
+            continue;
+          }
+          // ④ 必填项预填（value 兼作重开定位锚）
+          for (const rf of (check.required_fields || [])) {
+            const item = itemByLabel(formRoot, String(rf.label || ''));
+            if (await item.count().catch(() => 0)) {
+              const sel2 = (String(rf.kind) === 'textarea' ? 'textarea' : 'input') + ':visible';
+              await item.locator(sel2).first()
+                .fill(String(rf.value || ''), {timeout: 5000}).catch(() => undefined);
+            }
+          }
+          // ⑤ 保存并确认成功（弹窗关闭或成功提示，二者取其一）
+          const saveRe = new RegExp(String(check.save_button || '保\\s*存|Save|确\\s*定'), 'i');
+          const saveBtn = formRoot.locator('button').filter({hasText: saveRe}).first();
+          if (!await saveBtn.count().catch(() => 0)) {
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `未找到保存按钮（正则 ${check.save_button}）`);
+            continue;
+          }
+          await saveBtn.click({timeout: 8000}).catch(() => undefined);
+          await page.waitForTimeout(2500);
+          const modalGone = !(await page.locator('.ant-modal:visible').count().catch(() => 0));
+          const okToast = await page.locator(
+            '.ant-message-success, .ant-message .anticon-check-circle').count().catch(() => 0);
+          if (!modalGone && !okToast) {
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   '保存未确认（弹窗未关闭且无成功提示）——可能被必填拦截，现场见 ECHO_STAGE');
+            continue;
+          }
+          // ⑥ 重开：列表里定位刚建的记录行 → 行内编辑/查看/详情
+          const firstPicked = Object.values(pickedByField).flat()[0] || '';
+          const rowMatch = String(check.row_match || '') || firstPicked;
+          await waitRows(page, 20000);
+          const row = rowMatch
+            ? page.locator('.ant-table-row, .ant-table-tbody tr').filter({hasText: rowMatch}).first()
+            : page.locator('.ant-table-row').first();
+          if (!await row.count().catch(() => 0)) {
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `保存后列表未找到记录行（匹配「${rowMatch.slice(0, 40)}」）——可能保存失败或列表未刷新`);
+            continue;
+          }
+          const editBtn = row.locator('button, a')
+            .filter({hasText: /编\s*辑|编\s*輯|Edit|查\s*看|详\s*情|詳\s*情/i}).first();
+          if (await editBtn.count().catch(() => 0)) {
+            await editBtn.click({timeout: 8000}).catch(() => undefined);
+          } else {
+            await row.locator('a, td').first().click({timeout: 8000}).catch(() => undefined);
+          }
+          await page.waitForTimeout(2000);
+          const editRoot: any = await formRootOf();
+          // ⑦ 逐字段读回显并与所选比对（evaluate 内不得引用闭包变量，norm 内联）
+          const missing: string[] = [];
+          const echoed: Record<string, string[]> = {};
+          for (const f of (check.fields || [])) {
+            const label = String(f.label || '');
+            const item = itemByLabel(editRoot, label);
+            if (!await item.count().catch(() => 0)) {
+              missing.push(`${label}:编辑页字段不存在`);
+              continue;
+            }
+            const vals: string[] = await item.evaluate((it: any, lb: string) => {
+              const nn = (s: any) => String(s || '').replace(/\s+/g, ' ').trim();
+              const ch = Array.from(it.querySelectorAll(
+                '.ant-select-selection__choice, .ant-select-selection__rendered li'));
+              let vs = ch.map((c: any) => nn(c.textContent)).filter(Boolean);
+              if (!vs.length) {
+                const sv = it.querySelector(
+                  '.ant-select-selection-selected-value, .ant-select-selection__selected-value');
+                if (sv && nn(sv.textContent)) vs = [nn(sv.textContent)];
+              }
+              if (!vs.length) {
+                const inp = it.querySelector('input, textarea');
+                if (inp && String((inp as any).value || '').trim()) {
+                  vs = [String((inp as any).value).trim()];
+                }
+              }
+              if (!vs.length) {
+                const full = nn(it.innerText).split(lb).slice(1).join('');
+                if (full) vs = [full.slice(0, 60)];
+              }
+              return vs;
+            }, label).catch(() => []);
+            echoed[label] = vals;
+            for (const p of (pickedByField[label] || [])) {
+              if (!vals.some((v: string) => v === p || v.indexOf(p) >= 0)) {
+                missing.push(`${label}:回显缺「${p}」（实际 ${JSON.stringify(vals.slice(0, 4))}）`);
+              }
+            }
+          }
+          const echoOk = missing.length === 0;
+          console.log('ECHO_TRACE ' + JSON.stringify({
+            name: nm, picked: pickedByField, echoed,
+            missing: missing.slice(0, 6), ok: echoOk,
+          }));
+          if (echoOk) {
+            echoStat.pass += 1;
+            recAll(check, nm, 'pass',
+                   `保存后重开，${Object.keys(pickedByField).length} 个字段回显与配置一致`
+                   + `（${JSON.stringify(pickedByField).slice(0, 140)}）`);
+          } else {
+            echoStat.unverified += 1;
+            recAll(check, nm, 'unverified',
+                   `回显与配置不一致：${missing.join('；').slice(0, 220)}`
+                   + '——业务断言未通过，现场见 ECHO_TRACE');
+          }
+        } catch (error) {
+          echoStat.unverified += 1;
+          recAll(check, nm, 'unverified', `回显检查异常：${String(error).slice(0, 200)}`);
+        }
+      }
+      console.log('ECHO_PHASE ' + JSON.stringify(echoStat));
+    }
+
     // ===== 「状态×操作矩阵」独立通道（rev173）：按状态定位行 → 行内操作集断言 →
     // 更多菜单枚举 → confirm 配置驱动的确认框验证（Modal+Popover 双采样，点取消还原）=====
     async function runActionMatrix(): Promise<void> {
@@ -8383,6 +8785,8 @@ _FORM_EXECUTOR_TS = r"""
     await phaseWatchdog(runFilterChecks(), 120000, 'filter');
     // rev173：状态×操作矩阵独立通道（含确认框验证，排在筛选之后）
     await phaseWatchdog(runActionMatrix(), 180000, 'matrix');
+    // rev186：配置保真·回显独立通道（真实建记录，排在矩阵之后、导出之前）
+    await phaseWatchdog(runEchoChecks(), 240000, 'echo');
     // rev148：导出独立通道（在列表检查之后——两者都各自 goto，互不复用现场）
     await phaseWatchdog(runExportChecks(), 240000, 'export');
 
@@ -8443,6 +8847,11 @@ _FORM_EXECUTOR_TS = r"""
       matrix_phase: {
         ...mxStat,
         rejected_at_plan: (FORM_PLAN.action_matrix_rejects || []).length,
+      },
+      // 「配置保真·回显」独立阶段（rev186）：新建→选对象→保存→重开→逐字段比对回显。
+      echo_phase: {
+        ...echoStat,
+        rejected_at_plan: (FORM_PLAN.echo_check_rejects || []).length,
       },
       skipped_no_locator: FORM_PLAN.skipped_count,
       // 只有一个数字无法复核："跳过 9 条"到底是哪几类原因
@@ -8619,6 +9028,8 @@ def render_form_executor(plan: dict[str, Any], *, default_phone: str = "18320101
          "filter_check_rejects": plan.get("filter_check_rejects") or [],
          # rev173：状态×操作矩阵通道的被拒配置同样要运行期可见（[matrix-skip]）
          "action_matrix_rejects": plan.get("action_matrix_rejects") or [],
+         # rev186：配置保真·回显通道的被拒配置（[echo-skip]）
+         "echo_check_rejects": plan.get("echo_check_rejects") or [],
          # rev142：提交层 toast 归因要用「定位器键 → 页面别名」反查
          #（toast「题目 11：请输入标题」含页面标签「标题」而非字段名「题目标题」）。
          "field_alias_applied": plan.get("field_alias_applied") or [],

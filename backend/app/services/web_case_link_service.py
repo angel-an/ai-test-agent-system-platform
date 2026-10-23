@@ -1056,6 +1056,7 @@ class WebCaseLinkService:
             navigation_path=navigation_path,
             path_config=path_config,
             sub_function=sub_function,
+            form_plan=form_plan,
         )
 
         test_run_info = None
@@ -2171,14 +2172,23 @@ class WebCaseLinkService:
         navigation_path: Any,
         path_config: dict[str, Any],
         sub_function: WebSubFunction | None,
+        form_plan: dict[str, Any] | None = None,
     ) -> int:
         """rev95：把「用例 → 资产」绑定回写到**全部批次用例**（幂等；增强项，失败不阻断）。
 
         与 rev64「需人工执行」打标同一套路：批次级回写、逐条幂等、异常只告警。
         只有主用例带 `web_test_id` 时，"这条用例有没有被自动化覆盖"在用例列表里
         无法回答（PR-9 实测 85 条只有 7 条可追溯）。
+
+        rev186：编译计划含 ``echo_check``（配置保真·回显通道）时，生成层标了
+        ``persistence_echo_case`` 的批次用例升 ``executable_track=auto``——
+        此前它们硬编码 manual（rev185 诚实边界），通道落地后由编译产物覆盖。
         """
         try:
+            plan_has_echo = bool(form_plan) and any(
+                (c or {}).get("type") == "echo_check"
+                for c in ((form_plan or {}).get("checks") or [])
+            )
             bindings = build_case_asset_bindings(
                 web_test_id=web_test.id,
                 web_test_identifier=web_test.identifier,
@@ -2195,8 +2205,23 @@ class WebCaseLinkService:
                 sub_function_id=getattr(sub_function, "id", None),
                 bound_at=datetime.now().isoformat(timespec="seconds"),
             )
+            promoted = 0
             for case, fields in bindings:
                 case.custom_fields = fields
+                if (plan_has_echo and (case.custom_fields or {}).get("persistence_echo_case")
+                        and case.custom_fields.get("executable_track") != "auto"):
+                    case.custom_fields = {
+                        **case.custom_fields,
+                        "executable_track": "auto",
+                        "executable_track_note": "rev186 echo_check 通道覆盖（编译计划含配置保真回显检查）",
+                    }
+                    case.automation_status = AutomationStatus.AUTOMATED
+                    promoted += 1
+            if promoted:
+                logger.info(
+                    "[web_case_link] 配置保真用例升自动轨: %d 条（资产 %s）",
+                    promoted, web_test.identifier,
+                )
             if bindings:
                 logger.info(
                     "[web_case_link] 用例→资产绑定回写: %d/%d 条（资产 %s）",
