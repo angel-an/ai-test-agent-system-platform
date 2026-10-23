@@ -21,7 +21,20 @@ from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
 REPO = BACKEND.parent
-PY = sys.executable
+
+#: 项目虚拟环境的解释器（**优先**）。
+#:
+#: 2026-10-23 实测出来的坑：原先用 ``PY = sys.executable``，意味着「用哪个 python
+#: 启动本脚本，就用哪个 python 跑 pytest」。用全局 python 启动时，P0 覆盖的
+#: ``tests/platform/test_requirement_quality_gate.py``（import anthropic）与
+#: ``tests/test_api_asset_models.py``（import alembic.op）会因缺包而 failed ——
+#: 但生成的文档里写的命令是 ``..\.venv\Scripts\python.exe``，**与实际执行不一致**，
+#: 于是产出的是一份「复现不出来」的假基线（实测 859 passed / 3 failed）。
+#: 现在固定优先项目 venv，并把实际解释器写进文档。
+_VENV_PY = REPO / ".venv" / "Scripts" / "python.exe"
+PY = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
+#: 文档里展示的命令前缀（与 PY 对应，保证「照抄能复现」）
+PY_DISPLAY = "..\\.venv\\Scripts\\python.exe" if _VENV_PY.exists() else sys.executable
 
 
 def _load_manifest():
@@ -92,10 +105,11 @@ def main() -> int:
     ]
 
     command = " ".join(
-        ["..\\.venv\\Scripts\\python.exe", "-X", "utf8", "-m", "pytest", *targets,
+        [PY_DISPLAY, "-X", "utf8", "-m", "pytest", *targets,
          "-q", "-p", "no:cacheprovider", *exclude_args]
     )
 
+    print(f"解释器：{PY}")
     print(f"执行 P0 基线（{len(targets)} 个目标；P1 归属测试 {len(p1_owned)} 个已登记且不在范围内）…")
     code, output = _run_pytest([*targets, *exclude_args])
     counts = _parse_counts(output)
@@ -136,6 +150,7 @@ def main() -> int:
         "",
         f"- 分支：`{branch}`",
         f"- 提交：`{head}`",
+        f"- 解释器：`{PY}`",
         f"- 退出码：`{code}`",
         f"- **passed：{counts.get('passed', '未知')}**",
         f"- failed：{counts.get('failed', 0)}，error：{counts.get('error', 0)}，"

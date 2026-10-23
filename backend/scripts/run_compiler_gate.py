@@ -27,7 +27,10 @@ import time
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
-PY = sys.executable
+#: 统一用项目 venv（与 P0 基线、后端运行同一个解释器）。
+#: 用全局 python 会因缺 anthropic/alembic 等包产生与代码无关的红（2026-10-23 实测）。
+_VENV_PY = BACKEND.parent / ".venv" / "Scripts" / "python.exe"
+PY = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
 
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
