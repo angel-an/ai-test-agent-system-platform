@@ -347,3 +347,16 @@ class TestTextLineReconstruction:
         names = [rule.name for rule in structured.field_rules]
         assert names == ["企业账户充值金额", "备注"]
         assert structured.field_rules[0].required is True
+
+
+def test_narrow_header_continuation_table_no_crash():
+    """窄表头（宽度<3）续表不得 IndexError（rev185 干跑：CS 方案书真实 PDF 崩溃）。"""
+    from app.services.requirement_structure import _continuation_offset
+
+    header = ["字段", "字段说明"]
+    rows = [
+        ["状态", "启用后显示"],
+        ["备注", "选填"],
+    ]
+    # 修复前：cells[off+2] 越行尾 → IndexError
+    assert _continuation_offset(rows, header) is None

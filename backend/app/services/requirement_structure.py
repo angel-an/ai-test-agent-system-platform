@@ -879,7 +879,11 @@ def _continuation_offset(
             cells = [_normalize_cell(c) for c in row]
             if len(cells) < off + width:
                 continue
-            name, _ftype, req = cells[off], cells[off + 1], cells[off + 2]
+            # 窄表头（宽度<3，如「题目类型/字段说明」）时 off+1/off+2 可越出行尾：
+            # 实测 CS 方案书 PDF（rev185 干跑）直接 IndexError 崩溃，缺列按空串计分
+            name = cells[off]
+            _ftype = cells[off + 1] if off + 1 < len(cells) else ""
+            req = cells[off + 2] if off + 2 < len(cells) else ""
             if name and _looks_like_field_label(name) and req in _REQUIRED_CELL_VALUES:
                 hits += 1
         if hits > best_hits:
