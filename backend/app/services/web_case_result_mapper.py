@@ -72,20 +72,28 @@ def stdout_has_executable_assertions(stdout: str) -> bool:
 def aggregate_status(outcomes: Iterable[str]) -> str:
     """把一组断言语义聚合成一个用例状态（宁可不判通过，也不虚报通过/失败）。
 
-    执行层目前只会产出 ``pass`` / ``unverified`` / ``blocked`` 三种结果
-    （断言不通过会让脚本硬失败，归入 blocked），因此：
-    - 全部 pass → PASSED
-    - 出现 blocked → BLOCKED
-    - 其余（含"部分通过 + 部分未验证"）→ SKIPPED
-      **不得**判成 FAILED：那等于在指控产品缺陷，而事实只是"没能验证"。
+    执行层目前产出 ``pass`` / ``fail`` / ``unverified`` / ``blocked`` 四种结果。
+
+    ⚠️ rev203（2026-10-26）修正：旧实现只认 ``blocked``，把 ``fail`` 落进 else 分支
+    ⇒ 判成 **SKIPPED**。后果是**用例级永远不会出现 FAILED**：真实失败被记成
+    "存在断言但没能验证"，与"没跑"混为一谈。实测 TR-830（店铺列契约 12/15、
+    缺 3 列、脚本 expect 抛出）五条用例全被记成 SKIPPED，run 级 failed=0。
+
+    语义边界要分清：
+    - ``SKIPPED`` = 断言存在但**没能验证**（环境/定位/取值不可比）；
+    - ``FAILED``  = 断言**验过且不成立** —— 这才是在指控产品缺陷，必须有 ``fail`` 才成立。
     """
     items = [o for o in outcomes if o]
     if not items:
         return NOT_EXECUTED
     if all(o == "pass" for o in items):
         return PASSED
+    # 有任何一条断言明确不成立 → 该用例失败（混合 pass/unverified 不算，见下）
+    if any(o == "fail" for o in items):
+        return FAILED
     if any(o == "blocked" for o in items):
         return BLOCKED
+    # 其余（纯 unverified，或 pass + unverified 混合）：不得判通过，也不得判失败
     return SKIPPED
 
 

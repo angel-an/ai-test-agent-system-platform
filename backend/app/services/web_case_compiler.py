@@ -479,7 +479,7 @@ from app.services.web_upload_fixtures import (
 #:     item.aliases 与 `sort_checks[].aliases`——没有这层映射 matched 恒为 0，整批假失败；
 #:     ②排序找列同样吃别名（先精确后包含逐候选）；③列契约 mismatch **不再立即断言中止**，
 #:     记入 COLUMN_FAIL，SORT_PHASE 跑完后统一抛——与排序"全跑完再抛"同一口径。
-COMPILER_REV = "rev202"
+COMPILER_REV = "rev203"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -3165,6 +3165,15 @@ def build_form_plan(
                     "configured_preview": item["columns"][:6],
                     "adopted": len(primary),
                 })
+        #: rev203：列契约也要**归属到用例**。此前 COLUMN_DIFF 只是诊断日志，
+        #: 断言账本（只认 COMPILED_ASSERTION）拿不到 case_id ⇒ TR-813~828 全部
+        #: case_attributed_total=0，日志看着全绿、用例级永远是"未执行"。
+        #: 一份列清单常被多条用例重复声明，故 owners 是**合并去重**的列表（同 sort_checks 口径）。
+        _column_owners: list[dict[str, str]] = []
+        for _set in rule_column_sets:
+            _owner = {"case_id": _set["case_id"], "rule_id": _set["rule_id"]}
+            if _owner["case_id"] and _owner not in _column_owners:
+                _column_owners.append(_owner)
         if columns_contract is None:
             columns_contract = {
                 "table_scope": "", "source": "rule_text", "notes": [], "column_count": len(primary),
@@ -3174,13 +3183,15 @@ def build_form_plan(
                 "assert_on_mismatch": True,
                 # 但**多出的列不算失败**：页面常带"操作"列/勾选列，需求列清单不含它们。
                 "allow_extra_columns": True,
+                "owners": _column_owners,
             }
             column_assert_source = "rule_text"
         else:
             # 显式契约优先（列名可能带英文表头、更细）；只把"要不要判失败"打开。
             columns_contract = {**columns_contract, "assert_on_mismatch": True,
                                 "allow_extra_columns": columns_contract.get(
-                                    "allow_extra_columns", True)}
+                                    "allow_extra_columns", True),
+                                "owners": _column_owners}
             # rev201：显式契约的条目也**追加**别名（按 key/header_text 对上才追加，
             # 去重、不覆盖 parse_columns 已经填的候选）。
             for _item in columns_contract.get("items") or []:

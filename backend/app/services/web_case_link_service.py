@@ -396,10 +396,36 @@ type ColumnContract = {
   //: rev199：需求列清单只要求"这些列都在、顺序对"，页面多出的列（操作/勾选）不算失败。
   //: 由规则文本合成的契约恒为 true；显式契约默认沿用旧口径（多出列算不一致）。
   allow_extra_columns?: boolean;
+  //: rev203：列契约的归属用例（一份列清单常被多条用例重复声明 → 合并去重）。
+  //: 没有 owners 的契约只是**诊断**，不进断言账本。
+  owners?: Array<{case_id?: string; rule_id?: string}>;
 } | null;
 const COLUMN_CONTRACT: ColumnContract = @@COLUMNS_JSON@@;
 // rev201：列契约失败先记账、排序跑完统一判（见 columnDiag 尾部注释）
 let COLUMN_FAIL: any = null;
+
+//: rev203：把列契约结论送进断言账本。
+//:
+//: 为什么必须这样做：账本（assertion_ledger）只认 `COMPILED_ASSERTION` 行，并把带
+//: case_id 的检查归为 case_attributed——**用例结论的唯一依据**。此前列契约只输出
+//: COLUMN_DIFF 诊断行，于是"日志里 matched 6/6、用例级却是 NOT_EXECUTED"。
+//:
+//: 只在 ``assert_on_mismatch === true`` 时记账：不判失败的契约属配置漂移诊断，
+//: 塞进账本会让"配置没对齐"伪装成用例失败。
+function recordColumnCheck(outcome: 'pass' | 'fail' | 'unverified', observed: string): void {
+  if (!COLUMN_CONTRACT || COLUMN_CONTRACT.assert_on_mismatch !== true) return;
+  const owners = Array.isArray(COLUMN_CONTRACT.owners) ? COLUMN_CONTRACT.owners : [];
+  for (const owner of owners) {
+    console.log('COMPILED_ASSERTION ' + JSON.stringify({
+      name: 'column_contract:list',
+      outcome,
+      observed,
+      rule_id: String((owner && owner.rule_id) || ''),
+      case_id: String((owner && owner.case_id) || ''),
+      source: 'rule_text',
+    }));
+  }
+}
 
 function normColText(value: unknown): string {
   return String(value == null ? '' : value).replace(/\s+/g, ' ').trim().toLowerCase();
@@ -451,6 +477,8 @@ async function columnDiag(scope: ClickScope, label: string): Promise<void> {
   if (!picked.headers.length) {
     // 列表渲染断言已过、却读不到表头：可能是非表格形态（卡片列表）或表头选择器不适用
     console.log('COLUMN_DIFF ' + JSON.stringify({ label, verdict: 'no_header', configured: items.length }));
+    // 读不到表头 ≠ 列缺失，只能记 unverified（宁可"无法判定"，不造假失败）
+    recordColumnCheck('unverified', 'no_header: 列表已渲染但读不到表头');
     return;
   }
   const pageNorm = picked.headers.map(normColText);
@@ -495,6 +523,13 @@ async function columnDiag(scope: ClickScope, label: string): Promise<void> {
     missing_in_page: missing.slice(0, 20), extra_in_page: extra.slice(0, 20),
     allow_extra_columns: allowExtra, order_monotonic: orderMonotonic,
   }));
+  // rev203：结论同时进断言账本（account attached to 用例），日志与账本不会各说各话
+  recordColumnCheck(
+    verdict === 'match' ? 'pass' : 'fail',
+    'matched=' + matched.length + '/' + items.length
+      + ' missing=[' + missing.slice(0, 6).join(',') + ']'
+      + ' order=' + (orderMonotonic ? 'ok' : 'changed'),
+  );
   if (verdict !== 'match' && COLUMN_CONTRACT && COLUMN_CONTRACT.assert_on_mismatch === true) {
     // rev201：不再在这里 expect —— 列契约失败会**中止整条脚本**，把后面的排序断言
     // 全部吞掉（TR-813 实测：COLUMN_DIFF mismatch 即断言抛出，SORT_PHASE 没跑到）。
@@ -532,6 +567,25 @@ type SortCheckSpec = {
   owners?: Array<{case_id?: string; rule_id?: string}>;
 };
 const SORT_CHECKS: SortCheckSpec[] = @@SORT_CHECKS_JSON@@;
+
+//: rev203：排序结论同样要进断言账本（带 owners → case_attributed）。
+//: 账本只认 COMPILED_ASSERTION；只打 SORT_TRACE 的话，排序验得再好，用例级也是"未执行"。
+function recordSortCheck(
+  check: SortCheckSpec, name: string,
+  outcome: 'pass' | 'fail' | 'unverified', observed: string,
+): void {
+  const owners = Array.isArray(check.owners) ? check.owners : [];
+  for (const owner of owners) {
+    console.log('COMPILED_ASSERTION ' + JSON.stringify({
+      name,
+      outcome,
+      observed,
+      rule_id: String((owner && owner.rule_id) || ''),
+      case_id: String((owner && owner.case_id) || ''),
+      source: 'rule_text',
+    }));
+  }
+}
 
 //: 取值归一：全角空格/多空白压成一个，去掉千分位逗号
 function normSortValue(value: unknown): string {
@@ -628,6 +682,7 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
         console.log('SORT_TRACE ' + JSON.stringify({name: nm, column: check.column,
           direction: check.direction, verdict: 'unverified', why: before.why,
           heads: before.heads}));
+        recordSortCheck(check, nm, 'unverified', 'unverified: ' + String(before.why || 'sample_failed'));
         continue;
       }
       const idx = Number(before.colIndex || 0);
@@ -637,6 +692,7 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
       if (!thCount) {
         stat.unverified += 1;
         console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified', why: 'header_cell_missing'}));
+        recordSortCheck(check, nm, 'unverified', 'unverified: header_cell_missing');
         continue;
       }
       // antd 列头是 升序→降序→取消 三态，第一次点击的方向取决于**默认排序状态**。
@@ -668,6 +724,7 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
         stat.unverified += 1;
         console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified',
           why: sample.why || 'resample_failed'}));
+        recordSortCheck(check, nm, 'unverified', 'unverified: ' + String(sample.why || 'resample_failed'));
         continue;
       }
       let judged = judge(sample.values || []);
@@ -686,12 +743,14 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
         stat.unverified += 1;
         console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified',
           why: 'too_few_rows', rows: values.length}));
+        recordSortCheck(check, nm, 'unverified', 'unverified: too_few_rows(' + values.length + ')');
         continue;
       }
       if (uncomparable) {
         stat.unverified += 1;
         console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified',
           why: 'values_not_comparable', sample: values.slice(0, 5)}));
+        recordSortCheck(check, nm, 'unverified', 'unverified: values_not_comparable');
         continue;
       }
       const badIdx = cmpList.findIndex((d) => (wantDesc ? d < 0 : d > 0));
@@ -704,15 +763,21 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
       }));
       if (ok) {
         stat.pass += 1;
+        recordSortCheck(check, nm, 'pass',
+          'rows=' + values.length + ' ' + check.column + ' ' + check.direction + ' monotonic');
       } else {
         stat.failed += 1;
         failures.push(`${check.column} 应按 ${wantDesc ? '近→遠（降序）' : '遠→近（升序）'}，`
           + `但第 ${badIdx + 1}/${values.length} 行起为 ${values[badIdx]} → ${values[badIdx + 1]}`);
+        recordSortCheck(check, nm, 'fail',
+          'break_at=' + (badIdx + 1) + '/' + values.length
+            + ' ' + values[badIdx] + ' -> ' + values[badIdx + 1]);
       }
     } catch (error) {
       stat.unverified += 1;
       console.log('SORT_TRACE ' + JSON.stringify({name: nm, verdict: 'unverified',
         why: 'exception', err: String(error).slice(0, 160)}));
+      recordSortCheck(check, nm, 'unverified', 'unverified: exception');
     }
   }
   console.log('SORT_PHASE ' + JSON.stringify({...stat, label}));
@@ -727,6 +792,87 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
 def render_sort_checks(checks_json: str = "[]") -> str:
     """渲染列表排序断言块。``checks_json`` 由编译期 sort_checks 序列化而来。"""
     return _SORT_DIAG_TEMPLATE.replace("@@SORT_CHECKS_JSON@@", checks_json or "[]")
+
+
+# ==========================================================================
+# 菜单展开失败的恢复与现场（rev203）
+# ==========================================================================
+# 背景（2026-10-26 基线刷新前置评估）：YL 列表域 run 的 `yl-menu-expand` 有约 50%
+# 首次失败率——TR-818 / TR-825 / TR-828 各撞一次，TR-828 连撞两次、第三次才过。
+#
+# 失败态已定位：`FRAME_DIAG` 显示 `frame#1 name="systemIframe"` 里菜单项**齐全**
+# （含 Master Data Management），但 `expandSubmenu` 等不到 `.ant-menu-submenu-title`
+# 可见。即 iframe 内菜单渲染时序，不是权限/菜单缺失（环境 curl 200，非 WAF）。
+#
+# 而且原来的失败日志有**诊断缺陷**：dump 时 `scope` 已被改成 `appPage`（console 空壳，
+# bodyLen=3），于是 `YL_MENU_DUMP []` 恒为空——看到"菜单为空"其实是被自己的日志骗了。
+#
+# 两条修法：
+#   1. 失败后**整页 reload 重走一次**（复刻"重跑即过"，比整轮重登轻；boc_auth 在 URL
+#      query 里，刷新不丢登录态），reload 后再取一次 scope 展开；
+#   2. 失败日志改成**双作用域 + DOM 明细**：scope 与 appPage 各 dump 一份，
+#      并列出 `.ant-menu-submenu-title` 的文本/可见性——下次失败能直接判"没找到"还是"不可见"。
+#
+# 用独立字符串常量 + 占位符插入（不放主模板 f-string 里）：大括号转义在 f-string 里
+# 已经踩过两次（`${{var}}` 被 Python 求值、`if (X) {` 未转义直接语法错）。
+_NAV_RECOVERY_TEMPLATE = r"""
+// ---- 菜单展开失败的恢复与现场（rev203，勿手改）--------------------------------
+//: DOM 级菜单诊断：**只读**，输出标题文本与是否可见。
+//: 判读：total>0 且 vis=false → 菜单在 DOM 里但不可见（渲染/遮挡问题，不是取错帧）；
+//:       total=0 → 真的取错了作用域或菜单未渲染。
+async function menuDomDiag(scope: ClickScope): Promise<any> {
+  return await (scope as any).locator('body').evaluate((el: any) => {
+    const doc = el.ownerDocument || document;
+    const all = doc.querySelectorAll('.ant-menu-submenu-title, .ant-menu-item');
+    const items: any[] = [];
+    const n = Math.min(all.length, 20);
+    for (let i = 0; i < n; i += 1) {
+      const e: any = all[i];
+      items.push({
+        t: String(e.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 30),
+        vis: !!(e.offsetParent || (e.getClientRects && e.getClientRects().length)),
+        tag: String(e.tagName || ''),
+      });
+    }
+    return { total: all.length, items };
+  }).catch((e: any) => ({ err: String(e).slice(0, 100) }));
+}
+
+//: 整页 reload 后重新取作用域。返回新的 scope（调用方继续用它展开菜单）。
+//: 注意**不要**在这里判成功——reload 只是把"重跑一次"自动化，成败仍由 expandSubmenu 决定。
+async function reloadAndRescope(appPage: Page): Promise<ClickScope> {
+  console.log('YL_NAV_RETRY ' + JSON.stringify({ action: 'reload', reason: 'menu_not_expanded' }));
+  await appPage.reload({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => undefined);
+  await appPage.waitForFunction(
+    () => /Master Data Management|Customer Service|Member Center/.test(
+      document.body ? document.body.innerText : '')
+      || document.querySelectorAll('iframe').length > 0,
+    null,
+    { timeout: 60000 },
+  ).catch(() => undefined);
+  await appPage.waitForTimeout(4000);
+  const scope = await getCrmScope(appPage);
+  console.log('YL_MENU_DOM_AFTER_RELOAD ' + JSON.stringify(await menuDomDiag(scope)));
+  return scope;
+}
+
+//: 双作用域现场：**scope 与 appPage 都要看**。
+//: 历史实现 dump 的 scope 已被改成 appPage，于是"菜单为空"是日志自己造出来的假象。
+async function menuFailureEvidence(scope: ClickScope, appPage: Page, reason: string): Promise<any> {
+  return {
+    reason,
+    scope: await visibleMenuTexts(scope).catch(() => []),
+    page: await visibleMenuTexts(appPage).catch(() => []),
+    scopeDom: await menuDomDiag(scope),
+    pageDom: await menuDomDiag(appPage),
+  };
+}
+"""
+
+
+def render_nav_recovery() -> str:
+    """渲染菜单展开恢复块（rev203）。逐字插入模板，无占位符。"""
+    return _NAV_RECOVERY_TEMPLATE
 
 
 
@@ -3362,6 +3508,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         frame_diag_js = render_frame_diag()
         column_diag_js = render_column_diag(columns_json)
         sort_diag_js = render_sort_checks(sort_checks_json)
+        nav_recovery_js = render_nav_recovery()
         return f"""import {{ test, expect, type BrowserContext, type FrameLocator, type Locator, type Page }} from '@playwright/test';
 
 const LOGIN_URL = process.env.WEB_TEST_BASE_URL || {json.dumps(base_url, ensure_ascii=False)};
@@ -3382,6 +3529,8 @@ type ClickScope = Page | FrameLocator;
 {column_diag_js}
 
 {sort_diag_js}
+
+{nav_recovery_js}
 
 // ---- 菜单定位（与 cs_module 模板同一套，rev64 语义）------------------------
 // antd SubMenu 是开关语义：先读 aria-expanded，已展开绝不重复点击。
@@ -3627,11 +3776,20 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
     scope = appPage;
     expanded = await expandSubmenu(scope, parentLabels, childLabels, 20000);
   }}
+  // rev203：三个作用域都失败 → 整页 reload 重走一次。
+  // 依据：TR-818/825/828 的同类失败**重跑即过**，说明是 iframe 内菜单渲染时序，不是权限。
+  // 自动 reload 复刻"重跑"，比让整批基线带一堆假失败便宜得多。
   if (!expanded) {{
-    const dump = JSON.stringify(await visibleMenuTexts(scope));
-    console.log(`YL_MENU_DUMP ${{dump}}`);
+    scope = await reloadAndRescope(appPage);
+    expanded = await expandSubmenu(scope, parentLabels, childLabels, 25000);
+  }}
+  if (!expanded) {{
+    // 现场必须双作用域：老实现只 dump scope（此时已被改成 appPage 空壳）⇒ 日志恒显示"菜单为空"，
+    // 把"取错作用域/菜单不可见"全糊成一句无用的空数组。
+    const evidence = await menuFailureEvidence(scope, appPage, 'yl-menu-expand');
+    console.log(`YL_MENU_DUMP ${{JSON.stringify(evidence)}}`);
     console.log(`FRAME_DIAG ${{await frameDiag(appPage, 'yl-menu-expand')}}`);
-    expect(expanded, `未找到或未能展开 Master Data Management 菜单；当前可见菜单=${{dump}}`).toBeTruthy();
+    expect(expanded, `未找到或未能展开 Master Data Management 菜单；现场=${{JSON.stringify(evidence).slice(0, 700)}}`).toBeTruthy();
   }}
   await appPage.waitForTimeout(1500);
   let childClicked = await clickMenuItem(scope, childLabels, 15000);

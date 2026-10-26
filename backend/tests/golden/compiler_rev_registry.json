@@ -438,6 +438,12 @@
       "digest": "228c6e29aa80",
       "date": "2026-10-26",
       "summary": "rev202: ①導入任務列表子菜单（TC-298680）：原先该业务文本落进默认分支 ⇒ 点 Shop Management，在店铺列表上验「創建時間」排序；店铺页恰好也有 Create Time 列，断言可能通过但验的是错页面（假绿）。_yl_masterdata_child_menu 新增「導入任務」分支，且子菜单候选允许 custom_config.field_locators.child_labels 覆盖（配置在前、去重保序）。②修 rev199 走不到的分支：CHANNEL_ONLY_CONFIG_KEYS 增加 column_aliases/child_labels —— 只有列契约/排序、没有新建表单的子功能原先在 resolve_form_locators 就被判「没配置」返回 None，build_form_plan 里的规则断言合成分支永远不被调用，导致脚本 SORT_CHECKS=[] 却整条 passed（TR-823 实测假绿）"
+    },
+    {
+      "rev": "rev203",
+      "digest": "ba7585b71aef",
+      "date": "2026-10-26",
+      "summary": "rev203: 列表域断言归属 + 菜单展开恢复。①列契约合成时带 owners（同一列清单被多条用例重复声明 → 合并去重，按 case_id 去重），plan 顶层 columns.owners 随脚本下发；②columnDiag 在 assert_on_mismatch=true 时按 owners 逐条输出 COMPILED_ASSERTION（match→pass / mismatch→fail / no_header→unverified），诊断型契约不记账；③sortDiag 的 pass/fail/unverified 三分支同样按 owners 输出 COMPILED_ASSERTION。修的是实测缺陷：TR-820（列 7/7 + 排序 pass + job completed）的 test_results.status 仍是 NOT_EXECUTED、TR-813~828 全部 case_attributed_total=0 —— 日志全绿而用例级永远未执行，基线刷新会产出全「未执行」的假基线。④yl-menu-expand 失败后整页 reload 重走一次（reloadAndRescope），失败现场改为双作用域（scope + page）+ DOM 明细（menuDomDiag）；老实现 dump 时 scope 已被改成 appPage 空壳，日志恒显示'菜单为空'"
     }
   ]
 }
