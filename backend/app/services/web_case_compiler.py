@@ -479,7 +479,7 @@ from app.services.web_upload_fixtures import (
 #:     item.aliases 与 `sort_checks[].aliases`——没有这层映射 matched 恒为 0，整批假失败；
 #:     ②排序找列同样吃别名（先精确后包含逐候选）；③列契约 mismatch **不再立即断言中止**，
 #:     记入 COLUMN_FAIL，SORT_PHASE 跑完后统一抛——与排序"全跑完再抛"同一口径。
-COMPILER_REV = "rev201"
+COMPILER_REV = "rev202"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -2865,6 +2865,13 @@ CHANNEL_ONLY_CONFIG_KEYS: tuple[str, ...] = (
     # rev186：配置保真·回显一致性通道——只有 echo_checks、没有 fields 的定位器表
     # 同样要生成计划（与 filter_checks 同口径：通道配置本身就是"有配置"）
     "echo_checks",
+    # rev202：列表域**无表单**子功能（如「導入任務列表」：只有列契约/排序断言，
+    # 没有新建表单）原先在这一步就被判成"没配置"⇒ resolve_form_locators 返回
+    # (None, "none") ⇒ build_form_plan 根本没被调用，rev199 为这类形态写的
+    # "有规则断言也生成计划"分支成了**走不到的死代码**（TR-823 实测：脚本里
+    # SORT_CHECKS=[] 却整条 passed，假绿）。列名别名与子菜单候选只对列表通道有意义，
+    # 它们出现即代表"这是列表页配置"，与 list_url 同口径算作有配置。
+    "column_aliases", "child_labels",
 )
 
 

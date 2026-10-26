@@ -432,6 +432,12 @@
       "digest": "44166e9b1a96",
       "date": "2026-10-26",
       "summary": "rev201: 列名别名通道 + 列契约失败不中断。TR-813 实测：UAT 页面表头全英文（Store Code/Operation Time）而规则文本是繁体中文，COLUMN_DIFF matched 恒为 0 整批假失败；且 columnDiag mismatch 立即 expect 中止整条脚本，SORT_PHASE 没跑到。①field_locators.column_aliases（中文列名→英文表头或候选数组）合进合成/显式契约 item.aliases 与 sort_checks[].aliases（追加去重）；②排序找列先逐候选精确、再逐候选包含；③列契约失败记 COLUMN_FAIL，SORT_PHASE 跑完统一判（YL 与储值模板同口径）"
+    },
+    {
+      "rev": "rev202",
+      "digest": "228c6e29aa80",
+      "date": "2026-10-26",
+      "summary": "rev202: ①導入任務列表子菜单（TC-298680）：原先该业务文本落进默认分支 ⇒ 点 Shop Management，在店铺列表上验「創建時間」排序；店铺页恰好也有 Create Time 列，断言可能通过但验的是错页面（假绿）。_yl_masterdata_child_menu 新增「導入任務」分支，且子菜单候选允许 custom_config.field_locators.child_labels 覆盖（配置在前、去重保序）。②修 rev199 走不到的分支：CHANNEL_ONLY_CONFIG_KEYS 增加 column_aliases/child_labels —— 只有列契约/排序、没有新建表单的子功能原先在 resolve_form_locators 就被判「没配置」返回 None，build_form_plan 里的规则断言合成分支永远不被调用，导致脚本 SORT_CHECKS=[] 却整条 passed（TR-823 实测假绿）"
     }
   ]
 }

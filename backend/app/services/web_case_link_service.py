@@ -2817,6 +2817,12 @@ class WebCaseLinkService:
                 form_executor=form_executor,
                 columns_json=columns_json,
                 sort_checks_json=sort_checks_json,
+                # rev202：子菜单候选可由配置覆盖（菜单名是被测系统事实，不该只能改代码）
+                child_labels_override=(
+                    ((form_plan or {}).get("locators") or {}).get("child_labels")
+                    if isinstance((form_plan or {}).get("locators"), dict)
+                    else None
+                ),
             )
         raise ValueError(
             f"[unsupported_web_template] 未知的 Web 脚本模板键: {template_key}"
@@ -3272,6 +3278,22 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         逐候选兜底，UAT 语言切换或版本改名时不至于整批断链。
         """
         text = self._case_route_text(test_case)
+        # rev202：導入任務列表（TC-298680）。原先落到默认分支 ⇒ 点 Shop Management、
+        # 在**店铺列表**上验「創建時間」排序：店铺页恰好也有 Create Time 列，断言可能通过，
+        # 但验的是错页面（假绿）。菜单名 UAT 未探明，故给足候选 + 允许
+        # `field_locators.child_labels` 配置覆盖（见 _generate_yl_masterdata_script）。
+        if self._route_keyword_hit(
+            text,
+            ["導入任務", "导入任务", "導入結果", "导入结果", "Import Task", "Import Result",
+             "Import Management", "Import History"],
+        ):
+            return "導入任務列表", [
+                "Import Task", "Import Tasks", "Import Task List", "Import Management",
+                "Import History", "導入任務", "導入任務列表",
+                # 刻意**不放**裸 "Import"：TR-826 实测，页面上的「Import」按钮/文字
+                # 会被 getByText(exact:false) 命中并点击成功，于是"子菜单点到了"
+                # 返回 true、实际停在会员列表 ⇒ 在错页面上验排序（假绿）。
+            ]
         if self._route_keyword_hit(
             text,
             ["商品主數據", "商品主数据", "Item Manage", "Item Management", "Goods Management"],
@@ -3300,6 +3322,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         form_executor: str = "",
         columns_json: str = "null",
         sort_checks_json: str = "[]",
+        child_labels_override: list[str] | None = None,
     ) -> str:
         """YL 主數據管理（店鋪/商品/支付方式主數據）业务模板。
 
@@ -3320,6 +3343,17 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
             f"http://localhost:8000/api/v2/projects/PR-9/web-tests/captcha-ocr"
         )
         biz_label, child_labels = self._yl_masterdata_child_menu(test_case)
+        # rev202：子菜单候选允许由 `custom_config.field_locators.child_labels` 覆盖。
+        # 菜单名是**被测系统的事实**，不该只能改代码来适配：配置里给出的候选排在前，
+        # 路由推断出的候选作为兜底（去重保序）。菜单改名/UAT 语言切换时改数据即可。
+        # 去重必须**配置内部先做**：配置里手写重复项同样会让同一个菜单被点两次。
+        _override: list[str] = []
+        for x in (child_labels_override or []):
+            _s = str(x).strip()
+            if _s and _s not in _override:
+                _override.append(_s)
+        if _override:
+            child_labels = _override + [c for c in child_labels if c not in _override]
         child_labels_json = json.dumps(child_labels, ensure_ascii=False)
         click_by_text_js = render_click_by_text(
             menu_selectors="generic", text_fallback="first", dom_click_fallback=True
