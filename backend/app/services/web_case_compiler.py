@@ -479,7 +479,7 @@ from app.services.web_upload_fixtures import (
 #:     item.aliases 与 `sort_checks[].aliases`——没有这层映射 matched 恒为 0，整批假失败；
 #:     ②排序找列同样吃别名（先精确后包含逐候选）；③列契约 mismatch **不再立即断言中止**，
 #:     记入 COLUMN_FAIL，SORT_PHASE 跑完后统一抛——与排序"全跑完再抛"同一口径。
-COMPILER_REV = "rev204"
+COMPILER_REV = "rev205"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。

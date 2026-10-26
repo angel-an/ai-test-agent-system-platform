@@ -201,9 +201,7 @@ async def db_case_rows(run: str):
 
 
 async def do_run(sub_prefix: str | None, max_groups: int) -> None:
-    fps = sorted(ART.glob("triage_*.json")) if ART.exists() else []
-    if sub_prefix:
-        fps = [f for f in fps if sub_prefix in f.name]
+    fps = latest_triage_files(sub_prefix)
     if not fps:
         print("[run] 没有分诊结果，先跑 --triage", flush=True)
         return
@@ -282,6 +280,30 @@ def _cat(g: dict) -> str:
     return "其它无执行通道"
 
 
+def latest_triage_files(sub_prefix: str | None = None) -> list[Path]:
+    """每个子功能只保留**最新**一份分诊结果。
+
+    文件名不足以判重：历史工件用过语义 tag（store/goods/...），新分诊用子功能
+    id 前 8 位，同一子功能会并存两份。不按 ``sub`` 去重就会把同批用例统计两遍。
+    """
+    if not ART.exists():
+        return []
+    newest: dict[str, tuple[float, Path]] = {}
+    for p in ART.glob("triage_*.json"):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        key = d.get("sub") or p.stem
+        mt = p.stat().st_mtime
+        if key not in newest or mt > newest[key][0]:
+            newest[key] = (mt, p)
+    fps = sorted((v[1] for v in newest.values()), key=lambda p: p.name)
+    if sub_prefix:
+        fps = [p for p in fps if sub_prefix in p.name]
+    return fps
+
+
 async def known_defect_map() -> dict[str, str]:
     async with async_session_factory() as s:
         rows = (await s.execute(text("""
@@ -298,7 +320,7 @@ async def known_defect_map() -> dict[str, str]:
 
 
 async def do_report() -> Path:
-    fps = sorted(ART.glob("triage_*.json")) if ART.exists() else []
+    fps = latest_triage_files()
     if not fps:
         print("[report] 没有分诊结果", flush=True)
         raise SystemExit(1)

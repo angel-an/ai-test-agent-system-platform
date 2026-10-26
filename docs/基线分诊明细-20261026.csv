@@ -1,6 +1,42 @@
 ﻿子功能,用例,规则字段,可判,不可判原因,运行,结论,已知缺陷标注,规则文本(前80),结果描述(前160)
+cs-case-list-view-sort,TC-463753,列表排序,否,其它无执行通道,,未执行（编译期无可判断言）,,点击列头触发排序查询且结果有序,
 cs-case-email,TC-837310,Remark,是,,TR-867,SKIPPED,,限制500個字,input_validation:Remark [500字]=pass（样本 500 字符（文档上限 500） 通过（限制500個字））; [NEG-67197-MULTI-EMAIL] CS_Module 工单发送邮件-多收件人（67197 复验；修复后需改=unverified（规则级负路径：前置条件未构造成功 —
+yl-masterdata-import-task,TC-298680,列表,是,,TR-865,NOT_EXECUTED,,任務列表：任務名取文件名/狀態/導入結果條數/創建人/創建時間/下載導入結果；按創建時間近→遠,该用例没有可执行断言（叙述/模板类，或断言全部无法编译）→ 无法自动执行，需人工执行（非用例错误）
+yl-masterdata-payment,TC-140708,Payment Code,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Payment Code」只讀/不可手工修改（是否可編輯=否）,
+yl-masterdata-payment,TC-642253,Payment Code,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Payment Code」只讀/不可手工修改（是否可編輯=否）,
+yl-masterdata-payment,TC-660201,Payment Code,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Payment Code」只讀/不可手工修改（是否可編輯=否）,
+yl-masterdata-payment,TC-759862,Payment Code,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Payment Code」只讀/不可手工修改（是否可編輯=否）,
+yl-masterdata-payment,TC-254508,列表顯示欄位,是,,TR-858,PASSED,,「YL-主数据管理」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
+yl-masterdata-payment,TC-563844,列表顯示欄位,是,,TR-858,PASSED,,「YL-主数据管理」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
+yl-masterdata-payment,TC-927747,列表顯示欄位,是,,TR-858,PASSED,,「YL-主数据管理」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
+yl-masterdata-payment,TC-380465,列表顯示欄位,是,,TR-859,PASSED,,「支付方式」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
+yl-masterdata-payment,TC-629801,列表顯示欄位,是,,TR-859,PASSED,,「支付方式」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
+yl-masterdata-payment,TC-897342,列表顯示欄位,是,,TR-859,PASSED,,「支付方式」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
+yl-masterdata-payment,TC-615897,支付方式名稱,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「支付方式名稱」匹配規則：全模糊匹配,
+yl-masterdata-payment,TC-850470,支付方式名稱,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「支付方式名稱」匹配規則：全模糊匹配,
+yl-masterdata-payment,TC-154102,支付方式編號,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「支付方式編號」匹配規則：精準匹配,
+yl-masterdata-payment,TC-812448,支付方式編號,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「支付方式編號」匹配規則：精準匹配,
+yl-masterdata-payment,TC-568711,列表,是,,TR-860,PASSED,,商品/支付列表均按更新時間近→遠；支付編號由外部系統生成,sort:更新時間:desc=pass（rows=10 更新時間 desc monotonic）
+yl-masterdata-payment,TC-689853,列表顯示欄位,是,,TR-861,PASSED,,「YL-主数据管理（已鎖定，勿改。改動聯繫蘇元）」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
+yl-masterdata-payment,TC-733310,更新人,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「更新人」匹配規則：全模糊匹配,
+yl-masterdata-payment,TC-128282,更新時間,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「更新時間」匹配規則：範圍匹配,
 cs-case-list-search-filter,TC-313663,列表搜索,是,,TR-866,SKIPPED,,Edit Filters 按 Case No. 过滤应返回匹配结果,[POS-FILTER-SEARCH-CASE-NO] Edit Filters 按 Case No. 过滤（expec=unverified（规则级负路径：未能取得服务端结论 —— 提交后窗口内未捕获到目标接口的请求；期望规则「Edit Filters 按 Ca）
+survey-operation,TC-273076,導出明細欄位,否,其它无执行通道,,未执行（编译期无可判断言）,,「導出明細」欄位（3項）：填写渠道、用户名、用户手机号,
+survey-operation,TC-497349,導出明細欄位,否,其它无执行通道,,未执行（编译期无可判断言）,,「導出明細」欄位（7項）：会员卡号、门店名称、门店编码、关联订单号、关联订单实付金额、填写时间、问题及回答,
+survey-operation,TC-116699,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,篩選空態,
+survey-operation,TC-121625,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,日期反向,
+survey-operation,TC-121711,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,保存正向路徑,
+survey-operation,TC-130398,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,查看態約束,
+survey-operation,TC-197989,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,保存負向路徑,
+survey-operation,TC-253506,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,組合篩選,
+survey-operation,TC-316914,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,篩選重置,
+survey-operation,TC-494815,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,審計日誌,
+survey-operation,TC-573897,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,權限負向,
+survey-operation,TC-584482,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,分頁基礎,
+survey-operation,TC-606838,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,編輯態只讀約束,
+survey-operation,TC-608290,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,分頁導航,
+survey-operation,TC-657240,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,取消語義,
+survey-operation,TC-939192,通用交互/系統場景,否,其它无执行通道,,未执行（编译期无可判断言）,,權限正向,
 yl-masterdata-goods,TC-217441,Item Code商品編碼,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Item Code商品編碼」只讀/不可手工修改（是否可編輯=否）,
 yl-masterdata-goods,TC-495920,Item Code商品編碼,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Item Code商品編碼」只讀/不可手工修改（是否可編輯=否）,
 yl-masterdata-goods,TC-619474,Item Code商品編碼,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Item Code商品編碼」只讀/不可手工修改（是否可編輯=否）,
@@ -27,24 +63,6 @@ yl-masterdata-goods,TC-314182,創建人,否,列表筛选条件（无列表筛选
 yl-masterdata-goods,TC-709205,創建時間,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「創建時間」匹配規則：範圍匹配,
 yl-masterdata-goods,TC-752540,更新人,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「更新人」匹配規則：全模糊匹配,
 yl-masterdata-goods,TC-401363,更新時間,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「更新時間」匹配規則：範圍匹配,
-yl-masterdata-payment,TC-140708,Payment Code,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Payment Code」只讀/不可手工修改（是否可編輯=否）,
-yl-masterdata-payment,TC-642253,Payment Code,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Payment Code」只讀/不可手工修改（是否可編輯=否）,
-yl-masterdata-payment,TC-660201,Payment Code,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Payment Code」只讀/不可手工修改（是否可編輯=否）,
-yl-masterdata-payment,TC-759862,Payment Code,否,字段只读态（无只读校验通道）,,未执行（编译期无可判断言）,,「Payment Code」只讀/不可手工修改（是否可編輯=否）,
-yl-masterdata-payment,TC-254508,列表顯示欄位,是,,TR-858,PASSED,,「YL-主数据管理」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
-yl-masterdata-payment,TC-563844,列表顯示欄位,是,,TR-858,PASSED,,「YL-主数据管理」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
-yl-masterdata-payment,TC-927747,列表顯示欄位,是,,TR-858,PASSED,,「YL-主数据管理」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
-yl-masterdata-payment,TC-380465,列表顯示欄位,是,,TR-859,PASSED,,「支付方式」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
-yl-masterdata-payment,TC-629801,列表顯示欄位,是,,TR-859,PASSED,,「支付方式」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
-yl-masterdata-payment,TC-897342,列表顯示欄位,是,,TR-859,PASSED,,「支付方式」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
-yl-masterdata-payment,TC-615897,支付方式名稱,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「支付方式名稱」匹配規則：全模糊匹配,
-yl-masterdata-payment,TC-850470,支付方式名稱,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「支付方式名稱」匹配規則：全模糊匹配,
-yl-masterdata-payment,TC-154102,支付方式編號,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「支付方式編號」匹配規則：精準匹配,
-yl-masterdata-payment,TC-812448,支付方式編號,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「支付方式編號」匹配規則：精準匹配,
-yl-masterdata-payment,TC-568711,列表,是,,TR-860,PASSED,,商品/支付列表均按更新時間近→遠；支付編號由外部系統生成,sort:更新時間:desc=pass（rows=10 更新時間 desc monotonic）
-yl-masterdata-payment,TC-689853,列表顯示欄位,是,,TR-861,PASSED,,「YL-主数据管理（已鎖定，勿改。改動聯繫蘇元）」列表顯示欄位（7列）：支付方式編號、POS Payment Code、支付方式名稱、創建人、創建時間、更新人、更新時間,column_contract:list=pass（matched=7/7 missing=[] order=ok）
-yl-masterdata-payment,TC-733310,更新人,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「更新人」匹配規則：全模糊匹配,
-yl-masterdata-payment,TC-128282,更新時間,否,列表筛选条件（无列表筛选通道）,,未执行（编译期无可判断言）,,篩選字段「更新時間」匹配規則：範圍匹配,
 yl-masterdata-store,TC-168310,導入,否,需导入任务入口（MDM 实测无该菜单）,,未执行（编译期无可判断言）,,特殊字段：同一个字段支持传多组值时，第一組為必填；每組數據單獨檢驗完整性，不完整也退款失敗。；子项：營業時間1-周幾？、營業時間1-時間1；,
 yl-masterdata-store,TC-234405,導入,否,需导入任务入口（MDM 实测无该菜单）,,未执行（编译期无可判断言）,,特殊字段：同一个字段支持传多组值时，第一組為必填；每組數據單獨檢驗完整性，不完整也退款失敗。；子项：營業時間1-周幾？、營業時間1-時間1；,
 yl-masterdata-store,TC-234718,導入,否,需导入任务入口（MDM 实测无该菜单）,,未执行（编译期无可判断言）,,特殊字段：同一个字段支持传多组值时，第一組為必填；每組數據單獨檢驗完整性，不完整也退款失敗。；子项：營業時間1-周幾？、營業時間1-時間1；,
@@ -165,4 +183,3 @@ yl-masterdata-store,TC-507974,列表顯示欄位,是,,TR-864,FAILED,"known_defec
 yl-masterdata-store,TC-180519,導入,否,需导入任务入口（MDM 实测无该菜单）,,未执行（编译期无可判断言）,,每次最多導入2000條；錯誤原因：,
 yl-masterdata-store,TC-258078,導入,否,需导入任务入口（MDM 实测无该菜单）,,未执行（编译期无可判断言）,,1、xxx字段：不能超過50個字符；2、XX字段：必填未填寫；,
 yl-masterdata-store,TC-806726,導入,否,需导入任务入口（MDM 实测无该菜单）,,未执行（编译期无可判断言）,,導入數據成功後：,
-yl-masterdata-import-task,TC-298680,列表,是,,TR-865,NOT_EXECUTED,,任務列表：任務名取文件名/狀態/導入結果條數/創建人/創建時間/下載導入結果；按創建時間近→遠,该用例没有可执行断言（叙述/模板类，或断言全部无法编译）→ 无法自动执行，需人工执行（非用例错误）

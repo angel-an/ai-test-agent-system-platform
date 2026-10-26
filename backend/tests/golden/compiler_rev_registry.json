@@ -450,6 +450,12 @@
       "digest": "fb0c0e2918ea",
       "date": "2026-10-26",
       "summary": "rev204: 列表「就绪」与「有数据」解耦。①YL_LIST_READY 判据从「.ant-table 可见」改为「表格可见 且（有数据行 或 空态提示）」，并在日志里带 rows/empty —— 旧判据在 thead 渲染后即通过（实测 1.3s），数据行还没挂上；②sortColumnSample 在 tbody 无数据行时轮询等待（默认 12s、400ms 间隔），超时才判 no_rows 并输出 waitedMs。修的是实测缺陷：TR-830 的「店铺列表 0 行数据 → 排序 unverified: no_rows」，同一页面同账号实测接口 /org/shop/list 返回 10 条、DOM 也有 10 行数据 —— 不是列表为空，是采样早于数据落地"
+    },
+    {
+      "rev": "rev205",
+      "digest": "0801763c71de",
+      "date": "2026-10-26",
+      "summary": "rev205: 子菜单路由未命中时不再默认猜测（防假绿）。`_yl_masterdata_child_menu` 返回由 `(label, candidates)` 改为 `(label, candidates, resolved)`：原先末尾无条件返回店鋪分支，用例文本不含任何子菜单标识时会点第一个子菜单、在**错页面**上跑断言；错页面恰好有同名列时断言会通过（TR-853 实证 page_count=16/matched=0，rev202 的导入任务用例已踩过一次）。现在未命中返回 `(\"\", [], False)`，生成脚本注入 `MENU_ROUTE_RESOLVED=false` 并 `test.skip` 显式跳过、带 `MENU_ROUTE_UNRESOLVED` 可检索标记；`custom_config.field_locators.child_labels` 显式配置即视为已解析。实测影响面：绑定子功能的 184 条用例中 YL 三子功能 164 条全部正常解析、可判 20 条不变，unresolved 全部落在不走该模板的子功能上 —— 现有数据零触发，属防御性修复。"
     }
   ]
 }

@@ -3432,10 +3432,17 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
              "店鋪主數據", "店铺主数据", "商品主數據", "支付方式主數據"],
         )
 
-    def _yl_masterdata_child_menu(self, test_case: TestCase) -> tuple[str, list[str]]:
+    def _yl_masterdata_child_menu(self, test_case: TestCase) -> tuple[str, list[str], bool]:
         """按用例文本推断 YL 主数据的**子菜单**（店鋪/商品/支付方式）。
 
-        返回 ``(业务标签, 子菜单候选集)``。菜单为**英文**，2026-10-15 用户口径确认：
+        返回 ``(业务标签, 子菜单候选集, 是否已解析)``。
+
+        ``resolved=False`` 表示用例文本**未命中任何子菜单标识**。此时绝不默认落到
+        第一个子菜单——默认猜测会把断言放到错的页面上，而错页面恰好有同名列时
+        断言会通过，产出**假绿**（rev202 的导入任务用例即因此跑错页面）。
+        调用方应据此在脚本里显式跳过，并在报告里给出可读原因。
+
+        菜单为**英文**，2026-10-15 用户口径确认：
         - 店鋪 = ``Shop Management``（UAT 探针实测）
         - 商品 = ``Item Manage``（用户确认；``Item Management`` 为 i18n 语言包旧译名）
         - 支付 = ``Payment Method``（用户确认；``Payment Methods`` 为 i18n 旧译名）
@@ -3459,7 +3466,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
                 # 刻意**不放**裸 "Import"：TR-826 实测，页面上的「Import」按钮/文字
                 # 会被 getByText(exact:false) 命中并点击成功，于是"子菜单点到了"
                 # 返回 true、实际停在会员列表 ⇒ 在错页面上验排序（假绿）。
-            ]
+            ], True
         if self._route_keyword_hit(
             text,
             ["商品主數據", "商品主数据", "Item Manage", "Item Management", "Goods Management"],
@@ -3467,15 +3474,18 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
             return "商品主數據", [
                 "Item Manage", "Item Management", "Goods Management",
                 "商品主數據", "商品管理", "Goods",
-            ]
+            ], True
         if self._route_keyword_hit(
             text,
             ["支付方式主數據", "支付方式主数据", "Payment Method", "Payment Methods", "Payment"],
         ):
             return "支付方式主數據", [
                 "Payment Method", "Payment Methods", "支付方式主數據", "支付方式管理", "Payment",
-            ]
-        return "店鋪主數據", ["Shop Management", "店鋪主數據", "店鋪管理", "Shop"]
+            ], True
+        if self._route_keyword_hit(text, ["店鋪", "店铺", "Shop", "Store"]):
+            return "店鋪主數據", ["Shop Management", "店鋪主數據", "店鋪管理", "Shop"], True
+        # 未命中任何子菜单标识 ⇒ 显式未解析，不做默认猜测（默认猜测会产出假绿）。
+        return "", [], False
 
     def _generate_yl_masterdata_script(
         self,
@@ -3508,7 +3518,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         ocr_url = os.environ.get("WEB_TEST_CAPTCHA_OCR_URL") or (
             f"http://localhost:8000/api/v2/projects/PR-9/web-tests/captcha-ocr"
         )
-        biz_label, child_labels = self._yl_masterdata_child_menu(test_case)
+        biz_label, child_labels, route_resolved = self._yl_masterdata_child_menu(test_case)
         # rev202：子菜单候选允许由 `custom_config.field_locators.child_labels` 覆盖。
         # 菜单名是**被测系统的事实**，不该只能改代码来适配：配置里给出的候选排在前，
         # 路由推断出的候选作为兜底（去重保序）。菜单改名/UAT 语言切换时改数据即可。
@@ -3520,6 +3530,8 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
                 _override.append(_s)
         if _override:
             child_labels = _override + [c for c in child_labels if c not in _override]
+            # 配置里显式给了候选 = 菜单名这个"被测系统事实"由数据负责，视为已解析。
+            route_resolved = True
         child_labels_json = json.dumps(child_labels, ensure_ascii=False)
         click_by_text_js = render_click_by_text(
             menu_selectors="generic", text_fallback="first", dom_click_fallback=True
@@ -3764,6 +3776,8 @@ async function getCrmScope(appPage: Page): Promise<ClickScope> {{
 }}
 
 test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async ({{ page, context }}) => {{
+  // 子菜单路由是否已解析（配置里显式给了 child_labels 即视为已解析）。
+  const MENU_ROUTE_RESOLVED = {json.dumps(route_resolved)};
   // 默认 30s 用例预算会在登录/跳转阶段被掐断，显式放宽（同 cs_module 口径）。
   // rev116：预算改由执行器下发（WEB_TEST_BUDGET_MS = runner 进程超时 - 30s），
   // 保证「Playwright 自己先超时、能产出报告」，而不是被执行器先杀进程。
@@ -3772,6 +3786,9 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
   // 运行期自证：本次预算到底是多少、是执行器下发的还是回退默认值。
   console.log(`TEST_BUDGET ${{JSON.stringify({{ ms: Number(process.env.WEB_TEST_BUDGET_MS || 0) || 1800000, injected: !!process.env.WEB_TEST_BUDGET_MS }})}}`);
   test.skip(!USERNAME || !PASSWORD, '缺少 WEB_TEST_USERNAME/WEB_TEST_PASSWORD，跳过外部 Web 冒烟执行');
+  // 路由未解析 ⇒ 拒绝执行。落到"某个默认子菜单"会在错页面上跑断言，
+  // 而错页面恰好有同名列时断言会通过，产出假绿；未解析必须在报告里显式可见。
+  test.skip(!MENU_ROUTE_RESOLVED, 'MENU_ROUTE_UNRESOLVED: 用例文本未命中任何子菜单标识，且未配置 child_labels 覆盖；已跳过，避免在默认页面上产出假结论');
 
   expect(await loginToConsole(page), '企业控制台登录失败（验证码 OCR 重试 10 次后仍未离开登录页）').toBeTruthy();
 

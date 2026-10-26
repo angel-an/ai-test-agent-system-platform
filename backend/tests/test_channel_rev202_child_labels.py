@@ -29,27 +29,58 @@ def _case(name: str, module: str = "") -> SimpleNamespace:
 
 def _gen(case: SimpleNamespace, override=None) -> str:
     return SVC._generate_yl_masterdata_script(
-        case, "https://console.uat.eatizen.com.hk", ["Master Data Management"],
+        case, "https://console.example.test", ["Master Data Management"],
         child_labels_override=override,
     )
 
 
 def test_import_task_gets_its_own_child_menu_branch():
     """「導入任務」不得落到默认的店铺分支。"""
-    label, candidates = SVC._yl_masterdata_child_menu(
+    label, candidates, resolved = SVC._yl_masterdata_child_menu(
         _case("列表-導入任務列表與下載導入結果", "YL-主數據管理-通用")
     )
     assert label == "導入任務列表"
     assert candidates[0] == "Import Task"
     assert "Shop Management" not in candidates
+    assert resolved is True
+
+
+def test_unresolved_route_returns_explicit_flag():
+    """未命中任何子菜单标识 ⇒ 显式未解析，**不得**默认落到某个子菜单。
+
+    默认猜测会在错页面上跑断言；错页面恰好有同名列时断言会通过（假绿）。
+    """
+    label, candidates, resolved = SVC._yl_masterdata_child_menu(
+        _case("報表導出字段校驗", "通用模組")
+    )
+    assert (label, candidates, resolved) == ("", [], False)
+
+
+def test_unresolved_route_skips_in_generated_script():
+    """未解析时脚本必须显式跳过，且原因里带可检索标记。"""
+    script = _gen(_case("報表導出字段校驗", "通用模組"))
+    assert "const MENU_ROUTE_RESOLVED = false;" in script
+    assert "MENU_ROUTE_UNRESOLVED" in script
+
+
+def test_resolved_route_does_not_skip():
+    """已解析时不得引入跳过（否则会把正常用例误判成 skipped）。"""
+    script = _gen(_case("列表-導入任務列表與下載導入結果", "YL-主數據管理-通用"))
+    assert "const MENU_ROUTE_RESOLVED = true;" in script
+
+
+def test_override_makes_route_resolved():
+    """配置显式给了 child_labels ⇒ 视为已解析，不再跳过。"""
+    script = _gen(_case("報表導出字段校驗", "通用模組"), override=["Shop Management"])
+    assert "const MENU_ROUTE_RESOLVED = true;" in script
 
 
 def test_import_branch_does_not_shadow_goods_or_payment():
     """顺序敏感：商品/支付用例仍走各自分支。"""
-    goods_label, goods = SVC._yl_masterdata_child_menu(
+    goods_label, goods, _g = SVC._yl_masterdata_child_menu(
         _case("列表顯示-商品-欄位完整性校驗", "商品主數據")
     )
-    pay_label, _pay = SVC._yl_masterdata_child_menu(
+    pay_label, _pay, _p = SVC._yl_masterdata_child_menu(
         _case("列表顯示-支付方式-欄位完整性校驗", "支付方式主數據")
     )
     assert goods_label == "商品主數據" and goods[0] == "Item Manage"
