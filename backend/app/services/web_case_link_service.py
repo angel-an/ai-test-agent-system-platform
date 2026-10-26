@@ -617,25 +617,45 @@ function sortCompare(a: string, b: string): number | null {
 
 async function sortColumnSample(
   scope: ClickScope, column: string, maxRows: number, aliases: string[] = [],
-): Promise<{ ok: boolean; why?: string; rows?: number; colIndex?: number; values?: string[]; heads?: string[] }> {
-  const spec = { column, maxRows, aliases: (aliases || []).map((a: string) => String(a || '')) };
+): Promise<{ ok: boolean; why?: string; rows?: number; colIndex?: number; values?: string[]; heads?: string[]; waitedMs?: number }> {
+  const spec = {
+    column, maxRows,
+    aliases: (aliases || []).map((a: string) => String(a || '')),
+    // rev204：数据行等待窗口。thead 先渲染、数据行后挂（接口未回时 tbody 为空），
+    // 旧实现取一次快照，赶在接口返回前就判 `no_rows`（TR-830 店铺列表即此）。
+    waitRowsMs: 12000,
+  };
   // TR-815/816 实测：getCrmScope 在 iframe 场景返回 FrameLocator，它**没有** evaluate
   //（ownerFrame 兜底在 UAT 环境也拿不到可用 Frame）。改用 locator('body').evaluate：
   // Page 和 FrameLocator 都有 locator()，Locator.evaluate 在**元素所属文档**里执行，
   // iframe 场景恰好就是业务表格所在的 document，两种 scope 通吃。
-  return await (scope as any).locator('body').evaluate((el: any, cfg: any) => {
+  return await (scope as any).locator('body').evaluate(async (el: any, cfg: any) => {
     const doc = el.ownerDocument || document;
     const norm = (s: any) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
-    let dataRows: any[] = [];
-    let bestCols = 0;
-    Array.prototype.forEach.call(doc.querySelectorAll('.ant-table-tbody'), (tb: any) => {
-      const rs = Array.prototype.filter.call(tb.children, (tr: any) =>
-        tr.querySelector('td') && tr.offsetParent !== null);
-      if (!rs.length) return;
-      const n = rs[0].querySelectorAll('td').length;
-      if (n > bestCols) { bestCols = n; dataRows = rs; }
-    });
-    if (!dataRows.length) return { ok: false, why: 'no_rows' };
+    const collect = () => {
+      let rows: any[] = [];
+      let cols = 0;
+      Array.prototype.forEach.call(doc.querySelectorAll('.ant-table-tbody'), (tb: any) => {
+        const rs = Array.prototype.filter.call(tb.children, (tr: any) =>
+          tr.querySelector('td') && tr.offsetParent !== null);
+        if (!rs.length) return;
+        const n = rs[0].querySelectorAll('td').length;
+        if (n > cols) { cols = n; rows = rs; }
+      });
+      return { rows, cols };
+    };
+    let snap = collect();
+    let dataRows: any[] = snap.rows;
+    let bestCols = snap.cols;
+    const t0 = Date.now();
+    const waitMs = Number(cfg.waitRowsMs || 12000);
+    while (!dataRows.length && Date.now() - t0 < waitMs) {
+      await new Promise((r) => setTimeout(r, 400));
+      snap = collect();
+      dataRows = snap.rows;
+      bestCols = snap.cols;
+    }
+    if (!dataRows.length) return { ok: false, why: 'no_rows', waitedMs: Date.now() - t0 };
     let heads: string[] = [];
     Array.prototype.forEach.call(doc.querySelectorAll('.ant-table-thead'), (th: any) => {
       const hs = Array.prototype.map.call(th.querySelectorAll('th'), (e: any) => norm(e.innerText));
@@ -681,7 +701,7 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
         stat.unverified += 1;
         console.log('SORT_TRACE ' + JSON.stringify({name: nm, column: check.column,
           direction: check.direction, verdict: 'unverified', why: before.why,
-          heads: before.heads}));
+          heads: before.heads, waitedMs: before.waitedMs}));
         recordSortCheck(check, nm, 'unverified', 'unverified: ' + String(before.why || 'sample_failed'));
         continue;
       }
@@ -3801,19 +3821,31 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
     expect(childClicked, `未找到 {biz_label} 子菜单（候选=${{childLabels.join('/')}}）；当前可见菜单=${{dump}}`).toBeTruthy();
   }}
   // 断言：列表已渲染（antd 表格或 Total 分页信息）——15s 轮询（口径同 CS rev2026-10-10）
-  const listProbe = async () =>
-    (await scope.locator('.ant-table, table').first().isVisible().catch(() => false)) ||
-    (await scope.getByText(/Total\\s*\\d+/).first().isVisible().catch(() => false));
+  // rev204：**「表格骨架出现」不等于「列表可判」**。antd 先渲染 thead，数据行要等
+  // `/org/shop/list` 这类接口返回后才挂上去；旧判据只看 `.ant-table` 可见，于是
+  // YL_LIST_READY 常在 1.3s 就通过 → 紧随其后的排序采样拿到 0 行 → `no_rows`
+  // （TR-830 的「店铺列表 0 行数据」即此，实测同一页面接口返回 10 条、DOM 也有 10 行）。
+  // 现判据：表格可见 **且**（有数据行 或 有空态提示）——两者都不满足才继续等。
+  const listProbe = async () => {{
+    const tableVisible = (await scope.locator('.ant-table, table').first().isVisible().catch(() => false))
+      || (await scope.getByText(/Total\\s*\\d+/).first().isVisible().catch(() => false));
+    if (!tableVisible) return {{ ready: false, rows: 0, empty: false }};
+    const rows = await scope.locator('.ant-table-tbody > tr, tbody > tr').count().catch(() => 0);
+    const emptyVisible = await scope.locator('.ant-table-placeholder, .ant-empty').first()
+      .isVisible().catch(() => false);
+    return {{ ready: rows > 0 || emptyVisible, rows, empty: emptyVisible }};
+  }};
   const listT0 = Date.now();
-  let listRendered = await listProbe();
+  let listState = await listProbe();
   const listDeadline = listT0 + 15000;
   let listAttempts = 1;
-  while (!listRendered && Date.now() < listDeadline) {{
+  while (!listState.ready && Date.now() < listDeadline) {{
     await appPage.waitForTimeout(500);
-    listRendered = await listProbe();
+    listState = await listProbe();
     listAttempts += 1;
   }}
-  console.log(`YL_LIST_READY ${{JSON.stringify({{ rendered: listRendered, attempts: listAttempts, elapsedMs: Date.now() - listT0 }})}}`);
+  const listRendered = listState.ready;
+  console.log(`YL_LIST_READY ${{JSON.stringify({{ rendered: listRendered, attempts: listAttempts, elapsedMs: Date.now() - listT0, rows: listState.rows, empty: listState.empty }})}}`);
   if (!listRendered) {{
     const bodyText = (await scope.locator('body').innerText().catch(() => '')).replace(/\\s+/g, ' ').slice(0, 400);
     console.log(`YL_LIST_DUMP ${{JSON.stringify({{ url: appPage.url(), bodyLen: bodyText.length, body: bodyText }})}}`);

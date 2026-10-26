@@ -1,0 +1,23 @@
+﻿子功能ID,子功能名称,标识,绑定用例,有规则(可自动判),空规则(不可判),建议批次数(20/批)
+e1c94163-d221-4ac8-afdc-c2103f989e5f,YL店鋪主數據管理,yl-masterdata-store,520,120,400,6
+d90c2034-0ac2-4f12-91c7-a0be5f2f2103,YL商品主數據管理,yl-masterdata-goods,80,26,54,2
+af320aac-6d37-4cc9-b1d7-1213aa5eced4,YL支付方式主數據管理,yl-masterdata-payment,59,18,41,1
+d2f9879b-b4ec-4196-84b8-5b93b818d760,调查问卷管理,survey-operation,70,16,54,1
+2a143df9-83d0-4b56-9317-02ed0620c930,CS工单列表展示与排序（FP-002）,cs-case-list-view-sort,1,1,0,1
+7ce8974d-0e5a-4205-87eb-1f7304393fd6,CS工单发送邮件（FP-004）,cs-case-email,1,1,0,1
+a461855d-52f2-4af3-a94e-010203d1edae,YL導入任務列表,yl-masterdata-import-task,1,1,0,1
+c79279b1-ea14-4a6b-8965-37212faf316e,CS工单列表搜索与筛选（FP-001）,cs-case-list-search-filter,1,1,0,1
+1fa23da4-890b-40d1-beb2-171e77c1087a,会员限购商品管理-表单校验冒烟,purchase-limit-form-probe,50,0,50,0
+b0a0b651-5ad2-4dfd-8763-8cb6265aa19b,储值企业充值 CRUD 测试,stored-value-enterprise-recharge-crud,24,0,24,0
+86132943-2878-4ebb-811d-560714603a73,CS GoodWill 创建页,cs-goodwill-create,18,0,18,0
+76386c5b-a1f3-455c-ba9e-b3931d86f874,CS Timeline Note 弹窗,cs-timeline-note,16,0,16,0
+2e862766-b6b2-464b-8101-089f2122617a,CS 工单创建表单,cs-case-create-form,10,0,10,0
+617df4f9-0e43-4741-ba9d-02afcaef09b4,CS Timeline PhoneCall 新页,cs-timeline-phonecall,8,0,8,0
+938d3345-e9f4-48fa-bf96-cb512bbd1071,CS RetroClaim 创建页,cs-retro-claim-create,6,0,6,0
+98d2a186-d3f1-4566-82ec-e92725382fa9,CS Timeline Post 弹窗,cs-timeline-post,5,0,5,0
+92559538-3f43-4a83-baa3-3da073e8acfd,CS Timeline Task 新页,cs-timeline-task,3,0,3,0
+115bcfe6-9836-4a0b-9f92-5d44aaba5ca8,CS 工单详情 timeline,cs-case-timeline,2,0,2,0
+f04ac33d-eb21-477e-8b2c-944c571193bb,YL店鋪主數據-真實落庫,yl-masterdata-store-realwrite,1,0,1,0
+b5b8569a-0238-42eb-9cc3-99c2e9c8a97c,YL支付方式主數據-真實落庫,yl-masterdata-payment-realwrite,1,0,1,0
+e18ffee0-09bc-4c29-8845-630afd14528a,CS工单导出（FP-003）,cs-case-export,1,0,1,0
+bb36f2e0-4a5b-408e-950a-8a34dc504e95,YL商品主數據-真實落庫,yl-masterdata-goods-realwrite,1,0,1,0
