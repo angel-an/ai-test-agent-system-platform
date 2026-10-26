@@ -426,6 +426,12 @@
       "digest": "f7115a27c971",
       "date": "2026-10-23",
       "summary": "rev200: 组类必填（checkbox_group）把「找到控件」与「勾上了」分开——命中口径改为回读 isChecked（点击前读一次、点后再读一次），勾上数不足 opts 长度即记 miss 并写明「勾上 m/n」；旧口径 count()>0 即命中会让覆盖层挡住点击时产生「已预填」假象，保存被前端拦住后整条回显链路退化成 unverified。value 为空时构造最小合法值（勾第一个可用选项）并标 via=auto_first_option，不参与回显比对（只为推进链路，不冒充业务选择）"
+    },
+    {
+      "rev": "rev201",
+      "digest": "44166e9b1a96",
+      "date": "2026-10-26",
+      "summary": "rev201: 列名别名通道 + 列契约失败不中断。TR-813 实测：UAT 页面表头全英文（Store Code/Operation Time）而规则文本是繁体中文，COLUMN_DIFF matched 恒为 0 整批假失败；且 columnDiag mismatch 立即 expect 中止整条脚本，SORT_PHASE 没跑到。①field_locators.column_aliases（中文列名→英文表头或候选数组）合进合成/显式契约 item.aliases 与 sort_checks[].aliases（追加去重）；②排序找列先逐候选精确、再逐候选包含；③列契约失败记 COLUMN_FAIL，SORT_PHASE 跑完统一判（YL 与储值模板同口径）"
     }
   ]
 }

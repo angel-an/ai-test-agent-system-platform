@@ -474,7 +474,12 @@ from app.services.web_upload_fixtures import (
 #:     miss（写明勾上几个/要几个）；②`value` 为空时**构造最小合法值**（勾第一个可用选项），
 #:     trace 标 `via: "auto_first_option"` 且**不参与回显比对**——只为让链路能往下走，
 #:     不冒充业务选择；要精确验证就显式配 value。
-COMPILER_REV = "rev200"
+#:   - rev201（2026-10-26，TR-813 实测：页面表头英文、规则文本中文）：①`field_locators.
+#:     column_aliases`（中文列名 → 英文表头或候选数组）合进**合成/显式**列契约的
+#:     item.aliases 与 `sort_checks[].aliases`——没有这层映射 matched 恒为 0，整批假失败；
+#:     ②排序找列同样吃别名（先精确后包含逐候选）；③列契约 mismatch **不再立即断言中止**，
+#:     记入 COLUMN_FAIL，SORT_PHASE 跑完后统一抛——与排序"全跑完再抛"同一口径。
+COMPILER_REV = "rev201"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -3126,6 +3131,22 @@ def build_form_plan(
 
     column_assert_source = ""
     column_contract_conflicts: list[dict[str, Any]] = []
+    #: rev201：列名别名通道。UAT 页面表头常是英文（Store Code），需求规则文本是中文
+    #: （店鋪編號）——没有这层映射，列契约 matched 恒为 0，整批假失败。
+    #: 形状：``{"中文列名": "英文表头" 或 ["候选1", "候选2"]}``，与 ``aliases``（表单字段）
+    #: 同风格但**独立键**，避免两种语义混在一张表里。
+    column_aliases_map: dict[str, Any] = (
+        loc.get("column_aliases") if isinstance(loc.get("column_aliases"), dict) else {}
+    )
+
+    def _column_alias_list(name: str) -> list[str]:
+        val = column_aliases_map.get(name)
+        if isinstance(val, str) and val.strip():
+            return [val.strip()]
+        if isinstance(val, (list, tuple)):
+            return [str(x).strip() for x in val if str(x).strip()]
+        return []
+
     if rule_column_sets:
         # 同一子功能里多条用例常重复同一份列清单（实测 15 列被 3 条用例各写一次）。
         # 以**第一条**为准；与它不一致的列集不合并、不猜，记成冲突给配置方看。
@@ -3140,7 +3161,8 @@ def build_form_plan(
         if columns_contract is None:
             columns_contract = {
                 "table_scope": "", "source": "rule_text", "notes": [], "column_count": len(primary),
-                "items": [{"key": c, "header_text": c, "aliases": []} for c in primary],
+                "items": [{"key": c, "header_text": c, "aliases": _column_alias_list(c)}
+                          for c in primary],
                 # 需求明确列出"要显示哪 N 列" ⇒ 列缺失/顺序变化应当判失败（不再只是诊断）。
                 "assert_on_mismatch": True,
                 # 但**多出的列不算失败**：页面常带"操作"列/勾选列，需求列清单不含它们。
@@ -3152,6 +3174,20 @@ def build_form_plan(
             columns_contract = {**columns_contract, "assert_on_mismatch": True,
                                 "allow_extra_columns": columns_contract.get(
                                     "allow_extra_columns", True)}
+            # rev201：显式契约的条目也**追加**别名（按 key/header_text 对上才追加，
+            # 去重、不覆盖 parse_columns 已经填的候选）。
+            for _item in columns_contract.get("items") or []:
+                if not isinstance(_item, dict):
+                    continue
+                _name = str(_item.get("key") or _item.get("header_text") or "")
+                if not _name:
+                    continue
+                _have = _item.get("aliases")
+                _have = [str(x) for x in (_have if isinstance(_have, list) else [])]
+                for _a in _column_alias_list(_name):
+                    if _a not in _have:
+                        _have.append(_a)
+                _item["aliases"] = _have
             column_assert_source = "explicit+rule_text"
 
     #: 排序检查（rev199）：按 column+direction 去重——同一列表页被多条用例重复要求排序时，
@@ -3168,6 +3204,9 @@ def build_form_plan(
             "name": f"sort:{item['column']}:{item['direction']}",
             "column": item["column"],
             "direction": item["direction"],
+            # rev201：排序找列同样吃列名别名——页面表头是英文时，「更新時間」
+            # 要靠 column_aliases 映射到「Operation Time」才点得到列头。
+            "aliases": _column_alias_list(item["column"]),
             "list_url": str(loc.get("list_url") or ""),
             "max_rows": 30,
             "source": "rule_text",

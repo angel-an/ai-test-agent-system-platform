@@ -398,6 +398,8 @@ type ColumnContract = {
   allow_extra_columns?: boolean;
 } | null;
 const COLUMN_CONTRACT: ColumnContract = @@COLUMNS_JSON@@;
+// rev201：列契约失败先记账、排序跑完统一判（见 columnDiag 尾部注释）
+let COLUMN_FAIL: any = null;
 
 function normColText(value: unknown): string {
   return String(value == null ? '' : value).replace(/\s+/g, ' ').trim().toLowerCase();
@@ -494,7 +496,11 @@ async function columnDiag(scope: ClickScope, label: string): Promise<void> {
     allow_extra_columns: allowExtra, order_monotonic: orderMonotonic,
   }));
   if (verdict !== 'match' && COLUMN_CONTRACT && COLUMN_CONTRACT.assert_on_mismatch === true) {
-    expect(verdict, `列头与配置不一致：缺失=${missing.join('/') || '无'}；多出=${extra.join('/') || '无'}`).toBe('match');
+    // rev201：不再在这里 expect —— 列契约失败会**中止整条脚本**，把后面的排序断言
+    // 全部吞掉（TR-813 实测：COLUMN_DIFF mismatch 即断言抛出，SORT_PHASE 没跑到）。
+    // 改为记入 COLUMN_FAIL，由模板在排序断言跑完后统一判定。
+    COLUMN_FAIL = { label, verdict, missing: missing.slice(0, 20), extra: extra.slice(0, 20),
+                    matched: matched.length, configured: items.length };
   }
 }
 // ---- 列头比对结束（此标记供测试切出本块做行为验证，勿删）-------------------
@@ -522,7 +528,8 @@ _SORT_DIAG_TEMPLATE = r"""
 // ---- 列表排序断言开始（rev199，由需求规则文本合成；勿手改）-------------------
 type SortCheckSpec = {
   name?: string; column: string; direction: 'asc' | 'desc';
-  max_rows?: number; list_url?: string; owners?: Array<{case_id?: string; rule_id?: string}>;
+  max_rows?: number; list_url?: string; aliases?: string[];
+  owners?: Array<{case_id?: string; rule_id?: string}>;
 };
 const SORT_CHECKS: SortCheckSpec[] = @@SORT_CHECKS_JSON@@;
 
@@ -555,14 +562,19 @@ function sortCompare(a: string, b: string): number | null {
 }
 
 async function sortColumnSample(
-  scope: ClickScope, column: string, maxRows: number,
+  scope: ClickScope, column: string, maxRows: number, aliases: string[] = [],
 ): Promise<{ ok: boolean; why?: string; rows?: number; colIndex?: number; values?: string[]; heads?: string[] }> {
-  const spec = { column, maxRows };
-  return await scope.evaluate((cfg: any) => {
+  const spec = { column, maxRows, aliases: (aliases || []).map((a: string) => String(a || '')) };
+  // TR-815/816 实测：getCrmScope 在 iframe 场景返回 FrameLocator，它**没有** evaluate
+  //（ownerFrame 兜底在 UAT 环境也拿不到可用 Frame）。改用 locator('body').evaluate：
+  // Page 和 FrameLocator 都有 locator()，Locator.evaluate 在**元素所属文档**里执行，
+  // iframe 场景恰好就是业务表格所在的 document，两种 scope 通吃。
+  return await (scope as any).locator('body').evaluate((el: any, cfg: any) => {
+    const doc = el.ownerDocument || document;
     const norm = (s: any) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
     let dataRows: any[] = [];
     let bestCols = 0;
-    Array.prototype.forEach.call(document.querySelectorAll('.ant-table-tbody'), (tb: any) => {
+    Array.prototype.forEach.call(doc.querySelectorAll('.ant-table-tbody'), (tb: any) => {
       const rs = Array.prototype.filter.call(tb.children, (tr: any) =>
         tr.querySelector('td') && tr.offsetParent !== null);
       if (!rs.length) return;
@@ -571,18 +583,30 @@ async function sortColumnSample(
     });
     if (!dataRows.length) return { ok: false, why: 'no_rows' };
     let heads: string[] = [];
-    Array.prototype.forEach.call(document.querySelectorAll('.ant-table-thead'), (th: any) => {
+    Array.prototype.forEach.call(doc.querySelectorAll('.ant-table-thead'), (th: any) => {
       const hs = Array.prototype.map.call(th.querySelectorAll('th'), (e: any) => norm(e.innerText));
       if (hs.length === bestCols) heads = hs;
     });
     if (!heads.length) {
       heads = Array.prototype.map.call(
-        document.querySelectorAll('.ant-table-thead th'), (e: any) => norm(e.innerText));
+        doc.querySelectorAll('.ant-table-thead th'), (e: any) => norm(e.innerText));
     }
-    // 表头文案常带排序图标/空格，用"包含"兜底（与列契约的精确匹配不同：这里只定位列）
-    const want = norm(cfg.column);
-    let ci = heads.indexOf(want);
-    if (ci < 0) ci = heads.findIndex((h: string) => h && (h.indexOf(want) >= 0 || want.indexOf(h) >= 0));
+    // rev201：排序找列吃别名——先逐候选精确匹配，再逐候选"包含"兜底。
+    // 页面表头是英文（Operation Time）而规则文本是中文（更新時間）时，
+    // 只有 column 一个候选会 column_not_found，排序整段 unverified。
+    const cands = [norm(cfg.column)].concat((cfg.aliases || []).map((a: any) => norm(a)))
+      .filter((s: string, i: number, arr: string[]) => s && arr.indexOf(s) === i);
+    let ci = -1;
+    for (const cand of cands) {
+      ci = heads.indexOf(cand);
+      if (ci >= 0) break;
+    }
+    if (ci < 0) {
+      for (const cand of cands) {
+        ci = heads.findIndex((h: string) => h && (h.indexOf(cand) >= 0 || cand.indexOf(h) >= 0));
+        if (ci >= 0) break;
+      }
+    }
     if (ci < 0) return { ok: false, why: 'column_not_found', heads: heads.slice(0, 12) };
     const vals = dataRows.slice(0, cfg.maxRows)
       .map((r: any) => norm((r.querySelectorAll('td')[ci] || {}).innerText));
@@ -597,7 +621,8 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
   for (const check of SORT_CHECKS) {
     const nm = String(check.name || `sort:${check.column}:${check.direction}`);
     try {
-      const before = await sortColumnSample(scope, check.column, Number(check.max_rows || 30));
+      const before = await sortColumnSample(
+        scope, check.column, Number(check.max_rows || 30), check.aliases || []);
       if (!before.ok) {
         stat.unverified += 1;
         console.log('SORT_TRACE ' + JSON.stringify({name: nm, column: check.column,
@@ -635,7 +660,8 @@ async function sortDiag(scope: ClickScope, label: string): Promise<void> {
       const thClick = async () => {
         await th.click({timeout: 8000}).catch(() => undefined);
         await new Promise((r) => setTimeout(r, 1200));
-        return await sortColumnSample(scope, check.column, Number(check.max_rows || 30));
+        return await sortColumnSample(
+          scope, check.column, Number(check.max_rows || 30), check.aliases || []);
       };
       let sample = await thClick();
       if (!sample.ok) {
@@ -3612,6 +3638,17 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
   // 放在列比对之后：先用同一张表的表头定位列，再点列头判单调。
   await sortDiag(scope, 'yl-list');
 
+  // rev201：列契约的判定统一放在排序断言之后——COLUMN_DIFF mismatch 记账不中止，
+  // 排序证据先落完再抛，与 sortDiag「全部跑完再统一失败」同一口径。
+  if (COLUMN_FAIL) {{
+    const miss = (COLUMN_FAIL.missing || []).join('/') || '无';
+    const extraCols = (COLUMN_FAIL.extra || []).join('/') || '无';
+    const msg = '列头与配置不一致（label=' + COLUMN_FAIL.label + '）：matched='
+      + COLUMN_FAIL.matched + '/' + COLUMN_FAIL.configured
+      + '，缺失=' + miss + '；多出=' + extraCols;
+    expect(COLUMN_FAIL.verdict, msg).toBe('match');
+  }}
+
   // rev71：注入的 form_executor / coverage_snippet 引用变量名统一为 appScope
   const appScope = scope as any;
 
@@ -4131,6 +4168,16 @@ test('CS工单管理入口冒烟 - {test_case.identifier}', async ({{ page, cont
   // 列头只读比对（N3 第 2 步）：渲染成功后**只读**一次表头，不点击、不提交、不造数据。
   // 未配列时也会输出 COLUMN_HEADERS —— 这是采集真实列头、反补配置的入口。
   await columnDiag(scope, 'cs-list');
+
+  // rev201：与 YL 模板同口径——列契约失败记账，表单断言跑完再统一判
+  if (COLUMN_FAIL) {{
+    const miss = (COLUMN_FAIL.missing || []).join('/') || '无';
+    const extraCols = (COLUMN_FAIL.extra || []).join('/') || '无';
+    const msg = '列头与配置不一致（label=' + COLUMN_FAIL.label + '）：matched='
+      + COLUMN_FAIL.matched + '/' + COLUMN_FAIL.configured
+      + '，缺失=' + miss + '；多出=' + extraCols;
+    expect(COLUMN_FAIL.verdict, msg).toBe('match');
+  }}
 
   // rev71 修复：注入的 form_executor / coverage_snippet 硬编码引用变量 `appScope`
   //（储值模板入口函数的返回值就叫 appScope）；本模板作用域变量叫 scope，这里补齐别名，
