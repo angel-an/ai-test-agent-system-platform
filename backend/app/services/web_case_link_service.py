@@ -815,6 +815,238 @@ def render_sort_checks(checks_json: str = "[]") -> str:
 
 
 # ==========================================================================
+# 列表筛选断言（rev206）：由需求规则文本「篩選字段「X」匹配規則：<方式>」合成
+# ==========================================================================
+# 判定策略（一期只做 exact / fuzzy；range 显式 unverified）：
+#   · 素材自举：读列表**首行目标列**的值当作筛选输入——不依赖前置造数，列表空则
+#     FILTER_NO_DATA unverified（是"没法验"，不是"验失败"）；
+#   · exact：输入完整值 → 查询后至少一行该列文本与之全等；
+#   · fuzzy：输入去掉首尾字符的子串（太短退回全值）→ 查询后至少一行包含该子串；
+#   · 找不到筛选输入框 → FILTER_LOCATOR_MISS unverified（显式缺口，不假绿）；
+#   · antd Select（下拉）输入框一期不碰（交互是打开下拉非文本过滤）→ 显式 unverified。
+# 结论进断言账本（COMPILED_ASSERTION + owners），与 SORT_PHASE 同口径。
+_FILTER_DIAG_TEMPLATE = r"""
+// ---- 列表筛选断言开始（rev206，由需求规则文本合成；勿手改）-------------------
+type FilterCheckSpec = {
+  name?: string; field: string; mode: 'exact' | 'fuzzy' | 'range';
+  aliases?: string[]; max_rows?: number;
+  owners?: Array<{case_id?: string; rule_id?: string}>;
+};
+const FILTER_CHECKS: FilterCheckSpec[] = @@FILTER_CHECKS_JSON@@;
+
+function recordFilterCheck(
+  check: FilterCheckSpec, name: string,
+  outcome: 'pass' | 'fail' | 'unverified', observed: string,
+): void {
+  const owners = Array.isArray(check.owners) ? check.owners : [];
+  for (const owner of owners) {
+    console.log('COMPILED_ASSERTION ' + JSON.stringify({
+      name,
+      outcome,
+      observed,
+      rule_id: String((owner && owner.rule_id) || ''),
+      case_id: String((owner && owner.case_id) || ''),
+      source: 'rule_text',
+    }));
+  }
+}
+
+//: 读表格首行目标列的值（自举素材）。自包含实现：筛选块可能在排序块未渲染时单独出现。
+//: 返回 { ok, rows, value, heads } 或 { ok:false, why }。
+async function filterSample(
+  scope: ClickScope, column: string, aliases: string[] = [],
+): Promise<{ ok: boolean; why?: string; rows?: number; value?: string; heads?: string[] }> {
+  const spec = { column, aliases: (aliases || []).map((a: string) => String(a || '')) };
+  return await (scope as any).locator('body').evaluate(async (el: any, cfg: any) => {
+    const doc = el.ownerDocument || document;
+    const norm = (s: any) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+    const collect = () => {
+      let rows: any[] = [];
+      let cols = 0;
+      Array.prototype.forEach.call(doc.querySelectorAll('.ant-table-tbody'), (tb: any) => {
+        const rs = Array.prototype.filter.call(tb.children, (tr: any) =>
+          tr.querySelector('td') && tr.offsetParent !== null);
+        if (!rs.length) return;
+        const n = rs[0].querySelectorAll('td').length;
+        if (n > cols) { cols = n; rows = rs; }
+      });
+      return { rows, cols };
+    };
+    let snap = collect();
+    const t0 = Date.now();
+    while (!snap.rows.length && Date.now() - t0 < 12000) {
+      await new Promise((r) => setTimeout(r, 400));
+      snap = collect();
+    }
+    if (!snap.rows.length) return { ok: false, why: 'no_rows' };
+    let heads: string[] = [];
+    Array.prototype.forEach.call(doc.querySelectorAll('.ant-table-thead'), (th: any) => {
+      const hs = Array.prototype.map.call(th.querySelectorAll('th'), (e: any) => norm(e.innerText));
+      if (hs.length === snap.cols) heads = hs;
+    });
+    if (!heads.length) {
+      heads = Array.prototype.map.call(
+        doc.querySelectorAll('.ant-table-thead th'), (e: any) => norm(e.innerText));
+    }
+    const cands = [norm(cfg.column)].concat((cfg.aliases || []).map((a: any) => norm(a)))
+      .filter((s: string, i: number, arr: string[]) => s && arr.indexOf(s) === i);
+    let ci = -1;
+    for (const cand of cands) {
+      ci = heads.indexOf(cand);
+      if (ci >= 0) break;
+    }
+    if (ci < 0) {
+      for (const cand of cands) {
+        ci = heads.findIndex((h: string) => h && (h.indexOf(cand) >= 0 || cand.indexOf(h) >= 0));
+        if (ci >= 0) break;
+      }
+    }
+    if (ci < 0) return { ok: false, why: 'column_not_found', heads: heads.slice(0, 12) };
+    const val = norm((snap.rows[0].querySelectorAll('td')[ci] || {}).innerText);
+    return { ok: true, rows: snap.rows.length, value: val, heads };
+  }, spec).catch((e: any) => ({ ok: false, why: 'eval_error', value: String(e).slice(0, 80) }));
+}
+
+//: 找筛选输入框：优先 placeholder 含字段名/别名，其次 label 文本含字段名的表单项。
+//: antd Select 内部的 input 一期不碰（typing 会打开下拉，不是文本过滤）。
+async function findFilterInput(
+  scope: ClickScope, field: string, aliases: string[] = [],
+): Promise<{ ok: boolean; why?: string; input?: any }> {
+  const cands = [field].concat(aliases || []).map((s: string) => String(s || '').trim())
+    .filter((s: string) => s);
+  const inputs = scope.locator('input, textarea');
+  const total = await inputs.count();
+  for (let i = 0; i < total; i++) {
+    const el = inputs.nth(i);
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const inSelect = await el.evaluate((node: any) => !!node.closest('.ant-select'))
+      .catch(() => false);
+    if (inSelect) continue;
+    let hit = false;
+    const ph = String((await el.getAttribute('placeholder').catch(() => '')) || '');
+    if (cands.some((c: string) => c && ph.indexOf(c) >= 0)) hit = true;
+    if (!hit) {
+      const label = await el.evaluate((node: any) => {
+        const item = node.closest('.ant-form-item');
+        const lb = item && item.querySelector('.ant-form-item-label');
+        return lb ? String(lb.innerText || '') : '';
+      }).catch(() => '');
+      if (cands.some((c) => c && label.indexOf(c) >= 0)) hit = true;
+    }
+    if (hit) return { ok: true, input: el };
+  }
+  return { ok: false, why: 'filter_input_not_found' };
+}
+
+async function clickQueryButton(scope: ClickScope): Promise<boolean> {
+  const names = ['查詢', '查询', '搜索', '搜尋', 'Query', 'Search'];
+  for (const nm of names) {
+    const btn = scope.locator('button').filter({ hasText: nm }).first();
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.click().catch(() => {});
+      return true;
+    }
+  }
+  return false;
+}
+
+async function filterDiag(scope: ClickScope, label: string): Promise<void> {
+  if (!FILTER_CHECKS.length) return;
+  const stat: any = { checks: FILTER_CHECKS.length, pass: 0, unverified: 0, failed: 0 };
+  const failures: string[] = [];
+  for (const check of FILTER_CHECKS) {
+    const nm = String(check.name || `filter:${check.field}:${check.mode}`);
+    try {
+      if (check.mode === 'range') {
+        // 一期不支持日期范围控件（RangePicker 交互复杂度高），显式未验证，不假绿
+        stat.unverified += 1;
+        console.log('FILTER_TRACE ' + JSON.stringify({name: nm, mode: check.mode,
+          verdict: 'unverified', why: 'range_unsupported_in_v1'}));
+        recordFilterCheck(check, nm, 'unverified', 'unverified: range_unsupported_in_v1');
+        continue;
+      }
+      const sample = await filterSample(scope, check.field, check.aliases || []);
+      if (!sample.ok) {
+        stat.unverified += 1;
+        console.log('FILTER_TRACE ' + JSON.stringify({name: nm, mode: check.mode,
+          verdict: 'unverified', why: sample.why, heads: sample.heads}));
+        recordFilterCheck(check, nm, 'unverified', 'unverified: ' + String(sample.why || 'sample_failed'));
+        continue;
+      }
+      const found = await findFilterInput(scope, check.field, check.aliases || []);
+      if (!found.ok) {
+        stat.unverified += 1;
+        console.log('FILTER_TRACE ' + JSON.stringify({name: nm, mode: check.mode,
+          verdict: 'unverified', why: found.why, field: check.field}));
+        recordFilterCheck(check, nm, 'unverified', 'unverified: ' + String(found.why));
+        continue;
+      }
+      const box = found.input!;
+      await box.fill('');
+      // 检索值：exact 用全值；fuzzy 用去首尾子串（太短退回全值）
+      const full = String(sample.value || '');
+      const needle = check.mode === 'exact'
+        ? full
+        : (full.length > 3 ? full.slice(1, -1) : full);
+      if (!needle) {
+        stat.unverified += 1;
+        recordFilterCheck(check, nm, 'unverified', 'unverified: empty_sample_value');
+        continue;
+      }
+      await box.fill(needle);
+      const clicked = await clickQueryButton(scope);
+      await (scope as any).locator('body').evaluate(() => new Promise((r) => setTimeout(r, 1200)));
+      const after = await filterSample(scope, check.field, check.aliases || []);
+      // 还原：清空 + 再查一次，避免影响后续检查
+      await box.fill('');
+      if (clicked) await clickQueryButton(scope);
+      if (!after.ok) {
+        stat.unverified += 1;
+        console.log('FILTER_TRACE ' + JSON.stringify({name: nm, mode: check.mode,
+          verdict: 'unverified', why: 'after_' + String(after.why)}));
+        recordFilterCheck(check, nm, 'unverified', 'unverified: after_' + String(after.why));
+        continue;
+      }
+      let pass = false;
+      if (check.mode === 'exact') {
+        pass = String(after.value || '') === needle;
+      } else {
+        pass = String(after.value || '').indexOf(needle) >= 0;
+      }
+      if (pass) {
+        stat.pass += 1;
+        console.log('FILTER_TRACE ' + JSON.stringify({name: nm, mode: check.mode,
+          needle, verdict: 'pass', rows: after.rows}));
+        recordFilterCheck(check, nm, 'pass',
+          `mode=${check.mode} needle=${needle} first_row=${String(after.value || '')}`);
+      } else {
+        stat.failed += 1;
+        failures.push(`${nm}：以「${needle}」${check.mode === 'exact' ? '精準' : '模糊'}筛选后，`
+          + `首行该列值=${String(after.value || '')}（期望${check.mode === 'exact' ? '全等' : '包含'}）`);
+        recordFilterCheck(check, nm, 'fail',
+          `mode=${check.mode} needle=${needle} first_row=${String(after.value || '')}`);
+      }
+    } catch (error) {
+      stat.unverified += 1;
+      console.log('FILTER_TRACE ' + JSON.stringify({name: nm, mode: check.mode,
+        verdict: 'unverified', why: 'exception', err: String(error).slice(0, 160)}));
+      recordFilterCheck(check, nm, 'unverified', 'unverified: exception');
+    }
+  }
+  console.log('FILTER_PHASE ' + JSON.stringify({...stat, label}));
+  expect(failures, `列表筛选断言未通过（${failures.length} 条）：${failures.slice(0, 3).join('；')}`)
+    .toEqual([]);
+}
+// ---- 列表筛选断言结束（勿删）-------------------------------------------------
+"""
+
+
+def render_filter_checks(checks_json: str = "[]") -> str:
+    """渲染列表筛选断言块。``checks_json`` 由编译期 filter_checks 序列化而来。"""
+    return _FILTER_DIAG_TEMPLATE.replace("@@FILTER_CHECKS_JSON@@", checks_json or "[]")
+
+
+# ==========================================================================
 # 菜单展开失败的恢复与现场（rev203）
 # ==========================================================================
 # 背景（2026-10-26 基线刷新前置评估）：YL 列表域 run 的 `yl-menu-expand` 有约 50%
@@ -2919,6 +3151,12 @@ class WebCaseLinkService:
             ((form_plan or {}).get("locators") or {}).get("sort_checks") or [],
             ensure_ascii=False,
         )
+        # rev206：列表筛选断言（「篩選字段「X」匹配規則：…」合成，build_form_plan 的
+        # filter_match_checks）。键名刻意区别于 rev170 配置驱动的 filter_checks。
+        filter_checks_json = json.dumps(
+            ((form_plan or {}).get("locators") or {}).get("filter_match_checks") or [],
+            ensure_ascii=False,
+        )
         # 模板必须与用例业务**正向匹配**：无匹配时 `_resolve_web_template_key` 抛
         # [unsupported_web_template]，绝不退回其它业务模板
         # （早期实现默认套「储值免单」，实测 PR-9 的 CS Module 批次因此产出内容错误的脚本）。
@@ -2983,6 +3221,7 @@ class WebCaseLinkService:
                 form_executor=form_executor,
                 columns_json=columns_json,
                 sort_checks_json=sort_checks_json,
+                filter_checks_json=filter_checks_json,
                 # rev202：子菜单候选可由配置覆盖（菜单名是被测系统事实，不该只能改代码）
                 child_labels_override=(
                     ((form_plan or {}).get("locators") or {}).get("child_labels")
@@ -3498,6 +3737,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         form_executor: str = "",
         columns_json: str = "null",
         sort_checks_json: str = "[]",
+        filter_checks_json: str = "[]",
         child_labels_override: list[str] | None = None,
     ) -> str:
         """YL 主數據管理（店鋪/商品/支付方式主數據）业务模板。
@@ -3540,6 +3780,7 @@ test('B端储值免单活动新建入口冒烟 - {test_case.identifier}', async 
         frame_diag_js = render_frame_diag()
         column_diag_js = render_column_diag(columns_json)
         sort_diag_js = render_sort_checks(sort_checks_json)
+        filter_diag_js = render_filter_checks(filter_checks_json)
         nav_recovery_js = render_nav_recovery()
         return f"""import {{ test, expect, type BrowserContext, type FrameLocator, type Locator, type Page }} from '@playwright/test';
 
@@ -3561,6 +3802,8 @@ type ClickScope = Page | FrameLocator;
 {column_diag_js}
 
 {sort_diag_js}
+
+{filter_diag_js}
 
 {nav_recovery_js}
 
@@ -3878,6 +4121,10 @@ test('YL{biz_label}主數據管理入口冒烟 - {test_case.identifier}', async 
   // 列表排序断言（rev199）：由需求规则文本合成「按某列近→遠」时才有内容（空数组直接返回）。
   // 放在列比对之后：先用同一张表的表头定位列，再点列头判单调。
   await sortDiag(scope, 'yl-list');
+
+  // 列表筛选断言（rev206）：由「篩選字段「X」匹配規則：…」合成（空数组直接返回）。
+  // 放在排序之后、列契约抛错之前：与排序同一口径——证据先落完再统一判失败。
+  await filterDiag(scope, 'yl-list');
 
   // rev201：列契约的判定统一放在排序断言之后——COLUMN_DIFF mismatch 记账不中止，
   // 排序证据先落完再抛，与 sortDiag「全部跑完再统一失败」同一口径。

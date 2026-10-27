@@ -456,6 +456,12 @@
       "digest": "0801763c71de",
       "date": "2026-10-26",
       "summary": "rev205: 子菜单路由未命中时不再默认猜测（防假绿）。`_yl_masterdata_child_menu` 返回由 `(label, candidates)` 改为 `(label, candidates, resolved)`：原先末尾无条件返回店鋪分支，用例文本不含任何子菜单标识时会点第一个子菜单、在**错页面**上跑断言；错页面恰好有同名列时断言会通过（TR-853 实证 page_count=16/matched=0，rev202 的导入任务用例已踩过一次）。现在未命中返回 `(\"\", [], False)`，生成脚本注入 `MENU_ROUTE_RESOLVED=false` 并 `test.skip` 显式跳过、带 `MENU_ROUTE_UNRESOLVED` 可检索标记；`custom_config.field_locators.child_labels` 显式配置即视为已解析。实测影响面：绑定子功能的 184 条用例中 YL 三子功能 164 条全部正常解析、可判 20 条不变，unresolved 全部落在不走该模板的子功能上 —— 现有数据零触发，属防御性修复。"
+    },
+    {
+      "rev": "rev206",
+      "digest": "64e64eaa1ff8",
+      "date": "2026-10-27",
+      "summary": "rev206: 筛选匹配规则可机检（筛选通道一期）。\\`parse_list_rule\\` 新增 canonical 形态解析 \\`篩選字段「X」匹配規則：<方式>\\`：精準匹配→exact、全模糊匹配→fuzzy、範圍匹配→range；「選項範圍：…」是下拉枚举不认（防止把枚举校验误判成文本匹配）。断言 kind=filter_result（LIST_CHECK_KINDS 里预留未用的扩展点），build_form_plan 按 (field,mode) 去重合并 owners 下发 filter_checks（吃 column_aliases 别名），运行期 FILTER_PHASE 自举首行目标列值作筛选输入：exact 断言查询后首行全等、fuzzy 断言去首尾子串命中；range 一期显式 unverified（RangePicker 交互不碰）、找不到输入框/antd Select/列表无数据均显式 unverified 不假绿。结论进断言账本 COMPILED_ASSERTION（owners→case_attributed）。全量规则文本勘察：canonical 形态 139 条（exact 25 / fuzzy 35 / range 20 / 下拉枚举 30+），其中 exact+fuzzy 约 60 条一期可机检。 路由修正：canonical 筛选形态的 requirement_rule.field 是控件名非列表域，规则文本命中 _FILTER_MATCH_RE 时同样进 parse_list_rule（否则 139 条全漏）。"
     }
   ]
 }

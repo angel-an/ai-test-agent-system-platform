@@ -479,7 +479,7 @@ from app.services.web_upload_fixtures import (
 #:     item.aliases 与 `sort_checks[].aliases`——没有这层映射 matched 恒为 0，整批假失败；
 #:     ②排序找列同样吃别名（先精确后包含逐候选）；③列契约 mismatch **不再立即断言中止**，
 #:     记入 COLUMN_FAIL，SORT_PHASE 跑完后统一抛——与排序"全跑完再抛"同一口径。
-COMPILER_REV = "rev205"
+COMPILER_REV = "rev206"
 
 #: 纳入 digest 的模块级常量。**只放影响执行结果的东西**：改注释、改日志文案不会命中，
 #: 避免为了一个错别字也要 bump 版本（那样规则很快会被人绕开）。
@@ -1334,6 +1334,10 @@ _DESC_HINTS = ("近→遠", "近->遠", "近→远", "近->远", "近至遠", "�
 _ASC_HINTS = ("遠→近", "远→近", "遠->近", "远->近", "升序", "正序", "遞增", "递增")
 #: 列表主体名：``「店鋪」`` / ``YL-主数据管理``（只做记录，不参与判定）
 _SUBJECT_RE = re.compile(r"(?:^|[\s，,；;])[「『]([^」』]{1,40})[」』]")
+#: rev206：筛选匹配规则（canonical 形态）：``篩選字段「X」匹配規則：<方式描述>``
+_FILTER_MATCH_RE = re.compile(
+    r"篩選字段[「『]([^」』]{1,40})[」』]\s*匹配規則\s*[：:]\s*([^；;。]{1,60})"
+)
 
 
 def _split_column_names(segment: str) -> list[str]:
@@ -1442,6 +1446,31 @@ def parse_list_rule(field: Any, text: Any) -> dict[str, Any]:
             "text": raw[:80],
             "need": "排序检查需要「点哪一列 + 期望方向」；本条只说了结果有序，未给列名与方向",
         })
+
+    # ---- 2.5) 筛选匹配规则（rev206）：只认 canonical 写法，模式词**精确映射** ----
+    #   精準匹配 → exact；全模糊匹配 → fuzzy；範圍匹配 → range。
+    #   「選項範圍/選項發範圍：…」是**下拉枚举**（选项集合校验），不是文本匹配，
+    #   不能因含"範圍"二字误判成日期范围——见到「選項」直接不认，维持不可机检。
+    filt = _FILTER_MATCH_RE.search(raw)
+    if filt:
+        f_field = filt.group(1).strip()
+        f_desc = filt.group(2).strip()
+        f_mode = ""
+        if "選項" in f_desc:
+            pass  # 下拉枚举描述，一期不做（避免把枚举校验误判成文本/日期匹配）
+        elif "精準" in f_desc:
+            f_mode = "exact"
+        elif "全模糊" in f_desc or f_desc == "模糊匹配" or "模糊" in f_desc:
+            f_mode = "fuzzy"
+        elif "範圍" in f_desc:
+            f_mode = "range"
+        if f_field and f_mode:
+            out["filter"] = {"field": f_field, "mode": f_mode, "desc": f_desc}
+            out["assertions"].append({
+                "kind": "filter_result", "field": field_name, "rule": raw,
+                "data": {"field": f_field, "mode": f_mode, "desc": f_desc},
+                "origin": "rule_text",
+            })
 
     # ---- 3) 搜索/筛选：可机检但缺运行期输入（真实检索值 / 控件定位） ----
     if re.search(r"(?:按\s*[^；;，,。]{1,24}?\s*)?过\s*滤", raw) or "搜索" in raw or "搜尋" in raw:
@@ -2375,9 +2404,15 @@ def compile_cases(cases: Iterable[Any]) -> dict[str, Any]:
         synthesized = False
         # rev199：列表域用例在库里断言数为 0，但规则文本里有结构化的列清单/排序方向。
         # 只在**没有显式断言**时才合成——已有断言时以需求为准，推断不得覆盖需求。
-        if not assertions and field_name and is_list_scope_field(field_name):
+        # rev206：路由条件放宽——canonical 筛选形态「篩選字段「X」匹配規則：…」的
+        # requirement_rule.field 是**控件名**（商品內部名稱/店鋪編號…），不属于列表域
+        # 前缀/整名，只按字段名路由会全部漏掉（实测 139 条）。规则文本命中该形态时
+        # 同样进 parse_list_rule（其内含筛选匹配解析步骤）。
+        _rule_raw_text = str(rule.get("rule") or rule.get("description") or "")
+        if (not assertions and field_name
+                and (is_list_scope_field(field_name) or _FILTER_MATCH_RE.search(_rule_raw_text))):
             parsed = parse_list_rule(
-                field_name, rule.get("rule") or rule.get("description") or "")
+                field_name, _rule_raw_text)
             if parsed["assertions"]:
                 assertions = parsed["assertions"]
                 synthesized = True
@@ -3113,6 +3148,7 @@ def build_form_plan(
     # 只认 ``origin == "rule_text"``：需求里显式给出的断言不会走到这里，两种来源不混。
     rule_column_sets: list[dict[str, Any]] = []
     rule_sorts: list[dict[str, Any]] = []
+    rule_filters: list[dict[str, Any]] = []
     for _case in (manifest.get("cases") or []):
         for _a in (_case.get("assertions") or []):
             if _a.get("origin") != "rule_text":
@@ -3134,6 +3170,15 @@ def build_form_plan(
                         "rule_id": str(_case.get("rule_id") or ""),
                         "column": str(_data.get("column")),
                         "direction": "desc" if _data.get("direction") == "desc" else "asc",
+                    })
+            elif _kind == "filter_result":
+                _data = _a.get("data") or {}
+                if _data.get("field") and _data.get("mode"):
+                    rule_filters.append({
+                        "case_id": str(_a.get("case_id") or _case.get("identifier") or ""),
+                        "rule_id": str(_case.get("rule_id") or ""),
+                        "field": str(_data.get("field")),
+                        "mode": str(_data.get("mode")),
                     })
 
     column_assert_source = ""
@@ -3232,6 +3277,32 @@ def build_form_plan(
         }
         _sort_index[key] = entry
         sort_checks.append(entry)
+
+    #: rev206：筛选匹配检查——与 sort_checks 同口径：按 (field, mode) 去重、owners
+    #: 合并、列名吃 column_aliases 别名（页面筛选区常是英文标签）。
+    #: ⚠️ 变量名是 ``rule_filter_checks`` 而不是 ``filter_checks``：后者是 rev170 的
+    #: **配置驱动**筛选通道（``extra_config.filter_checks`` → checks[] type=filter_check，
+    #: 由表单执行器跑），3767 行的 ``parse_filter_checks`` 会覆盖同名变量——规则文本
+    #: 合成的检查与它**来源不同、运行期形态不同**，混用会互相清空。
+    rule_filter_checks: list[dict[str, Any]] = []
+    _filter_index: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in rule_filters:
+        key = (item["field"], item["mode"])
+        owner = {"case_id": item["case_id"], "rule_id": item["rule_id"]}
+        if key in _filter_index:
+            _filter_index[key]["owners"].append(owner)
+            continue
+        entry = {
+            "name": f"filter:{item['field']}:{item['mode']}",
+            "field": item["field"],
+            "mode": item["mode"],
+            "aliases": _column_alias_list(item["field"]),
+            "max_rows": 30,
+            "source": "rule_text",
+            "owners": [owner],
+        }
+        _filter_index[key] = entry
+        rule_filter_checks.append(entry)
 
     def _resolve_field_name(name: str) -> str:
         """文档字段名 → 定位器键。仅按**显式别名表**解析，不做模糊匹配。"""
@@ -3889,6 +3960,9 @@ def build_form_plan(
         "column_contract_conflicts": column_contract_conflicts,
         #: 排序检查条数（进脚本后由 SORT_PHASE 执行）
         "sort_check_count": len(sort_checks),
+        #: 规则文本合成的筛选检查条数（进脚本后由 FILTER_PHASE 执行；rev206）。
+        #: 与 rev170 配置驱动 filter_check 通道分列，两个数不同源。
+        "filter_match_check_count": len(rule_filter_checks),
         # 运行期唯一化（A2 / rev124）：配置里写了 ``{{RUN_TAG}}`` 的字段，运行期换成
         # 本次运行的唯一值；``run_tag_gap`` 列出"真实落库但值固定"的字段（不可重复跑）。
         "run_tag": run_tag_usage(negative_scenarios),
@@ -3910,6 +3984,11 @@ def build_form_plan(
     # 必登记，漏登记的后果实测过（rev131/TR-748：planned=0）。locators 原样透传，无此风险。
     if sort_checks:
         plan_locators = {**plan_locators, "sort_checks": sort_checks}
+    # rev206：规则文本合成的筛选检查随 locators 下发（键 filter_match_checks，
+    # 刻意**不占用** rev170 的 filter_checks——那是配置驱动通道的输入键，
+    # plan_locators 从 loc 展开时会带上原文，覆盖它会破坏配置语义）。
+    if rule_filter_checks:
+        plan_locators = {**plan_locators, "filter_match_checks": rule_filter_checks}
 
     if not checks and not negative_scenarios:
         # 没有可执行检查时**不返回 None**：那样会把 skipped 现场一并丢掉
@@ -3920,7 +3999,9 @@ def build_form_plan(
         # rev199：列契约/排序断言的判定在**列表通道**（COLUMN_DIFF / SORT_PHASE），
         # 不在这里的 checks 里。有它们时不能返回 None，否则 19 条"只要求列清单"的
         # 用例会连计划都没有，产物里既无契约也无排序断言。
-        list_asserts_only = bool(column_assert_source or sort_checks)
+        # rev206：筛选检查同样在列表通道执行（FILTER_PHASE），只要求列清单+筛选的
+        # 用例不能因为没有表单 checks 而丢计划。
+        list_asserts_only = bool(column_assert_source or sort_checks or rule_filter_checks)
         if (not skipped and not negative_scenario_rejects
                 and not list_check_rejects and not export_check_rejects
                 and not filter_check_rejects and not action_matrix_rejects
