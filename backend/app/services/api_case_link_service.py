@@ -541,6 +541,11 @@ class APICaseLinkService:
         options: dict[str, Any] = {}
         if headers:
             options["headers"] = headers
+        # 必填 query 参数（一期）：此前完全丢弃，带参接口实际打的是残缺 URL
+        # （404 / 200+data:null 都可能，后者在信封断言下是假通过）。
+        query_params = self._sample_query_params(endpoint.parameters)
+        if query_params:
+            options["params"] = query_params
         if method in {"POST", "PUT", "PATCH"}:
             options["data"] = payload
 
@@ -610,7 +615,15 @@ function buildPageUrl(base: string, page: number): string {{
 
         envelope_field_json = json.dumps(envelope_field, ensure_ascii=False)
 
-        return f"""import {{ test, expect }} from '@playwright/test';
+        sample_note = ""
+        if query_params or "{" in (endpoint.path or ""):
+            sample_note = (
+                "\n// 样本值说明：路径参数用占位值 1、query 只传必填项"
+                "（default → 枚举首值 → 类型样本值），均不代表业务真实数据 —— "
+                "本用例验证的是接口契约与参数传递，不是业务结果正确性。"
+            )
+
+        return f"""import {{ test, expect }} from '@playwright/test';{sample_note}
 
 const BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000';
 const AUTH_HEADER = process.env.API_TEST_AUTH_HEADER || 'Authorization';
@@ -879,6 +892,41 @@ test('{method} {endpoint.path} basic contract', async ({test_params}) => {{
             if name and param.get("required"):
                 headers[name] = str(param.get("default") or "test")
         return headers
+
+    def _sample_query_params(self, parameters: Any) -> dict[str, str]:
+        """必填 query 参数取样本值：**只传 required**。
+
+        可选参数刻意不传 —— 样本值撞上业务校验时，多传一个参数会凭空制造失败，
+        而漏传可选参数最多让返回值范围变宽，不影响契约判定。
+        """
+        params: dict[str, str] = {}
+        if not isinstance(parameters, list):
+            return params
+        for param in parameters:
+            if not isinstance(param, dict) or param.get("in") != "query":
+                continue
+            name = param.get("name")
+            if not name or not param.get("required"):
+                continue
+            params[str(name)] = self._sample_param_value(param)
+        return params
+
+    @staticmethod
+    def _sample_param_value(param: dict[str, Any]) -> str:
+        """样本值优先级：default → 枚举首值 → 类型样本值（数字 1 / 布尔 false / 文本 test）。"""
+        default = param.get("default")
+        if default not in (None, ""):
+            return str(default)
+        enum = param.get("enum")
+        if isinstance(enum, list) and enum:
+            return str(enum[0])
+        schema = param.get("schema") if isinstance(param.get("schema"), dict) else {}
+        ptype = str(param.get("type") or schema.get("type") or "").lower()
+        if ptype in {"integer", "number"}:
+            return "1"
+        if ptype == "boolean":
+            return "false"
+        return "test"
 
     def _sample_payload(self, request_body: Any) -> dict[str, Any]:
         example = self._extract_request_example(request_body)

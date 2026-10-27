@@ -7,6 +7,7 @@ API 测试执行器
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import tempfile
 import shutil
@@ -230,12 +231,27 @@ class APITestExecutor:
             logger.error("API 测试后台执行失败 run_id=%s: %s", run_id, e, exc_info=True)
 
     def _generate_playwright_config(self, execution_config: Dict[str, Any]) -> str:
-        """生成 Playwright 配置文件"""
+        """生成 Playwright 配置文件。
+
+        reporter 写在配置里而非命令行：``--reporter=[["json",{...}]]`` 这种数组形式
+        在 Windows 下会被 CLI 拆错（实测报 ``Cannot find module '[["json"'``），
+        配置文件的 ``reporter`` 字段是官方支持写法。
+
+        Allure 是**第三方** reporter，未安装时 Playwright 解析阶段直接抛 MODULE_NOT_FOUND、
+        一个测试都不跑，因此用 ``PW_ALLURE_REPORTER`` 开关控制：调用方先带它跑，
+        仅在"因 reporter 缺失而失败"时关掉重跑（json 是内置的，始终保留）。
+        """
         return f"""
 import {{ defineConfig, devices }} from '@playwright/test';
 
+const reporters: any = [['json', {{ outputFile: 'results.json' }}]];
+if (process.env.PW_ALLURE_REPORTER === '1') {{
+  reporters.push(['@playwright/test/allure-playwright']);
+}}
+
 export default defineConfig({{
   testDir: './',
+  reporter: reporters,
   fullyParallel: true,
   forbidOnly: false,
   retries: process.env.CI ? 2 : 0,
@@ -254,6 +270,72 @@ export default defineConfig({{
   ],
 }});
 """
+
+    #: Allure 是**第三方** reporter（json 是内置的）；未安装时 Playwright 解析阶段即退出。
+    _ALLURE_REPORTER = "@playwright/test/allure-playwright"
+    #: 控制配置文件里是否挂 allure reporter（值写进子进程环境，不落盘到脚本）。
+    _ALLURE_ENV = "PW_ALLURE_REPORTER"
+
+    def _run_playwright_process(
+        self,
+        npx_exe: str,
+        work_dir: Path,
+        execution_config: Dict[str, Any],
+        *,
+        with_allure: bool = True,
+    ):
+        """执行一次 ``npx playwright test``（allure 开关走环境变量，便于缺包时降级重跑）。"""
+        env = {**os.environ, self._ALLURE_ENV: "1" if with_allure else "0"}
+        # base_url → API_BASE_URL：平台生成的脚本读 `process.env.API_BASE_URL`，
+        # 不映射就会回退到脚本里的 http://localhost:8000 占位 —— 所有断言打的都是本机，
+        # 「通过/失败」与目标环境无关（新执行器 api_endpoint_script_executor 已做同样映射）。
+        base_url = execution_config.get("base_url")
+        if base_url:
+            env["API_BASE_URL"] = str(base_url).rstrip("/")
+        # 自定义环境变量（前端执行配置/调用方传入）优先级更高，显式覆盖上面的默认值。
+        custom_env = execution_config.get("env") or {}
+        if isinstance(custom_env, dict):
+            for key, value in custom_env.items():
+                if key and value is not None:
+                    env[str(key)] = str(value)
+        return subprocess.run(
+            [
+                npx_exe, "playwright", "test",
+                f"--output={work_dir}/allure-results",  # Allure 结果目录
+            ],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=execution_config.get("timeout", 300),
+            env=env,
+        )
+
+    @staticmethod
+    def _allure_reporter_missing(result: Any) -> bool:
+        """判断失败是否**仅因** allure reporter 不可用 —— 只有这种失败才值得降级重跑。
+
+        实测到的三种形态（不同 Node/Playwright 版本措辞不同）：
+        ``Cannot find module '@playwright/test/allure-playwright'``、
+        ``Package subpath './allure-playwright' is not defined by "exports"``、
+        ``resolveReporters`` 栈。共同点是都发生在**解析 reporter** 阶段、且点名 allure。
+        其它失败（用例真红、超时）重跑一次既费时又会掩盖现场，一律不重试。
+        """
+        if getattr(result, "returncode", 0) == 0:
+            return False
+        text = f"{getattr(result, 'stdout', '') or ''}\n{getattr(result, 'stderr', '') or ''}"
+        low = text.lower()
+        if "allure-playwright" not in low:
+            return False
+        markers = (
+            "cannot find module",
+            "module_not_found",
+            "is not defined by",
+            "err_package_path_not_exported",
+            "resolvereporters",
+        )
+        return any(marker in low for marker in markers)
 
     async def _run_playwright_test(
         self,
@@ -297,20 +379,33 @@ export default defineConfig({{
                     "stdout": npx_check.stdout,
                 }
 
-            # 运行 Playwright 测试，使用 Allure 报告
-            result = subprocess.run(
-                [
-                    npx_exe, "playwright", "test",
-                    "--reporter=@playwright/test/allure-playwright",  # 使用 Allure 报告器
-                    f"--output={work_dir}/allure-results",  # Allure 结果目录
-                ],
-                cwd=work_dir,
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                timeout=execution_config.get("timeout", 300),  # 5 分钟超时
+            # 运行 Playwright 测试，同时产出 JSON（机读结果）+ Allure（人读报告）。
+            # 历史坑（实测 101 个 run 全零）：只配 allure 时 results.json 永不生成，
+            # suites=[] → total_tests=0、无 per-test 结果、失败→缺陷登记链路空转；
+            # 更早一步的坑：allure-playwright 这个**第三方 reporter 没装**时，
+            # Playwright 在解析 reporter 阶段就抛 MODULE_NOT_FOUND，一个测试都没跑。
+            # 因此 json（内置，必带）与 allure（可选，失败降级）分开处理：
+            # 先带 allure 跑一次，若因 reporter 不可用而失败，则降级为仅 json 重跑。
+            # subprocess.run 是**阻塞**调用：直接在事件循环里跑会把整个服务冻住。
+            # 实测后果（2026-10-27）：被测接口就在本机时，用例请求打进来没人处理 →
+            # 用例必然失败，而同一脚本在服务外用同样参数单独跑是 passed。
+            # 放到线程里执行，事件循环继续服务其它请求。
+            result = await asyncio.to_thread(
+                self._run_playwright_process, npx_exe, work_dir, execution_config
             )
+            allure_missing = self._allure_reporter_missing(result)
+            if allure_missing:
+                logger.warning(
+                    "allure-playwright 报告器不可用（未安装），降级为仅 JSON 报告重跑：%s",
+                    (result.stderr or result.stdout or "")[:300],
+                )
+                result = await asyncio.to_thread(
+                    self._run_playwright_process,
+                    npx_exe,
+                    work_dir,
+                    execution_config,
+                    with_allure=False,
+                )
 
             # 读取 JSON 格式的测试结果（如果同时配置了 json 报告器）
             json_results_file = work_dir / "results.json"
@@ -358,6 +453,25 @@ export default defineConfig({{
                 "error": f"测试执行失败: {str(e)}",
             }
 
+    @staticmethod
+    def _map_test_status(test: dict[str, Any]) -> TestResultStatus:
+        """把 Playwright JSON 报告的 test.status 映射为平台状态。
+
+        ⚠️ Playwright JSON 的 ``status`` **不是** passed/failed，而是
+        ``expected``（通过）/ ``unexpected``（失败）/ ``flaky``（重试后通过）/ ``skipped``
+        —— 实测确认（2026-10-27，npx playwright 1.x json reporter）。
+        口径：expected/flaky→PASSED、skipped→SKIPPED、其余→FAILED；
+        ``status`` 缺失时回退布尔 ``ok``（兼容旧格式报告）。
+        """
+        raw = str(test.get("status") or "").strip().lower().replace(" ", "")
+        if raw in {"expected", "flaky", "passed"}:
+            return TestResultStatus.PASSED
+        if raw == "skipped":
+            return TestResultStatus.SKIPPED
+        if raw in {"unexpected", "failed", "timedout", "interrupted"}:
+            return TestResultStatus.FAILED
+        return TestResultStatus.PASSED if test.get("ok") else TestResultStatus.FAILED
+
     async def _process_test_results(
         self,
         run_id: UUID,
@@ -388,29 +502,41 @@ export default defineConfig({{
                     tests = spec.get("tests", [])
                     for test in tests:
                         total_tests += 1
+                        # Playwright JSON 里**标题在 spec 上、tests[].title 恒为 null**
+                        # （2026-10-27 实测）——取 test.title 会让每条结果的名字都是空串。
+                        test_name = spec.get("title") or test.get("title") or ""
 
-                        status = TestResultStatus.PASSED
-                        if test.get("ok", False):
+                        status = self._map_test_status(test)
+                        if status == TestResultStatus.PASSED:
                             passed_tests += 1
+                        elif status == TestResultStatus.SKIPPED:
+                            skipped_tests += 1
                         else:
                             failed_tests += 1
-                            status = TestResultStatus.FAILED
 
-                        # 保存测试结果
-                        await self._save_test_result(
-                            run_id=run_id,
-                            api_test=api_test,
-                            test_name=test.get("title", ""),
-                            status=status,
-                            results=test.get("results", []),
-                        )
+                        # 保存测试结果：**单条失败不拖垮整段统计**。
+                        # 历史坑：这里抛一次异常就被外层 except 吞掉，counts 永不更新，
+                        # run 显示 completed + total_tests=0，看着像"平台没跑"，实际是落库报错。
+                        try:
+                            await self._save_test_result(
+                                run_id=run_id,
+                                api_test=api_test,
+                                test_name=test_name,
+                                status=status,
+                                results=test.get("results", []),
+                            )
+                        except Exception as save_err:  # noqa: BLE001
+                            logger.error(
+                                "保存单条测试结果失败（不影响计数）run_id=%s name=%s: %s",
+                                run_id, test_name, save_err,
+                            )
 
                         # IDP 缺陷处理：仅对失败的测试
                         if status == TestResultStatus.FAILED:
                             await self._process_idp_defect(
                                 run_id=run_id,
                                 api_test=api_test,
-                                test_name=test.get("title", ""),
+                                test_name=test_name,
                                 results=test.get("results", []),
                                 report_url=report_url,
                                 # 进程级 stdout 透传给环境阻断闸（`_run_playwright_test`
@@ -436,7 +562,7 @@ export default defineConfig({{
         api_test: APITest,
         test_name: str,
         status: TestResultStatus,
-        _results: List[Dict[str, Any]],
+        results: List[Dict[str, Any]],
     ):
         """
         保存单个测试结果
@@ -446,7 +572,7 @@ export default defineConfig({{
             api_test: API 测试
             test_name: 测试名称
             status: 测试状态
-            _results: 测试结果详情（预留，用于提取断言和执行时间）
+            results: 测试结果详情（预留，用于提取断言和执行时间）
         """
         try:
             # 提取端点和 HTTP 方法（从测试名称中解析）
