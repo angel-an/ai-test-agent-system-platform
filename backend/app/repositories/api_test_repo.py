@@ -5,7 +5,7 @@ API 测试仓储
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Iterable, Optional
 from uuid import UUID
 
 from sqlalchemy import Integer, and_, cast, func, select
@@ -16,6 +16,32 @@ from app.repositories.base import BaseRepository
 from app.models.api_test import APITest, APITestRun, APITestResult
 
 # type: ignore  MC80OmFIVnBZMlhscm9ua3VMazZUakpvU0E9PTo2NTQzNzJhMg==
+
+# API run 被中断时的 error_message 措辞。
+# 必须和"用例失败"在字面上就能区分：否则统计时会把进程崩溃当成被测系统问题。
+API_RUN_INTERRUPTED_MESSAGE = "执行被中断（服务进程退出或重启），非用例失败"
+
+
+def next_api_run_identifier(existing_identifiers: Iterable[str], date_str: str) -> str:
+    """从「当天已用编号」推算下一个 ``ATR-YYYYMMDD-NNN``。
+
+    纯函数（repo 负责取数 + 加锁），便于用表驱动用例锁住编号口径。
+
+    只认严格匹配 ``ATR-<date_str>-<数字>`` 的标识符；不合格式的忽略而不是报错——
+    历史上存在过 ``SR-EP-*`` 之类的异构值混在同一列。
+    """
+    prefix = f"ATR-{date_str}-"
+    used: set[int] = set()
+    for identifier in existing_identifiers:
+        if not identifier or not identifier.startswith(prefix):
+            continue
+        tail = identifier[len(prefix):]
+        if not tail.isdigit():
+            continue
+        used.add(int(tail))
+    number = max(used) + 1 if used else 1
+    return f"{prefix}{number:03d}"
+
 
 class APITestRepository(BaseRepository[APITest]):
     """API 测试仓储类"""
@@ -234,35 +260,33 @@ class APITestRunRepository(BaseRepository[APITestRun]):
 
         return items, total
 
-    async def get_next_identifier(self, api_test_id: UUID) -> str:
+    async def get_next_identifier(self, api_test_id: UUID | None = None) -> str:
         """生成下一个运行标识符
 
         格式: ATR-YYYYMMDD-NNN
 
-        通过 PG advisory 事务锁串行化"同 api_test 同日期"的并发写入，
-        使用 MAX 而非 COUNT，避免删除记录后编号冲突。
+        ⚠️ 编号粒度是**全局按日期**，不是按 api_test。
+
+        历史实现按 ``api_test_id`` 计数（锁 key 与 MAX 都带 api_test_id），
+        于是同一项目下 N 个 api_test 每天各自从 001 起号：`ATR-20260824-001`
+        被 3 条不同记录共用，实测全库 **33 组重号**。追溯时只凭编号无法定位
+        是哪一次执行，编号等于失效。web 侧 ``TR-`` 一直全局递增，这里对齐。
+
+        ``api_test_id`` 参数保留只为兼容调用方，不再参与编号计算。
         """
         today = datetime.now(timezone.utc).date()
         date_str = today.strftime("%Y%m%d")
         prefix = f"ATR-{date_str}-"
 # pragma: no cover  My80OmFIVnBZMlhscm9ua3VMazZUakpvU0E9PTo2NTQzNzJhMg==
 
-        await self._acquire_xact_lock(f"atr_identifier:{api_test_id}:{date_str}")
+        # 锁粒度必须与编号粒度一致：按日期全局串行。
+        # 仍按 api_test 加锁的话，两个 api_test 会同时读到同一个 max 而撞号。
+        await self._acquire_xact_lock(f"atr_identifier:{date_str}")
 
-        # 取 prefix 之后的数字部分的最大值
-        numeric_part = cast(
-            func.regexp_replace(APITestRun.identifier, r"^\D+\d+-", ""),
-            Integer,
-        )
         result = await self.session.execute(
-            select(func.max(numeric_part))
-            .where(APITestRun.api_test_id == api_test_id)
-            .where(APITestRun.identifier.like(f"{prefix}%"))
+            select(APITestRun.identifier).where(APITestRun.identifier.like(f"{prefix}%"))
         )
-        max_number = result.scalar_one_or_none() or 0
-        next_number = max_number + 1
-
-        return f"{prefix}{next_number:03d}"
+        return next_api_run_identifier(result.scalars().all(), date_str)
 
 class APITestResultRepository(BaseRepository[APITestResult]):
     """API 测试结果仓储类"""

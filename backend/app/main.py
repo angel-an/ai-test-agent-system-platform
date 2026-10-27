@@ -205,6 +205,56 @@ async def recover_stuck_executions():
         print(f"[Recover] 恢复完成")
 
 
+async def recover_stuck_api_runs() -> int:
+    """收尾 API 链路上被中断的 run（``api_test_runs``）。
+
+    背景（2026-10-27 实测）：``recover_stuck_executions()`` 只覆盖 web 链路的
+    ``TestRunScriptJob`` / ``TestRun``，API 链路的 ``api_test_runs`` **没有任何收尾路径**。
+    该链路唯一的保护是 ``subprocess.run(timeout=...)``，一旦进程被 kill（重启、
+    崩溃、容器回收）run 就永久停在 pending/running —— 库里实测 7 条，最老 64 天，
+    界面上看着"还在跑"，统计时又被当成正常的进行中。
+
+    判据：启动时刻不可能存在**本进程**发起的 run，所以最后活动时间早于
+    「now - 5 分钟」的必然是上次进程遗留。用时间窗而不是"全部置失败"，
+    是为兼容多 worker / 热重载，避免误杀别的 worker 正在跑的 run。
+
+    ⚠️ 「最后活动时间」必须用 ``COALESCE(updated_at, created_at)``：实测有 3 条僵死
+    run 的 ``updated_at`` 是 **NULL**（创建后连"置 running"都没走到），
+    直接比 ``updated_at`` 会得到 NULL 而不是 true，一条都收不掉。
+
+    只改状态与 error_message，**不动计数**：这类 run 没有用例结果（total=0），
+    正确口径是"跑了但没结果"，不是"用例失败"。
+    """
+    from sqlalchemy import func, text, update
+
+    from app.repositories.api_test_repo import API_RUN_INTERRUPTED_MESSAGE
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            update(APITestRun)
+            .where(
+                APITestRun.status.in_(("pending", "running")),
+                func.coalesce(APITestRun.updated_at, APITestRun.created_at)
+                < text("now() - interval '5 minutes'"),
+            )
+            .values(
+                status="failed",
+                error_message=API_RUN_INTERRUPTED_MESSAGE,
+                updated_at=func.now(),
+            )
+        )
+        await session.commit()
+        count = result.rowcount or 0
+
+    if count:
+        print(f"[Recover] API 运行 {count} 条被中断 -> failed")
+        logger.warning(
+            "[Recover] %s 条 api_test_runs 停在 pending/running，已收尾为 failed（进程中断，非用例失败）",
+            count,
+        )
+    return count
+
+
 async def run_migration_preflight() -> None:
     """启动时执行迁移预检（P0-4 的部署路径接入）。
 
@@ -285,8 +335,11 @@ async def lifespan(app: FastAPI):
 
     await ensure_default_user()
 
-    # 恢复被中断的执行
+    # 恢复被中断的执行（web 链路：作业 + TestRun）
     await recover_stuck_executions()
+
+    # 恢复被中断的执行（API 链路：api_test_runs 此前完全没有收尾路径）
+    await recover_stuck_api_runs()
 
     # 启动定时任务调度器
     from app.services.scheduler import scheduler, load_all_jobs, register_script_repair_job
