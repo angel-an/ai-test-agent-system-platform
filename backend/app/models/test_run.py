@@ -125,6 +125,15 @@ class TestRun(Base, UUIDMixin, TimestampMixin):
         default=0,
         comment="未执行数量"
     )
+    verdict: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        comment=(
+            "用例级结论 pass/fail/unverified/empty（update_counts 按用例级计数推导）。"
+            "⚠️ 判红看本字段，不看 run_state：断言失败的 run 终态是 REJECTED 而非 DONE，"
+            "按 run_state 统计会漏掉全部失败"
+        ),
+    )
 
     # ---- R5（2026-10-17）：断言指标模型，run 级只存聚合数，明细走 /assertion-ledger ----
     # 两类**分别计数、分别算通过率，不得合并**（共享一个 passed_count 无法给出

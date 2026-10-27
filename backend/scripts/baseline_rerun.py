@@ -389,6 +389,56 @@ async def do_report() -> Path:
     return out
 
 
+# ---------------------------------------------------------------- diff
+
+def do_diff() -> None:
+    """对比每条用例**最近两次**执行结论（按 run 编号排序），输出转红/转绿/漂移三张表。
+
+    不引入"轮次"概念：run log 是追加式的，一条用例每被覆盖执行一次就多一条记录，
+    "最近两次结论"就是最诚实的 diff 口径——无需约定采样窗口。
+    """
+    hist: dict[str, list[tuple[int, str, str, str]]] = {}
+    for rl in sorted(ART.glob("run_*.jsonl")):
+        for line in rl.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            try:
+                run_no = int(str(r.get("run", "TR-0")).split("-")[-1])
+            except ValueError:
+                run_no = 0
+            for c in r.get("cases") or []:
+                hist.setdefault(c["id"], []).append(
+                    (run_no, r["run"], c["status"], (c.get("desc") or "")[:120])
+                )
+    to_red, to_green, shifted = [], [], []
+    for cid, evs in hist.items():
+        if len(evs) < 2:
+            continue
+        evs.sort(key=lambda x: x[0])
+        prev, cur = evs[-2], evs[-1]
+        if prev[2] == cur[2]:
+            continue
+        row = (cid, f"{prev[1]}:{prev[2]}", f"{cur[1]}:{cur[2]}", cur[3])
+        if cur[2] == "FAILED" or (prev[2] == "PASSED" and cur[2] != "PASSED"):
+            to_red.append(row)
+        elif prev[2] != "PASSED" and cur[2] == "PASSED":
+            to_green.append(row)
+        else:
+            shifted.append(row)
+    for title, rows in (("转红（上次非红，本次红）", to_red),
+                        ("转绿（上次非绿，本次 PASSED）", to_green),
+                        ("其它状态漂移", shifted)):
+        print(f"\n## {title}（{len(rows)}）")
+        for cid, a, b, desc in rows:
+            print(f"- {cid}: {a} → {b}  {desc}")
+    if not (to_red or to_green or shifted):
+        print("\n[diff] 最近两次执行之间无结论变化")
+
+
 # ---------------------------------------------------------------- 入口
 
 def main() -> None:
@@ -397,11 +447,12 @@ def main() -> None:
     ap.add_argument("--triage", action="store_true", help="只分诊")
     ap.add_argument("--run", action="store_true", help="只执行可判组")
     ap.add_argument("--report", action="store_true", help="只汇总")
+    ap.add_argument("--diff", action="store_true", help="对比每条用例最近两次执行结论")
     ap.add_argument("--sub", default=None, help="限定子功能 id 前 8 位（如 e1c94163）")
     ap.add_argument("--max-groups", type=int, default=999, help="每个子功能最多执行的组数")
     a = ap.parse_args()
-    if not (a.all or a.triage or a.run or a.report):
-        ap.error("至少指定一个动作：--all / --triage / --run / --report")
+    if not (a.all or a.triage or a.run or a.report or a.diff):
+        ap.error("至少指定一个动作：--all / --triage / --run / --report / --diff")
 
     async def _go():
         if a.all or a.triage:
@@ -410,6 +461,8 @@ def main() -> None:
             await do_run(a.sub, a.max_groups)
         if a.all or a.report:
             await do_report()
+        if a.diff:
+            do_diff()
 
     asyncio.run(_go())
 

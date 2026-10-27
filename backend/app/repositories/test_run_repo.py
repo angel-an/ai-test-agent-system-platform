@@ -36,6 +36,33 @@ _IDENTIFIER_LOCK_TIMEOUT = float(os.getenv("TR_IDENT_LOCK_TIMEOUT", "5") or 5)
 #: 轮询间隔（秒）
 _IDENTIFIER_LOCK_POLL = 0.02
 
+#: 用例级结论取值。**判红看 verdict，不看 run_state**：断言失败的 run 终态是
+#: REJECTED 而非 DONE，按 run_state 统计会漏掉全部失败（2026-10-26 基线实测口径）。
+RUN_VERDICT_PASS = "pass"
+RUN_VERDICT_FAIL = "fail"
+RUN_VERDICT_UNVERIFIED = "unverified"
+RUN_VERDICT_EMPTY = "empty"
+
+
+def compute_run_verdict(
+    *, total: int, passed: int, failed: int, skipped: int, blocked: int, not_executed: int
+) -> str:
+    """由用例级计数推导 run 结论（与 0025 迁移的回填 SQL 同一口径，两边必须同步改）。
+
+    - ``fail``       有失败——一条失败就该红，优先级最高；
+    - ``pass``       无失败且全部 PASSED；
+    - ``unverified`` 无失败但存在 SKIPPED/BLOCKED/NOT_EXECUTED，或一条都没通过
+      ——不可当通过用（负路径合法跳过、前置未构造都落这里）；
+    - ``empty``      未绑定用例。
+    """
+    if total <= 0:
+        return RUN_VERDICT_EMPTY
+    if failed > 0:
+        return RUN_VERDICT_FAIL
+    if passed > 0 and (skipped + blocked + not_executed) == 0:
+        return RUN_VERDICT_PASS
+    return RUN_VERDICT_UNVERIFIED
+
 
 class TestRunRepository:
     """测试运行数据仓储"""
@@ -194,7 +221,7 @@ class TestRunRepository:
                 raise RuntimeError(f"无法生成唯一的测试运行标识符，已有太多测试运行")
     
     async def update_counts(self, test_run_id: UUID) -> None:
-        """更新测试运行的统计数据"""
+        """更新测试运行的统计数据（含用例级结论 verdict）"""
         # 统计各状态数量
         status_counts = {}
         for status in TestResultStatus:
@@ -210,6 +237,14 @@ class TestRunRepository:
 
         # 更新测试运行
         total = sum(status_counts.values())
+        verdict = compute_run_verdict(
+            total=total,
+            passed=status_counts.get(TestResultStatus.PASSED, 0),
+            failed=status_counts.get(TestResultStatus.FAILED, 0),
+            skipped=status_counts.get(TestResultStatus.SKIPPED, 0),
+            blocked=status_counts.get(TestResultStatus.BLOCKED, 0),
+            not_executed=status_counts.get(TestResultStatus.NOT_EXECUTED, 0),
+        )
         update_stmt = (
             update(TestRun)
             .where(TestRun.id == test_run_id)
@@ -220,6 +255,7 @@ class TestRunRepository:
                 skipped_count=status_counts.get(TestResultStatus.SKIPPED, 0),
                 blocked_count=status_counts.get(TestResultStatus.BLOCKED, 0),
                 not_executed_count=status_counts.get(TestResultStatus.NOT_EXECUTED, 0),
+                verdict=verdict,
             )
         )
         await self.session.execute(update_stmt)
