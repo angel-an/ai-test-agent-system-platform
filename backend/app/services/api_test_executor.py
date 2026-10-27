@@ -31,6 +31,7 @@ from app.config.minio_client import MinIOClient
 from app.schemas.enums import TestResultStatus
 from app.models.mongodb.api_test_log import APITestDetailLog
 from app.services.defect_registration_service import DefectRegistrationService
+from app.services.trace_evidence import extract_from_result as extract_trace_exchange
 from app.services.web_failure_policy import classify_environment_block
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,18 @@ class APITestExecutor:
                     report_path=report_path,
                 )
 
+                # 排查开关：执行目录在 with 结束后就被删除，想复看 trace.zip / results.json
+                # 只能靠它整份拷出来（`API_TEST_KEEP_WORKDIR=/some/dir`）。默认关闭，
+                # 不影响正常执行与磁盘占用。
+                keep_dir = os.environ.get("API_TEST_KEEP_WORKDIR")
+                if keep_dir:
+                    try:
+                        target = Path(keep_dir) / str(run_id)
+                        shutil.copytree(temp_path, target, dirs_exist_ok=True)
+                        logger.info("[APITest] 执行目录已保留: %s", target)
+                    except Exception as copy_err:  # noqa: BLE001
+                        logger.warning("[APITest] 保留执行目录失败: %s", copy_err)
+
         except Exception as e:
             # 更新为失败状态（回写自身也要兜底，绝不让异常逃出后台任务）
             try:
@@ -242,6 +255,12 @@ class APITestExecutor:
         Allure 是**第三方** reporter，未安装时 Playwright 解析阶段直接抛 MODULE_NOT_FOUND、
         一个测试都不跑，因此用 ``PW_ALLURE_REPORTER`` 开关控制：调用方先带它跑，
         仅在"因 reporter 缺失而失败"时关掉重跑（json 是内置的，始终保留）。
+
+        ``trace: 'retain-on-failure'`` 是**请求/响应证据的唯一来源**：JSON 报告里没有
+        request/response 结构（2026-10-27 实测），trace 里的 ``*-trace.network``
+        才是 HAR 风格的完整往返记录。只在失败时落盘，通过的用例零额外开销。
+        原先的 ``slowMo: 3000`` 已移除 —— API 用例不启浏览器，该参数从不生效，
+        留着只会让人误以为执行被拖慢。
         """
         return f"""
 import {{ defineConfig, devices }} from '@playwright/test';
@@ -258,9 +277,7 @@ export default defineConfig({{
   forbidOnly: false,
   retries: process.env.CI ? 2 : 0,
   use: {{
-    launchOptions: {{
-      slowMo: 3000,
-    }},
+    trace: 'retain-on-failure',
   }},
   projects: [
     {{
@@ -516,6 +533,16 @@ export default defineConfig({{
                         else:
                             failed_tests += 1
 
+                        # 请求/响应证据**只提取一次**，保存结果与缺陷登记共用：
+                        # trace 解析要解 zip，同一用例提两次纯属浪费，日志也会刷两遍。
+                        # 通过用例不开 trace（retain-on-failure），无需提取。
+                        result_details = test.get("results", [])
+                        evidence = None
+                        if status != TestResultStatus.PASSED:
+                            evidence = self._extract_http_evidence(
+                                result_details, api_test, test_name
+                            )
+
                         # 保存测试结果：**单条失败不拖垮整段统计**。
                         # 历史坑：这里抛一次异常就被外层 except 吞掉，counts 永不更新，
                         # run 显示 completed + total_tests=0，看着像"平台没跑"，实际是落库报错。
@@ -525,7 +552,8 @@ export default defineConfig({{
                                 api_test=api_test,
                                 test_name=test_name,
                                 status=status,
-                                results=test.get("results", []),
+                                results=result_details,
+                                evidence=evidence,
                             )
                         except Exception as save_err:  # noqa: BLE001
                             logger.error(
@@ -539,11 +567,12 @@ export default defineConfig({{
                                 run_id=run_id,
                                 api_test=api_test,
                                 test_name=test_name,
-                                results=test.get("results", []),
+                                results=result_details,
                                 report_url=report_url,
                                 # 进程级 stdout 透传给环境阻断闸（`_run_playwright_test`
                                 # 正常路径用 setdefault 挂在报告 dict 上）
                                 runner_stdout=test_result.get("stdout"),
+                                evidence=evidence,
                             )
 
             # 更新运行统计
@@ -565,6 +594,7 @@ export default defineConfig({{
         test_name: str,
         status: TestResultStatus,
         results: List[Dict[str, Any]],
+        evidence: Optional[Dict[str, Any]] = None,
     ):
         """
         保存单个测试结果
@@ -574,11 +604,38 @@ export default defineConfig({{
             api_test: API 测试
             test_name: 测试名称
             status: 测试状态
-            results: 测试结果详情（预留，用于提取断言和执行时间）
+            results: 测试结果详情
+            evidence: 已提取的请求/响应证据（调用方批量提取时传入，避免重复解 trace）
         """
         try:
-            # 提取端点和 HTTP 方法（从测试名称中解析）
-            endpoint, method = self._parse_endpoint_from_test_name(test_name)
+            # 端点和 HTTP 方法优先取**真实往返**（trace），取不到再退回标题解析
+            fallback_endpoint, fallback_method = self._parse_endpoint_from_test_name(test_name)
+            if evidence is None:
+                if status == TestResultStatus.PASSED:
+                    # 通过的用例不开 trace（retain-on-failure），无需提取；
+                    # 更不该像历史实现那样把状态码编成 200。
+                    evidence = {
+                        "request_summary": {
+                            "url": (getattr(api_test, "test_config", None) or {}).get("base_url", ""),
+                            "method": fallback_method,
+                        },
+                        "response_summary": {},
+                        "endpoint": fallback_endpoint,
+                        "method": fallback_method,
+                    }
+                else:
+                    evidence = self._extract_http_evidence(results, api_test, test_name)
+            endpoint = evidence["endpoint"] or fallback_endpoint
+            method = evidence["method"] or fallback_method
+
+            # 历史实现这里写死 `status_code = 200 if passed else 500` —— 那是**编出来的**
+            # 数据：会把"通过"的用例记成 200、"失败"的记成 500，看着像有响应证据，
+            # 实际既没请求过也没收到过。宁可 None（未知），也不能造假。
+            last_result = results[-1] if results and isinstance(results[-1], dict) else {}
+            raw_error = (last_result.get("error") or {}).get("message") or ""
+            duration = last_result.get("duration")
+            if not isinstance(duration, (int, float)):
+                duration = 0
 
             # 创建测试结果记录
             await self.api_test_result_repo.create(
@@ -588,16 +645,14 @@ export default defineConfig({{
                 endpoint=endpoint,
                 method=method,
                 status=status,
-                request_summary={
-                    "url": api_test.test_config.get("base_url", ""),
-                    "method": method,
-                },
-                response_summary={
-                    "status_code": 200 if status == TestResultStatus.PASSED else 500,
-                },
-                error_message=None if status == TestResultStatus.PASSED else "测试失败",
-                duration_ms=0,  # TODO: 从测试结果中提取
-                retry_count=0,
+                request_summary=evidence["request_summary"],
+                response_summary=evidence["response_summary"],
+                error_message=(
+                    None if status == TestResultStatus.PASSED
+                    else (raw_error[:2000] if raw_error else "测试失败")
+                ),
+                duration_ms=int(duration),
+                retry_count=last_result.get("retry") or 0,
             )
 
         except Exception as e:
@@ -790,6 +845,140 @@ export default defineConfig({{
         )
         return result.scalar_one_or_none()
 
+    @staticmethod
+    def _evidence_from_exchange(exchange, base_url: str) -> Dict[str, Any]:
+        """把 trace 里的一次真实往返转成登记服务认识的 request/response 摘要。"""
+        headers = exchange.response_headers or {}
+        reqid = (
+            headers.get("x-request-id")
+            or headers.get("reqid")
+            or headers.get("x-trace-id")
+            or headers.get("trace-id")
+            or ""
+        )
+        body = exchange.response_body
+        if not reqid and isinstance(body, dict):
+            reqid = str(body.get("reqid") or body.get("requestId") or "")
+
+        # endpoint 用 URL 的 path，而不是"按 base_url 前缀截断"：
+        # 执行时的 base_url 来自本次调用参数，与 test_config 里存的值经常不一致，
+        # 前缀匹配失败会把整条绝对 URL 写进缺陷标题。
+        endpoint = exchange.path
+        request_summary = {
+            "url": exchange.url,
+            "base_url": base_url,
+            "method": exchange.method,
+            "headers": exchange.request_headers or {},
+            "body": exchange.request_body if exchange.request_body is not None else {},
+            "query": exchange.query,
+            # 期望状态码 Playwright 不记录，断言文本里解析也不可靠 —— 宁可为空，
+            # 也不要用 200 顶替（会写出"预期 200"这种凭空捏造的预期）。
+            "expected_status_code": None,
+            "evidence_source": "trace",
+        }
+        response_summary = {
+            "status_code": exchange.status_code,
+            "headers": headers,
+            "body": body if body is not None else {},
+            "reqid": reqid,
+            "duration_ms": exchange.duration_ms,
+        }
+        return {
+            "request_summary": request_summary,
+            "response_summary": response_summary,
+            "endpoint": endpoint,
+            "method": exchange.method,
+            # 「完整证据」= 既知道请求、也知道真实的响应状态码。
+            # 只有请求没有响应（超时 / 连接被重置）说明请求可能没到被测系统，
+            # 这类结论要人工看，不自动建单。
+            "complete": bool(exchange.method and exchange.url and exchange.status_code is not None),
+            "source": "trace",
+        }
+
+    def _extract_http_evidence(
+        self,
+        results: List[Dict[str, Any]],
+        api_test: APITest,
+        test_name: str,
+    ) -> Dict[str, Any]:
+        """提取本次失败的**真实** HTTP 请求/响应。
+
+        来源优先级：
+        1. Playwright 结果里的 ``request``/``response`` 结构 —— 官方 JSON 报告其实**没有**
+           这个结构（2026-10-27 实测 ``results[]`` 只有 status/error/attachments…），
+           保留只为兼容可能出现的其它报告格式；
+        2. **trace 附件**（``use.trace='retain-on-failure'``）里的 HAR 网络快照 ——
+           实测唯一能拿到真实请求头/请求体/状态码/响应体的途径；
+        3. 降级：从用例标题解析接口，**状态码留空**（不知道就是不知道）。
+
+        降级分支历史实现拿 ``last_result["status"]`` 当状态码，但那是 Playwright 的
+        **用例状态字符串**（"failed"/"timedOut"），一路传到决策层做 ``>= 500`` 比较会抛
+        TypeError（2026-10-27 实测）。
+        """
+        base_url = (getattr(api_test, "test_config", None) or {}).get("base_url", "")
+
+        if results:
+            last_result = results[-1] if isinstance(results[-1], dict) else {}
+            # 1. 报告内联结构（官方报告没有，兼容保留）
+            pw_request = last_result.get("request") or {}
+            pw_response = last_result.get("response") or {}
+            if isinstance(pw_request, dict) and pw_request.get("url") and pw_request.get("method"):
+                # 直接用内联结构拼装（不经过 trace）
+                request_headers = pw_request.get("headers") or {}
+                response_headers = pw_response.get("headers") or {}
+                status = pw_response.get("status")
+                return {
+                    "request_summary": {
+                        "url": pw_request.get("url"),
+                        "base_url": base_url,
+                        "method": pw_request.get("method"),
+                        "headers": request_headers,
+                        "body": pw_request.get("postData") or {},
+                        "expected_status_code": None,
+                        "evidence_source": "report",
+                    },
+                    "response_summary": {
+                        "status_code": status if isinstance(status, int) else None,
+                        "headers": response_headers,
+                        "body": pw_response.get("body") or {},
+                        "reqid": (response_headers or {}).get("x-request-id", ""),
+                    },
+                    "endpoint": pw_request.get("url"),
+                    "method": pw_request.get("method"),
+                    "complete": isinstance(status, int) and status > 0,
+                    "source": "report",
+                }
+
+            # 2. trace 附件
+            exchange = extract_trace_exchange(last_result)
+            if exchange is not None:
+                return self._evidence_from_exchange(exchange, base_url)
+
+        # 3. 降级
+        endpoint, method = self._parse_endpoint_from_test_name(test_name)
+        logger.warning(
+            "[TraceEvidence] 用例 '%s' 未取得真实请求/响应（无 trace 附件），"
+            "登记将保持 pending 等待人工确认",
+            test_name,
+        )
+        return {
+            "request_summary": {
+                "url": base_url,
+                "method": method,
+                "headers": {},
+                "body": {},
+            },
+            "response_summary": {
+                "status_code": None,
+                "headers": {},
+                "body": {},
+            },
+            "endpoint": endpoint,
+            "method": method,
+            "complete": False,
+            "source": "fallback",
+        }
+
     async def _process_idp_defect(
         self,
         run_id: UUID,
@@ -798,6 +987,7 @@ export default defineConfig({{
         results: List[Dict[str, Any]],
         report_url: Optional[str] = None,
         runner_stdout: Optional[str] = None,
+        evidence: Optional[Dict[str, Any]] = None,
     ):
         """
         处理 IDP 缺陷创建
@@ -809,90 +999,17 @@ export default defineConfig({{
         try:
             # 1. 从 Playwright 结果中提取真实的请求/响应信息
             error_message = None
-            request_summary = None
-            response_summary = None
-            endpoint = None
-            method = None
-            has_complete_evidence = False
-
             if results:
                 last_result = results[-1]
                 error_message = last_result.get("error", {}).get("message", "")
 
-                # 尝试从 Playwright 的 request/response 结构中提取
-                pw_request = last_result.get("request", {})
-                pw_response = last_result.get("response", {})
-
-                # 提取真实的 URL 和 method（优先从 request 对象获取）
-                actual_url = pw_request.get("url", "")
-                actual_method = pw_request.get("method", "")
-
-                if actual_url and actual_method:
-                    has_complete_evidence = True
-                    # 从完整 URL 中提取 endpoint（去掉 base_url 部分）
-                    base_url = api_test.test_config.get("base_url", "")
-                    endpoint = actual_url
-                    if base_url and actual_url.startswith(base_url):
-                        endpoint = actual_url[len(base_url):]
-                    method = actual_method
-
-                    # 提取请求头
-                    request_headers = pw_request.get("headers", {})
-                    # 提取请求体
-                    request_body = pw_request.get("postData", "")
-                    if isinstance(request_body, str) and request_body:
-                        try:
-                            request_body = json.loads(request_body)
-                        except json.JSONDecodeError:
-                            pass  # 保持字符串
-
-                    # 提取响应信息
-                    response_status = pw_response.get("status", 0)
-                    response_headers = pw_response.get("headers", {})
-                    response_body = pw_response.get("body", "")
-                    if isinstance(response_body, str) and response_body:
-                        try:
-                            response_body = json.loads(response_body)
-                        except json.JSONDecodeError:
-                            pass  # 保持字符串
-
-                    # 从响应头或响应体中提取 reqid
-                    reqid = response_headers.get("x-request-id", "") or response_headers.get("reqid", "")
-                    if not reqid and isinstance(response_body, dict):
-                        reqid = response_body.get("reqid", "") or response_body.get("requestId", "")
-
-                    request_summary = {
-                        "url": actual_url,
-                        "base_url": base_url,
-                        "method": actual_method,
-                        "headers": request_headers,
-                        "body": request_body,
-                        "expected_status_code": None,  # 无法从 Playwright 结果中可靠获取
-                    }
-                    response_summary = {
-                        "status_code": response_status,
-                        "headers": response_headers,
-                        "body": response_body,
-                        "reqid": reqid,
-                    }
-                else:
-                    # 降级：从测试标题和配置中解析（可靠性较低）
-                    endpoint, method = self._parse_endpoint_from_test_name(test_name)
-                    request_summary = {
-                        "url": api_test.test_config.get("base_url", ""),
-                        "method": method,
-                        "headers": {},
-                        "body": {},
-                    }
-                    response_summary = {
-                        # 降级分支 = **没采到真实 HTTP 响应**，状态码是"未知"，只能是 None。
-                        # 历史实现取 `last_result["status"]`，但那是 Playwright 的**用例状态**
-                        # 字符串（"failed"/"timedOut"），把它当状态码会一路传到决策层做
-                        # `>= 500` 比较，抛 TypeError（2026-10-27 实测）。
-                        "status_code": None,
-                        "headers": {},
-                        "body": {},
-                    }
+            if evidence is None:
+                evidence = self._extract_http_evidence(results, api_test, test_name)
+            request_summary = evidence["request_summary"]
+            response_summary = evidence["response_summary"]
+            endpoint = evidence["endpoint"]
+            method = evidence["method"]
+            has_complete_evidence = evidence["complete"]
 
             # 2. 证据完整性 —— 只决定"能否自动创建"，**登记决策不在此处做**。
             #
