@@ -315,3 +315,70 @@ class TestPlaywrightInteractionErrorsAreNotDefects:
         )
         assert r.decision == DefectDecision.CREATE
         assert r.defect_type == "数据校验缺失"
+
+
+class TestPlatformAndNetworkFailuresAreNotDefects:
+    """平台自身故障 / 请求未到达被测系统 —— 都不是被测系统（SUT）缺陷。
+
+    口径（2026-10-27 用户确认）：**只有被测系统的缺陷才登记 IDP**；
+    平台（AI 测试框架自身）与环境类问题不登记，直接修。
+
+    实测背景：把 11 类失败样本喂给 `decide()`，其中以下两类原本被判 `create`
+    （会把平台/环境问题当 SUT 缺陷）：
+      - `apiRequestContext.get: connect ECONNREFUSED 127.0.0.1:1`（连接层错误，
+        API 测试不产生 `net::ERR_` 文案，原规则表未命中）
+      - `Cannot find module '@playwright/test'` / `Package subpath './allure-playwright'`
+        / `NoSuchKey ... script`（平台依赖与脚本资产缺失）
+    """
+
+    CONNECTION_LAYER = [
+        "apiRequestContext.get: connect ECONNREFUSED 127.0.0.1:1",
+        "apiRequestContext.post: read ECONNRESET",
+        "connect ETIMEDOUT 10.0.0.8:443",
+        "getaddrinfo ENOTFOUND uat.example.invalid",
+        "socket hang up",
+    ]
+
+    PLATFORM_RUNTIME = [
+        "Error: Cannot find module '@playwright/test'",
+        "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'allure-playwright'",
+        "Error: Package subpath './allure-playwright' is not defined by \"exports\"",
+        "NoSuchKey: The specified key does not exist. (script_path=api-tests/x.ts)",
+    ]
+
+    def test_connection_layer_failures_are_skipped(self):
+        for msg in self.CONNECTION_LAYER:
+            r = DefectDecisionService.decide(
+                test_status="failed",
+                error_message=msg,
+                response_status_code=None,
+                expected_status_code=None,
+            )
+            assert r.decision == DefectDecision.SKIP, msg
+            assert "环境类失败" in r.reason, msg
+
+    def test_platform_runtime_failures_are_skipped(self):
+        for msg in self.PLATFORM_RUNTIME:
+            r = DefectDecisionService.decide(
+                test_status="failed",
+                error_message=msg,
+                response_status_code=None,
+                expected_status_code=None,
+            )
+            assert r.decision == DefectDecision.SKIP, msg
+            assert "平台运行时故障" in r.reason, msg
+
+    def test_real_sut_failures_still_filed(self):
+        """反向保护：被测系统的真实失败不得被新规则误伤。"""
+        for msg, code in (
+            ("expect(received).toBe(expected) // 500 !== 200", 500),
+            ("Internal Server Error", 500),
+            ("expect(received).toBe(expected) // Object.is equality", None),
+        ):
+            r = DefectDecisionService.decide(
+                test_status="failed",
+                error_message=msg,
+                response_status_code=code,
+                expected_status_code=None,
+            )
+            assert r.decision == DefectDecision.CREATE, msg

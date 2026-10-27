@@ -229,6 +229,20 @@ class DefectDecisionService:
         (r"Test timeout of \d+ms exceeded", "环境/执行器类失败（测试整体超时）"),
         (r"测试执行超时", "环境/执行器类失败（作业级超时）"),
         (r"net::ERR_", "环境类失败（浏览器网络层错误）"),
+        # API 请求**根本没到达被测系统**（连接层错误）。API 测试走 `apiRequestContext`
+        # 时不产生 `net::ERR_` 那一族文案：实测（2026-10-27，ATR-20261027-007 用不可达端口
+        # 造失败）报文是 `apiRequestContext.get: connect ECONNREFUSED 127.0.0.1:1`，
+        # 原表未命中 ⇒ decide() 判 create，等于把"环境不通"当被测系统缺陷。
+        # 只认连接层错误码这一封闭集合，不用宽泛的 "request ... failed"（会误伤 SUT 报错）。
+        (r"ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|getaddrinfo|socket hang up",
+         "环境类失败（请求未到达被测系统，连接层错误）"),
+        # 平台自身运行时依赖/资产缺失 —— 属**框架问题**，不是被测系统现象。
+        # 实测（2026-10-27）以下三类原本都判 create：
+        #   `Cannot find module '@playwright/test'`（依赖没装）
+        #   `Package subpath './allure-playwright' is not defined ...`（reporter 缺失）
+        #   `NoSuchKey ... script`（脚本在对象存储里不存在）
+        (r"Cannot find module|MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND|Package subpath|NoSuchKey",
+         "平台运行时故障（执行依赖缺失或脚本资产不存在），非被测系统现象"),
         (r"No tests found", "脚本采集失败（未找到可执行用例）"),
         (r"未找到或无法点击", "自动化导航助手失败（脚本未找到入口元素）"),
         (r"验证码 OCR|OCR 重试", "自动化登录助手失败（验证码识别未通过）"),
