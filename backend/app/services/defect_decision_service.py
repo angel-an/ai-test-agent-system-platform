@@ -332,6 +332,14 @@ class DefectDecisionService:
         Returns:
             DefectDecisionResult: 决策结果
         """
+        # 0. 状态码归一化 —— 调用方可能把 Playwright 的**用例状态**字符串
+        #    （"failed"/"timedOut"）当成 HTTP 状态码传进来，两者不是一回事。
+        #    不归一化会让下游 `response_status_code >= 500` 抛
+        #    TypeError: '>=' not supported between 'str' and 'int'（2026-10-27 实测）。
+        #    非整型一律按「未观测到状态码」处理；数字字符串允许转成 int。
+        response_status_code = cls._as_status_code(response_status_code)
+        expected_status_code = cls._as_status_code(expected_status_code)
+
         # 1. 测试通过，不创建缺陷
         if test_status == "passed":
             return DefectDecisionResult(
@@ -476,6 +484,21 @@ class DefectDecisionService:
     #: 收紧为 >= 400 后，只有**异常**状态码（4xx/5xx，含网关 502/503）才算证据，
     #: 反向保护（登录接口返回 502 仍开单）不受影响。
     _SUT_EVIDENCE_MIN_STATUS = 400
+
+    @staticmethod
+    def _as_status_code(value: object) -> Optional[int]:
+        """把状态码收敛成 ``int`` 或 ``None``。
+
+        接受 int 与数字字符串；``None`` 原样返回；其余（``"failed"``、``"timedOut"``、
+        bool 等）一律视为「未观测到状态码」。语义上只做类型收敛，不改变任何合法输入。
+        """
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+        return None
 
     @classmethod
     def _has_sut_evidence(

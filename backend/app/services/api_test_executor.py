@@ -16,10 +16,12 @@ from datetime import datetime, timezone
 from typing import Optional, Any, Dict, List
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import async_session_factory
 from app.models.api_test import APITest, APITestRun, APITestResult
+from app.models.project import Project
 from app.repositories.api_test_repo import (
     APITestRepository,
     APITestRunRepository,
@@ -761,6 +763,33 @@ export default defineConfig({{
             # 报告回写失败不影响测试执行结果
             logger.error("[DefectReport] 回写报告失败（不影响测试结果）: %s", e)
 
+    async def _resolve_source_project_key(self, api_test: APITest) -> Optional[str]:
+        """取 api_test 所属项目的标识符（用于 IDP 项目映射）。
+
+        **不要写成 ``api_test.project.identifier``**：后台执行会话里的 api_test 来自
+        ``session.merge(api_test, load=False)``，``project`` 关系处于未加载状态
+        （默认 lazy="select"），在 async 上下文里访问会抛
+        ``MissingGreenlet: greenlet_spawn has not been called``。
+        该异常随后被 ``_process_idp_defect`` 外层"不影响测试结果"的 except 吞掉，
+        外部表现是**登记服务一次都没被调用、失败自动建单整条链路静默空转**
+        （2026-10-27 实测：探针里 ``register_from_api_failure`` 调用次数 0）。
+
+        因此这里只做两件事：关系已加载就直接读；否则按 project_id 只查 identifier 一列。
+        """
+        loaded = api_test.__dict__.get("project")
+        identifier = getattr(loaded, "identifier", None) if loaded is not None else None
+        if identifier:
+            return identifier
+        # 两个"拿不到"的合法情形：关系未加载且没有 project_id（替身/脏数据），
+        # 或执行器没有会话（纯逻辑测试）。都交给上层按「项目未映射」处理，不在这里抛。
+        project_id = getattr(api_test, "project_id", None)
+        if not project_id or self.session is None:
+            return None
+        result = await self.session.execute(
+            select(Project.identifier).where(Project.id == project_id)
+        )
+        return result.scalar_one_or_none()
+
     async def _process_idp_defect(
         self,
         run_id: UUID,
@@ -856,7 +885,11 @@ export default defineConfig({{
                         "body": {},
                     }
                     response_summary = {
-                        "status_code": last_result.get("status", 500),
+                        # 降级分支 = **没采到真实 HTTP 响应**，状态码是"未知"，只能是 None。
+                        # 历史实现取 `last_result["status"]`，但那是 Playwright 的**用例状态**
+                        # 字符串（"failed"/"timedOut"），把它当状态码会一路传到决策层做
+                        # `>= 500` 比较，抛 TypeError（2026-10-27 实测）。
+                        "status_code": None,
                         "headers": {},
                         "body": {},
                     }
@@ -878,12 +911,10 @@ export default defineConfig({{
                 )
 
             # 3. 项目标识符（缺失时交由登记服务按「项目未映射」落 skipped 记录）
-            source_project_key = None
-            if api_test.project and hasattr(api_test.project, "identifier"):
-                source_project_key = api_test.project.identifier
+            source_project_key = await self._resolve_source_project_key(api_test)
             if not source_project_key:
                 logger.warning(
-                    "[IDPDefect] api_test.project 不存在或没有 identifier，"
+                    "[IDPDefect] 未能解析 api_test 所属项目标识符，"
                     "登记将按「项目未映射」落 skipped 记录"
                 )
 
@@ -921,8 +952,12 @@ export default defineConfig({{
             )
 
         except Exception as e:
-            # IDP 异常不影响测试结果保存，仅记录日志
-            logger.error("[IDPDefect] 处理缺陷创建时发生错误（不影响测试结果）: %s", e)
+            # IDP 异常不影响测试结果保存，仅记录日志。
+            # 必须带堆栈：历史上一句无堆栈的 error 把 MissingGreenlet 藏了很久，
+            # 表现只是"单子没建出来"，从日志完全看不出原因（2026-10-27 实测）。
+            logger.error(
+                "[IDPDefect] 处理缺陷创建时发生错误（不影响测试结果）: %s", e, exc_info=True
+            )
 
     async def save_detail_log(
         self,
