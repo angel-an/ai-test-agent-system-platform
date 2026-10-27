@@ -28,6 +28,10 @@ from app.schemas.enums import TestResultStatus
 # Windows 上 npx 的实际可执行文件是 npx.cmd
 _NPX = "npx.cmd" if sys.platform == "win32" else "npx"
 
+#: 后台执行任务引用集——asyncio.create_task 返回的 Task 必须持有，否则可能被 GC
+#: 回收导致执行静默消失（rev186 在 scheduled_runs 修过同源缺陷；此处同理）。
+_BACKGROUND_TASKS: set = set()
+
 
 async def execute_endpoint_script(
     session: AsyncSession,
@@ -77,7 +81,7 @@ async def execute_endpoint_script(
     )
     run_id = run.id
 
-    asyncio.create_task(
+    _task = asyncio.create_task(
         _run_in_background(
             run_id=run_id,
             script_content=script_content,
@@ -85,6 +89,8 @@ async def execute_endpoint_script(
             api_test_id=api_test_id,
         )
     )
+    _BACKGROUND_TASKS.add(_task)
+    _task.add_done_callback(_BACKGROUND_TASKS.discard)
     return str(run_id)
 
 

@@ -214,7 +214,6 @@ async def claim_review(session_factory, sub_function_id: UUID) -> WebScriptRevie
     用单条 UPDATE（`WHERE status='pending'`）原子翻转 pending→repairing，
     affected==1 才算领到——跨 PG/SQLite 生效，双 worker 并发下只有一个成功。
     """
-    from datetime import datetime, timezone
 
     try:
         async with session_factory() as session:

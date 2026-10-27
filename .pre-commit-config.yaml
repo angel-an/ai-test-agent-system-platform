@@ -15,3 +15,13 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      # F811：同名定义静默覆盖（曾实锤两起：test_run_repo 同名方法、
+      # coverage_review_tools 同名 tool 覆盖平台函数 import）。
+      # 只启这一条规则，不引入全量风格检查。
+      - id: ruff-f811
+        name: Ruff F811 (redefinition of unused name)
+        entry: .venv/Scripts/ruff.exe check backend/app --select F811 --quiet
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

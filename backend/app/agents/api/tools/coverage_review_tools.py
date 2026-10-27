@@ -34,7 +34,9 @@ from app.models.project import Project
 from app.test_platform.api_coverage_review import (
     PLATFORM_RULES,
     ApiCoverageReport,
-    review_api_coverage,
+    # 别名：本模块下方有同名 @tool 包装函数，直接 import 同名会在模块级被
+    # 覆盖（F811），函数体内的调用会解析到 tool 对象自身而非平台函数。
+    review_api_coverage as _run_coverage_review,
 )
 
 logger = logging.getLogger(__name__)
@@ -279,7 +281,7 @@ async def review_api_coverage(
                 for ep in endpoints
             ]
 
-            report = review_api_coverage(
+            report = _run_coverage_review(
                 endpoint_dicts,
                 claims_map,
                 rules=PLATFORM_RULES,
