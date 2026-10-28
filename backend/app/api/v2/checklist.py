@@ -77,6 +77,7 @@ class ChecklistRowIn(BaseModel):
 
 class ChecklistImportRequest(BaseModel):
     rows: list[ChecklistRowIn] = Field(..., min_length=1)
+    dry_run: bool = Field(default=False, description="只算 diff 不落库（同步面板预览）")
 
 
 class RunResultItem(BaseModel):
@@ -122,7 +123,7 @@ def _row_out(r) -> dict[str, Any]:
 @router.post(
     "/import",
     response_model=SuccessResponse[dict[str, Any]],
-    summary="Checklist 行导入（row_id 幂等 upsert）",
+    summary="Checklist 行导入（row_id 幂等 upsert，支持 dry-run 预览）",
 )
 async def import_rows(
     project_identifier: str,
@@ -133,10 +134,61 @@ async def import_rows(
         project = await repo.get_project(db, project_identifier)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    counts = await repo.upsert_rows(
-        db, project.id, [r.model_dump() | {"source_row": r.row} for r in request.rows]
+    result = await repo.upsert_rows(
+        db, project.id,
+        [r.model_dump() | {"source_row": r.row} for r in request.rows],
+        persist=not request.dry_run,
     )
-    return SuccessResponse(success=True, data={"counts": counts, "total": len(request.rows)})
+    return SuccessResponse(
+        success=True,
+        data={"counts": result["counts"], "total": len(request.rows),
+              "details": result["details"]},
+    )
+
+
+@router.post(
+    "/sync-preview",
+    response_model=SuccessResponse[dict[str, Any]],
+    summary="上传腾讯文档导出的表格文件，预览同步 diff（不落库）",
+)
+async def sync_preview(
+    project_identifier: str,
+    db: DbSessionDep,
+    file: Annotated[UploadFile, File(description="腾讯文档导出的 .json/.csv 表格行")],
+) -> SuccessResponse[dict[str, Any]]:
+    """同步面板第一步：解析 + 计算逐行 diff，不写库。
+
+    解析与锚定规则与 checklist-sync skill 脚本同源（app/services/checklist_sync.py）。
+    """
+    from app.services import checklist_sync
+
+    try:
+        project = await repo.get_project(db, project_identifier)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+    try:
+        raw_rows = checklist_sync.parse_sheet(data, file.filename or "")
+        items, dup = checklist_sync.build_items(raw_rows)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"表格文件解析失败: {exc}") from exc
+    if not items:
+        raise HTTPException(status_code=400, detail="未解析到有效行（需要 主模块/功能点 列）")
+
+    result = await repo.upsert_rows(
+        db, project.id,
+        [i | {"source_row": i.pop("row")} for i in items],
+        persist=False,
+    )
+    return SuccessResponse(
+        success=True,
+        data={"counts": result["counts"], "total": len(items),
+              "dup_row_ids": dup, "details": result["details"],
+              "items": items},
+    )
 
 
 @router.get(

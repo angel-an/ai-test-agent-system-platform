@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ClipboardList,
   ExternalLink,
+  FileUp,
   Loader2,
   RefreshCw,
   XCircle,
@@ -27,8 +28,11 @@ import {
   getChecklistRows,
   getChecklistRuns,
   getChecklistRun,
+  previewChecklistSync,
+  importChecklist,
   type ChecklistRow,
   type ChecklistRunSummary,
+  type SyncPreviewData,
 } from "@/lib/api/checklist";
 
 type RowResult = {
@@ -156,6 +160,170 @@ function EvidenceLink({ evidence, projectId }: { evidence: string; projectId: st
   );
 }
 
+const DIFF_FIELD_LABEL: Record<string, string> = {
+  title: "标题",
+  expected: "预期",
+  priority: "优先级",
+  probe_kind: "探针",
+  data_mode: "数据模式",
+};
+
+/** 同步面板：上传腾讯文档导出的表格 → 预览行级 diff → 确认导入。 */
+function SyncPanel({ projectId, onImported }: { projectId: string; onImported: () => void }) {
+  const fileRef = React.useRef<HTMLInputElement>(null);
+  const [file, setFile] = React.useState<File | null>(null);
+  const [preview, setPreview] = React.useState<SyncPreviewData | null>(null);
+  const [busy, setBusy] = React.useState(false);
+
+  const doPreview = async () => {
+    if (!file) return;
+    try {
+      setBusy(true);
+      const resp = await previewChecklistSync(projectId, file);
+      if (resp.success) setPreview(resp.data);
+    } catch (e) {
+      console.error("sync preview failed:", e);
+      toast.error("同步预览失败，请确认是腾讯文档导出的 JSON/CSV");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doImport = async () => {
+    if (!preview) return;
+    try {
+      setBusy(true);
+      const resp = await importChecklist(projectId, preview.items);
+      if (resp.success) {
+        const c = resp.data.counts;
+        toast.success(
+          `导入完成：新增 ${c.created} · 更新 ${c.updated} · 未变 ${c.skipped}`
+        );
+        setPreview(null);
+        setFile(null);
+        if (fileRef.current) fileRef.current.value = "";
+        onImported();
+      }
+    } catch (e) {
+      console.error("sync import failed:", e);
+      toast.error("导入失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const driftCount = preview ? preview.counts.created + preview.counts.updated : 0;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">清单同步</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <p className="text-xs text-muted-foreground">
+          通过 WorkBuddy 从腾讯文档《上线Checklist》导出表格（JSON/CSV）后上传：
+          先预览与平台现有清单的差异（不落库），确认后再导入。row_id 按
+          主模块|子模块|功能点 锚定，重复同步不会产生重复行。
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".json,.csv,application/json,text/csv"
+            className="hidden"
+            onChange={(e) => {
+              setFile(e.target.files?.[0] ?? null);
+              setPreview(null);
+            }}
+          />
+          <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+            <FileUp className="mr-2 h-4 w-4" />
+            {file ? file.name : "选择导出文件"}
+          </Button>
+          <Button size="sm" onClick={doPreview} disabled={!file || busy}>
+            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            预览差异
+          </Button>
+          {preview && (
+            <Button
+              size="sm"
+              variant={driftCount > 0 ? "default" : "outline"}
+              onClick={doImport}
+              disabled={busy || driftCount === 0}
+            >
+              确认导入（{driftCount} 行变更）
+            </Button>
+          )}
+        </div>
+
+        {preview && (
+          <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              <span>解析 {preview.total} 行</span>
+              <Badge variant="outline">未变 {preview.counts.skipped}</Badge>
+              {preview.counts.created > 0 && (
+                <Badge className="bg-green-600">新增 {preview.counts.created}</Badge>
+              )}
+              {preview.counts.updated > 0 && (
+                <Badge variant="destructive">变更 {preview.counts.updated}</Badge>
+              )}
+              {preview.dup_row_ids > 0 && (
+                <span className="text-amber-600">
+                  {preview.dup_row_ids} 个重复 row_id（主模块|子模块|功能点 相同）
+                </span>
+              )}
+              {driftCount === 0 && (
+                <span className="text-muted-foreground">与平台一致，无需导入</span>
+              )}
+            </div>
+            {preview.details.length > 0 && (
+              <div className="max-h-64 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-left text-muted-foreground">
+                      <th className="py-1 pr-3 font-medium">动作</th>
+                      <th className="py-1 pr-3 font-medium">row_id</th>
+                      <th className="py-1 pr-3 font-medium">标题</th>
+                      <th className="py-1 font-medium">字段变更（旧 → 新）</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.details.map((d) => (
+                      <tr key={d.row_id} className="border-b align-top">
+                        <td className="py-1 pr-3 whitespace-nowrap">
+                          {d.action === "created" ? (
+                            <Badge className="bg-green-600">新增</Badge>
+                          ) : (
+                            <Badge variant="destructive">变更</Badge>
+                          )}
+                        </td>
+                        <td className="py-1 pr-3 font-mono">{d.row_id}</td>
+                        <td className="max-w-[220px] py-1 pr-3">{d.title}</td>
+                        <td className="py-1">
+                          {Object.entries(d.changes).map(([field, [oldV, newV]]) => (
+                            <div key={field}>
+                              <span className="text-muted-foreground">
+                                {DIFF_FIELD_LABEL[field] || field}：
+                              </span>
+                              <span className="line-through">{oldV || "（空）"}</span>
+                              {" → "}
+                              <span className="font-medium">{newV || "（空）"}</span>
+                            </div>
+                          ))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ChecklistPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -276,6 +444,9 @@ export default function ChecklistPage() {
             刷新
           </Button>
         </div>
+
+        {/* 清单同步 */}
+        <SyncPanel projectId={projectId} onImported={loadRows} />
 
         {/* 执行历史 */}
         <Card>

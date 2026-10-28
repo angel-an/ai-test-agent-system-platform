@@ -23,18 +23,33 @@ async def get_project(session: AsyncSession, project_identifier: str) -> Project
     return project
 
 
-async def upsert_rows(session: AsyncSession, project_id: UUID, rows: list[dict]) -> dict:
-    """全量 upsert：存在且 content_md5 一致 → skipped；存在但变更 → updated；不存在 → created。"""
+async def upsert_rows(
+    session: AsyncSession, project_id: UUID, rows: list[dict], persist: bool = True
+) -> dict:
+    """全量 upsert：存在且 content_md5 一致 → skipped；存在但变更 → updated；不存在 → created。
+
+    persist=False 时为 dry-run：只计算不写入不提交（同步面板预览用）。
+    返回 counts 与 details（created/updated 的逐行明细，updated 带字段级 before/after）。
+    """
     result = await session.execute(
         select(ChecklistRow).where(ChecklistRow.project_id == project_id)
     )
     existing = {r.row_id: r for r in result.scalars()}
     counts = {"created": 0, "updated": 0, "skipped": 0}
+    details: list[dict] = []
     now = datetime.now(timezone.utc)
     for row in rows:
         rid = row["row_id"]
         cur = existing.get(rid)
         if cur is None:
+            counts["created"] += 1
+            details.append({
+                "row_id": rid, "action": "created", "title": row.get("title", ""),
+                "main_module": row.get("main_module", ""),
+                "changes": {},
+            })
+            if not persist:
+                continue
             session.add(
                 ChecklistRow(
                     id=uuid4(),
@@ -53,27 +68,51 @@ async def upsert_rows(session: AsyncSession, project_id: UUID, rows: list[dict])
                     extra=row.get("extra"),
                 )
             )
-            counts["created"] += 1
         else:
             if cur.content_md5 == row.get("content_md5", ""):
                 counts["skipped"] += 1
-                # 行号快照仍需刷新（表格行可能移动）
-                cur.source_row = row.get("source_row", cur.source_row)
-            else:
-                cur.title = row.get("title", cur.title)
-                cur.main_module = row.get("main_module", cur.main_module)
-                cur.sub_module = row.get("sub_module", cur.sub_module)
-                cur.feature = row.get("feature", cur.feature)
-                cur.expected = row.get("expected", cur.expected)
-                cur.priority = row.get("priority", cur.priority)
-                cur.probe_kind = row.get("probe_kind", cur.probe_kind)
-                cur.data_mode = row.get("data_mode", cur.data_mode)
-                cur.content_md5 = row.get("content_md5", cur.content_md5)
-                cur.extra = row.get("extra", cur.extra)
-                cur.updated_at = now
-                counts["updated"] += 1
-    await session.commit()
-    return counts
+                if persist:
+                    # 行号快照仍需刷新（表格行可能移动）
+                    cur.source_row = row.get("source_row", cur.source_row)
+                continue
+            changes = _diff_fields(cur, row)
+            counts["updated"] += 1
+            details.append({
+                "row_id": rid, "action": "updated", "title": row.get("title", cur.title),
+                "main_module": row.get("main_module", cur.main_module),
+                "changes": changes,
+            })
+            if not persist:
+                continue
+            cur.title = row.get("title", cur.title)
+            cur.main_module = row.get("main_module", cur.main_module)
+            cur.sub_module = row.get("sub_module", cur.sub_module)
+            cur.feature = row.get("feature", cur.feature)
+            cur.expected = row.get("expected", cur.expected)
+            cur.priority = row.get("priority", cur.priority)
+            cur.probe_kind = row.get("probe_kind", cur.probe_kind)
+            cur.data_mode = row.get("data_mode", cur.data_mode)
+            cur.content_md5 = row.get("content_md5", cur.content_md5)
+            cur.extra = row.get("extra", cur.extra)
+            cur.updated_at = now
+    if persist:
+        await session.commit()
+    else:
+        await session.rollback()  # dry-run 绝不留痕
+    return {"counts": counts, "details": details}
+
+
+def _diff_fields(cur: ChecklistRow, row: dict) -> dict:
+    """字段级 before/after，仅列实际变化的字段（content_md5 差异的展开）。"""
+    changes = {}
+    for field in ("title", "expected", "priority", "probe_kind", "data_mode"):
+        old = getattr(cur, field) or ""
+        new = row.get(field) or ""
+        if old != new:
+            changes[field] = [old, new]
+    if not changes:
+        changes["_note"] = ["content_md5 不一致但五字段相同（可能 extra 变更）", ""]
+    return changes
 
 
 async def list_rows(session: AsyncSession, project_id: UUID) -> list[ChecklistRow]:
