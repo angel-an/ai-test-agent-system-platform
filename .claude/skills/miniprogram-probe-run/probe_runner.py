@@ -87,25 +87,31 @@ def login(base: str, username: str, password: str) -> str:
 # minium 驱动
 # ---------------------------------------------------------------------------
 
-def goto_page(mini, page_path: str, timeout: float = 12.0) -> bool:
-    """导航到页面；tab 页用 switch_tab，其余 navigate_to。返回是否落在该页。"""
+def goto_page(mini, page_path: str, timeout: float = 15.0) -> bool:
+    """导航到页面并断言落地。tabBar 页微信禁 navigateTo，依次尝试
+    switch_tab → relaunch → navigate_to；Uncaught 异步报错一律吞掉
+    （导航可能实际成功），最终以 page path 裁决，不轻信任何 SDK 返回值。"""
     app = mini.app
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            cur = app.get_current_page()
-            cur_path = getattr(cur, "path", "") or ""
-            if cur_path.strip("/") == page_path.strip("/"):
+            cur = (getattr(app.get_current_page(), "path", "") or "").strip("/")
+            if cur == page_path.strip("/"):
                 return True
-            if page_path in TAB_PAGES:
-                mini.native.switch_tab(page_path)
-            else:
-                app.navigate_to(page_path)
+            try:
+                if page_path in TAB_PAGES:
+                    app.switch_tab(page_path, is_wait_url_change=True,
+                                   wait_route_done_time=10)
+                else:
+                    app.navigate_to(page_path)
+            except Exception:
+                # 方法失败不立即放弃：吞错后看实际落点（异步 JS 报错会伪装成命令异常）
+                pass
             time.sleep(2.0)
         except Exception:
             time.sleep(1.5)
-    cur = app.get_current_page()
-    return (getattr(cur, "path", "") or "").strip("/") == page_path.strip("/")
+    return (getattr(app.get_current_page(), "path", "") or "").strip("/") \
+        == page_path.strip("/")
 
 
 def find_element(page, spec: dict):
@@ -160,7 +166,7 @@ def probe_row(mini, row: dict, spec: dict | None, evidence_dir: str) -> dict:
             item["error"] = f"页面不可达：{spec['page']}"
             return item
         page = mini.app.get_current_page()
-        kind = row.get("probe_kind") or "reachable"
+        kind = spec.get("probe_as") or row.get("probe_kind") or "reachable"
 
         if kind == "reachable":
             item["status"] = "pass"
@@ -194,11 +200,42 @@ def probe_row(mini, row: dict, spec: dict | None, evidence_dir: str) -> dict:
                     except Exception as exc:
                         item["error"] = f"点击失败：{exc}"[:200]
                 if not clicked and target:
-                    # IDE 模式组件内点击/坐标点击不可用：直达落地页验证
-                    goto_page(mini, target)
-                    time.sleep(1.0)
+                    # tabBar 页 navigateTo 违法；三种合法跳法都试，吞错后以落点裁决
+                    ok = False
+                    # 非 tab 页 navigate_to 已实测最稳排第一；tab 页 navigateTo 违法，
+                    # switch_tab 排第一。relaunch 会毒化会话状态，只作最后兜底。
+                    if target in TAB_PAGES:
+                        attempts = ("switch_tab", "navigate_to", "relaunch")
+                    else:
+                        attempts = ("navigate_to", "relaunch", "switch_tab")
+                    for attempt in attempts:
+                        try:
+                            if attempt == "switch_tab":
+                                mini.app.switch_tab(target, is_wait_url_change=True,
+                                                    wait_route_done_time=10)
+                            elif attempt == "relaunch":
+                                mini.app.relaunch(target)
+                            else:
+                                mini.app.navigate_to(target)
+                        except Exception:
+                            pass
+                        time.sleep(2.5)
+                        try:
+                            cur = (getattr(mini.app.get_current_page(), "path", "")
+                                   or "").strip("/")
+                        except Exception:
+                            time.sleep(1.5)
+                            cur = (getattr(mini.app.get_current_page(), "path", "")
+                                   or "").strip("/")
+                        if cur == target.strip("/"):
+                            ok = True
+                            break
                     if note:
                         item["consistency"] = note
+                    if not ok:
+                        item["status"] = "fail"
+                        item["error"] = (item["error"] or "") + \
+                            f"落地页 {target} 经 switchTab/reLaunch/navigateTo 均未到达"
                 cur = (getattr(mini.app.get_current_page(), "path", "") or "").strip("/")
                 expect = (spec.get("expect_path_prefix") or "").strip("/")
                 if not expect or cur.startswith(expect):

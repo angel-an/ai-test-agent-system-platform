@@ -2,7 +2,7 @@
   "CK-0a7e9e9b": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "banner_1", "target_page": "pages/store/goods", "expect_path_prefix": "pages/store/goods", "note": "swiper path 静态绑定 /pages/store/goods；组件内点击 IDE 不支持，经数据断言+直达落地页验证"},
   "CK-9d487968": {"page": "pages/home/index", "kind_hint": "visible", "data_path": "isRequestAdvertisement", "data_expect": true, "note": "开屏广告开关；splash 组件仅启动瞬间存在，改断言广告配置下发"},
   "CK-7f4e57c3": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "userInfo", "target_page": "pages/member/mine/index", "expect_path_prefix": "pages/member/mine/index", "note": "个人资料区入口；点击会触发订阅消息弹窗，改直达会员页+userInfo 数据断言"},
-  "CK-12818907": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "scanUrlList", "target_page": "pages/store/goods", "expect_path_prefix": "pages/store/goods", "note": "堂食店内用餐入口"},
+  "CK-12818907": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "scanUrlList", "note": "堂食=type:scanCode 扫桌码入口（源码 components/wagasEatContainer），触发 wx.scanCode 不跳页；模拟器无法自动化扫码，断言入口配置存在（2026-10-28 复核修正：原断言落地 store/goods 是测试侧语义错误）"},
   "CK-c69fb2db": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "scanUrlList", "target_page": "pages/store/goods", "expect_path_prefix": "pages/store/goods", "note": "到店取（自提）入口"},
   "CK-23fb8ff9": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "scanUrlList", "target_page": "pages/store/goods", "expect_path_prefix": "pages/store/goods", "note": "小杨送（配送）入口"},
   "CK-89d03f1f": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "bonus.0.image", "target_page": "member/pages/payingMember/pay/index", "note": "储值有礼，bonusPath=/member/pages/payingMember/pay/index"},
