@@ -30,8 +30,13 @@ from app.repositories.api_test_repo import (
 )
 from app.config.minio_client import MinIOClient
 from app.schemas.enums import TestResultStatus
+from app.utils.exceptions import BadRequestException
 from app.models.mongodb.api_test_log import APITestDetailLog
 from app.services.defect_registration_service import DefectRegistrationService
+from app.services.base_url_guard import (
+    ALLOW_BASE_URL_OVERRIDE_KEY,
+    check_base_url_override,
+)
 from app.services.trace_evidence import extract_from_result as extract_trace_exchange
 from app.services.evidence_artifacts import (
     evidence_url_map,
@@ -59,6 +64,29 @@ class APITestExecutor:
         # 不持引用的任务可能在执行中被 GC 回收（Python 官方文档明确要求保存引用）
         self._background_tasks: set = set()
 
+    @staticmethod
+    def _reject_unsafe_base_url_override(
+        api_test: APITest,
+        execution_config: Dict[str, Any],
+    ) -> None:
+        """执行前拦下会丢失路径前缀的 base_url 覆盖。
+
+        用例配置里存的是带网关段的完整前缀（如 ``https://host/yundt-saas-gateway``），
+        调用方传域级地址会把网关段吃掉，请求打到不存在的路径、网关回空 body 404，
+        再被断言层当成"被测系统 4xx"登记成缺陷 —— 2026-10-28 的 IDP
+        ``jf-20260122392-01-3229`` 就是这么来的。这里直接拒绝，而不是告警后继续。
+        """
+        configured = (getattr(api_test, "test_config", None) or {}).get("base_url")
+        override = (execution_config or {}).get("base_url")
+        allow = bool((execution_config or {}).get(ALLOW_BASE_URL_OVERRIDE_KEY))
+        reason = check_base_url_override(configured, override, allow=allow)
+        if reason:
+            logger.warning(
+                "拒绝执行：base_url 覆盖不安全 api_test=%s configured=%s override=%s",
+                getattr(api_test, "identifier", None), configured, override,
+            )
+            raise BadRequestException(reason)
+
     async def execute_test(
         self,
         api_test_id: UUID,
@@ -78,6 +106,10 @@ class APITestExecutor:
         api_test = await self.api_test_repo.get_by_id(api_test_id)
         if not api_test:
             raise ValueError(f"API 测试不存在: {api_test_id}")
+
+        # 1.5 base_url 覆盖防呆：必须在建 run 之前拦下，否则会留下一条"看起来执行过"的
+        # 记录，且后续会按里面的 4xx 登记成被测系统缺陷（2026-10-28 假单实证）。
+        self._reject_unsafe_base_url_override(api_test, execution_config or {})
 # noqa  MC80OmFIVnBZMlhscm9ua3VMazZja1JKUWc9PTo1ZDNlZmUwMw==
 
         # 2. 创建测试运行记录
