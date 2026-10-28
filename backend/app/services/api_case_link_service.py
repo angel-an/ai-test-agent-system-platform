@@ -8,8 +8,10 @@ TestCase + APITest 脚本，并建立三方关联。复杂的 AI 需求理解仍
 
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -45,6 +47,11 @@ from app.services.api_pagination_contracts import (
     resolve_pagination_contract,
 )
 from app.services.api_response_envelope import resolve_envelope_field
+from app.services.api_script_template import (
+    API_SCRIPT_TEMPLATE_REV,
+    fingerprint_line,
+    template_digest,
+)
 from app.utils.identifier import generate_test_case_identifier
 
 
@@ -58,6 +65,29 @@ def _unverified_reason(contract: Any) -> str:
         f"分页参数未确认（provenance=unverified）：{contract.note}"
         " —— 该接口当前无法给出可信结论，显式跳过（不静默通过）"
     )
+
+
+#: 组成脚本产物的方法集合：模板本体 + 样本值推导 + 分页契约渲染。
+#: digest 覆盖这些源码，任何一处改动都会让历史产物判为 ``digest_mismatch``。
+_TEMPLATE_SOURCE_METHODS = (
+    "_generate_playwright_script",
+    "_render_pagination_block",
+    "_sample_path",
+    "_sample_payload",
+    "_sample_headers",
+    "_sample_query_params",
+    "_is_mutating_endpoint",
+)
+
+
+@lru_cache(maxsize=1)
+def script_template_digest() -> str:
+    """当前模板源码摘要（12 位）。进程内缓存：模板随代码发布变化，不需要运行期热更。"""
+    chunks = [
+        inspect.getsource(getattr(APICaseLinkService, name))
+        for name in _TEMPLATE_SOURCE_METHODS
+    ]
+    return template_digest(chunks)
 
 
 class APICaseLinkService:
@@ -358,7 +388,7 @@ class APICaseLinkService:
             f"api-tests/{project_identifier}/endpoints/{endpoint.id}/"
             f"linked/{uuid4().hex}/test-script.ts"
         )
-        script_content = self._generate_playwright_script(endpoint)
+        script_content = self.render_script(endpoint)
         storage_info = self._store_script(object_name, script_content)
 
         api_test = APITest(
@@ -382,7 +412,12 @@ class APICaseLinkService:
                 "storage": storage_info,
             },
             generated_by_agent="api_case_link_service",
-            generation_params={"mode": "minimal_loop"},
+            generation_params={
+                "mode": "minimal_loop",
+                # 版本戳：P2 的判据来源。没有它，"这条脚本按哪版模板生成"无从判断，
+                # 模板改进后也无法识别哪些资产需要重建（历史上正是这样静默腐化的）。
+                "script_template": self.script_stamp(),
+            },
             total_endpoints=1,
             total_scenarios=1,
         )
@@ -524,6 +559,20 @@ class APICaseLinkService:
         if isinstance(properties, dict):
             return sorted(properties.keys())
         return []
+
+    @staticmethod
+    def script_stamp() -> dict[str, Any]:
+        """当前模板的版本戳，写进 ``generation_params.script_template``。"""
+        return {"rev": API_SCRIPT_TEMPLATE_REV, "digest": script_template_digest()}
+
+    def render_script(self, endpoint: APIEndpoint) -> str:
+        """渲染可执行脚本（首行带版本指纹）。
+
+        指纹行是**纯注释**：执行器把这段文本当 TS 直接跑，不能带任何执行语义。
+        生成期与重建期都走这一个入口，避免两处各拼一遍正文。
+        """
+        body = self._generate_playwright_script(endpoint)
+        return fingerprint_line(digest=script_template_digest()) + "\n" + body
 
     def _generate_playwright_script(self, endpoint: APIEndpoint) -> str:
         method = endpoint.method.upper()

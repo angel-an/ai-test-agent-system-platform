@@ -87,6 +87,49 @@ async def preview_intent(project_identifier: str, request: PreviewIntentRequest,
 
 # ============ API 测试管理接口 ============
 
+class RefreshScriptsRequest(BaseModel):
+    """脚本重建请求体。默认 ``dry_run=True``：批量改资产要显式要求执行。"""
+
+    dry_run: bool = Field(default=True, description="只报告不改动")
+    api_test_ids: list[str] | None = Field(default=None, description="只处理指定资产")
+
+
+@router.post(
+    "/scripts/refresh",
+    response_model=SuccessResponse,
+    summary="重建跟随模板版本的脚本资产",
+    description=(
+        "比对已生成脚本的模板指纹与当前模板：无指纹/版本不同/源码不同即视为过期。"
+        "dry_run=true 只报告，dry_run=false 就地覆盖重建（script_path 不变）。"
+    ),
+)
+async def refresh_script_assets(
+    project_identifier: str,
+    db: DbSessionDep,
+    payload: RefreshScriptsRequest | None = None,
+):
+    """让历史脚本跟上当前模板。
+
+    动机：脚本是生成期一次性产物，模板改进不会回流到已生成的资产上。
+    没有这个入口，"模板已修好"和"库里还是旧脚本"会长期并存，
+    而且从界面上完全看不出来 —— 跑出来的结论取决于资产生成日期。
+    """
+    from app.services.api_script_refresh_service import APIScriptRefreshService
+
+    request = payload or RefreshScriptsRequest()
+    report = await APIScriptRefreshService(db).refresh(
+        project_identifier,
+        dry_run=request.dry_run,
+        api_test_ids=request.api_test_ids,
+    )
+    message = (
+        f"待重建 {report['stale']} 条（dry_run，未改动）"
+        if report["dry_run"]
+        else f"已重建 {report['regenerated']} 条，失败 {report['failed']} 条"
+    )
+    return SuccessResponse(data=report, message=message)
+
+
 @router.post(
     "",
     response_model=SuccessResponse,
