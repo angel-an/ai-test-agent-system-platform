@@ -244,6 +244,28 @@ class IDPDefectService:
             web_base = getattr(settings, 'idp_web_base_url', settings.idp_base_url).rstrip('/')
             issue_url = f"{web_base}/agile/issues/{issue_id}" if issue_id else None
 
+            # 防御：拿不到 issueId 就不能标 created。
+            # 2026-09-30 出现过一批「status=created 但 issue_id/key/url 全空」的记录
+            # （响应键兼容修复之前产生的），这类记录永远校验不了、永远同步不出去，
+            # 也无法再去 IDP 关联。宁可判 sync_failed 让人看见，也不要静默标成功。
+            if not issue_id:
+                reason = (
+                    "IDP 建单响应未返回 issueId（响应键: %s），无法校验/关联，按同步失败处理"
+                    % ", ".join(sorted(str(k) for k in result.keys()))[:200]
+                )
+                logger.warning(
+                    "[IDPDefectService] %s | issue_key=%s result_keys=%s",
+                    reason,
+                    issue_key,
+                    list(result.keys()),
+                )
+                return await self.record_repo.update(
+                    record,
+                    create_status=IDPDefectStatus.SYNC_FAILED.value,
+                    idp_issue_key=issue_key,
+                    error_message=reason[:500],
+                )
+
             updated = await self.record_repo.update(
                 record,
                 create_status=IDPDefectStatus.CREATED.value,
