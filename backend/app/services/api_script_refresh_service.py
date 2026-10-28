@@ -55,6 +55,8 @@ ACTION_WOULD_REGENERATE = "would_regenerate"
 ACTION_REGENERATED = "regenerated"
 ACTION_FAILED = "failed"
 ACTION_SKIPPED_NO_ENDPOINT = "skipped_missing_endpoint"
+ACTION_CURRENT = "current"
+ACTION_NOT_TEMPLATE = "not_template"
 
 
 class APIScriptRefreshService:
@@ -121,7 +123,7 @@ class APIScriptRefreshService:
                 items.append(entry)
                 continue
 
-            action, detail = await self._regenerate(api_test, previous_stamp=stamp)
+            action, detail, _ = await self._regenerate(api_test, previous_stamp=stamp)
             entry["action"] = action
             if action == ACTION_REGENERATED:
                 regenerated += 1
@@ -158,6 +160,55 @@ class APIScriptRefreshService:
             "items": items,
         }
 
+    async def ensure_current(
+        self,
+        api_test: APITest,
+        *,
+        current_content: Optional[str] = None,
+    ) -> tuple[str, Optional[str], str]:
+        """执行前确保这条资产跟得上当前模板（``/run`` 链路专用）。
+
+        与 ``refresh()`` 的区别：这里只针对**正要执行的那一条**，且默认动作是重建
+        ——执行已经开始，用户不会有机会再手动调一次 refresh。
+
+        Returns:
+            ``(action, rendered_content, reason)``
+
+            - ``not_template``：非模板产物（人工/导入脚本），不比对也不重建
+            - ``current``：已是最新，调用方继续用手上的内容
+            - ``regenerated``：已重建，**必须**用返回的 ``rendered_content`` 执行
+            - ``failed`` / ``skipped_missing_endpoint``：没重建成功，调用方用旧内容继续，
+              但这次执行的结论要当作"基于过期模板"看待
+        """
+        if api_test.generated_by_agent != TEMPLATE_GENERATED_BY:
+            return ACTION_NOT_TEMPLATE, None, ""
+
+        stamp = (api_test.generation_params or {}).get("script_template")
+        reason = stale_reason(stamp, current_digest=script_template_digest())
+        if reason is None:
+            return ACTION_CURRENT, None, ""
+
+        previous_bytes = (
+            current_content.encode("utf-8") if current_content is not None else None
+        )
+        action, detail, content = await self._regenerate(
+            api_test, previous_stamp=stamp, previous_bytes=previous_bytes
+        )
+        if action == ACTION_REGENERATED:
+            # 后台会话没有请求级依赖注入代为提交：不 commit 会被回滚，
+            # 而对象存储那边已经覆盖了 —— 版本戳与脚本内容就此对不上。
+            await self.session.commit()
+            logger.info(
+                "[ScriptRefresh] 执行前重建 %s（%s）", api_test.identifier, reason
+            )
+            return ACTION_REGENERATED, content, reason
+
+        logger.warning(
+            "[ScriptRefresh] 执行前重建失败 %s（%s）：%s —— 本次仍按旧脚本执行",
+            api_test.identifier, reason, detail,
+        )
+        return action, None, detail or reason
+
     async def _get_project(self, project_identifier: str) -> Project:
         project = (
             await self.session.execute(
@@ -173,24 +224,27 @@ class APIScriptRefreshService:
         api_test: APITest,
         *,
         previous_stamp: Optional[dict[str, Any]] = None,
-    ) -> tuple[str, str]:
-        """就地重建单条脚本，返回 ``(action, detail)``。"""
+        previous_bytes: Optional[bytes] = None,
+    ) -> tuple[str, str, Optional[str]]:
+        """就地重建单条脚本，返回 ``(action, detail, rendered_content)``。"""
         endpoint_id_raw = (api_test.test_config or {}).get("endpoint_id")
         if not endpoint_id_raw:
-            return ACTION_SKIPPED_NO_ENDPOINT, "test_config 里没有 endpoint_id"
+            return ACTION_SKIPPED_NO_ENDPOINT, "test_config 里没有 endpoint_id", None
         try:
             endpoint_id = UUID(str(endpoint_id_raw))
         except ValueError:
-            return ACTION_SKIPPED_NO_ENDPOINT, f"endpoint_id 非法: {endpoint_id_raw}"
+            return ACTION_SKIPPED_NO_ENDPOINT, f"endpoint_id 非法: {endpoint_id_raw}", None
 
         endpoint = await self.session.get(APIEndpoint, endpoint_id)
         if endpoint is None:
-            return ACTION_SKIPPED_NO_ENDPOINT, f"端点已不存在: {endpoint_id}"
+            return ACTION_SKIPPED_NO_ENDPOINT, f"端点已不存在: {endpoint_id}", None
 
         try:
             content = self.link_service.render_script(endpoint)
             payload = content.encode("utf-8")
-            archived = self._archive_previous(api_test.script_path)
+            archived = self._archive_previous(
+                api_test.script_path, previous_bytes=previous_bytes
+            )
             MinIOClient.upload_bytes(
                 object_name=api_test.script_path,
                 data=payload,
@@ -200,7 +254,7 @@ class APIScriptRefreshService:
             logger.warning(
                 "[ScriptRefresh] 重建失败 %s: %s", api_test.identifier, exc
             )
-            return ACTION_FAILED, str(exc)
+            return ACTION_FAILED, str(exc), None
 
         await self._sync_attachment_size(api_test.script_path, len(payload))
 
@@ -214,26 +268,32 @@ class APIScriptRefreshService:
             "previous": {**(previous_stamp or {}), "archived_object": archived},
         }
         api_test.generation_params = generation_params
-        return ACTION_REGENERATED, ""
+        return ACTION_REGENERATED, "", content
 
-    def _archive_previous(self, object_name: str) -> Optional[str]:
+    def _archive_previous(
+        self, object_name: str, *, previous_bytes: Optional[bytes] = None
+    ) -> Optional[str]:
         """覆盖前把旧脚本另存一份，返回归档对象名。
 
         重建是**破坏性**的（同一路径覆盖），没有归档就没有回退路径：
         一旦新模板对某个接口产生更松/更严的判定，事后想复现旧结论就没材料了。
         归档失败直接抛 —— 宁可这条不重建，也不要在无备份的情况下覆盖。
+
+        ``previous_bytes``：调用方已经下载过内容时直接传入，省一次对象存储往返
+        （执行前自动重建的热路径上，内容本来就在手上）。
         """
-        try:
-            previous = MinIOClient.download_file(object_name)
-        except Exception:
-            # 对象本来就不存在（如从未成功上传）→ 没有可丢的内容
-            return None
+        if previous_bytes is None:
+            try:
+                previous_bytes = MinIOClient.download_file(object_name)
+            except Exception:
+                # 对象本来就不存在（如从未成功上传）→ 没有可丢的内容
+                return None
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
         directory, _, filename = object_name.rpartition("/")
         archived_name = f"{directory}/history/{stamp}-{filename}"
         MinIOClient.upload_bytes(
             object_name=archived_name,
-            data=previous,
+            data=previous_bytes,
             content_type="text/plain",
         )
         return archived_name

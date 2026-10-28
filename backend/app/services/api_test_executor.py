@@ -33,6 +33,13 @@ from app.schemas.enums import TestResultStatus
 from app.utils.exceptions import BadRequestException
 from app.models.mongodb.api_test_log import APITestDetailLog
 from app.services.defect_registration_service import DefectRegistrationService
+from app.services.api_script_refresh_service import (
+    ACTION_FAILED as SCRIPT_REBUILD_FAILED,
+    ACTION_REGENERATED as SCRIPT_REGENERATED,
+    ACTION_SKIPPED_NO_ENDPOINT as SCRIPT_NO_ENDPOINT,
+    APIScriptRefreshService,
+)
+from app.services.api_script_template import API_SCRIPT_TEMPLATE_REV
 from app.services.base_url_guard import (
     ALLOW_BASE_URL_OVERRIDE_KEY,
     check_base_url_override,
@@ -46,6 +53,10 @@ from app.services.evidence_artifacts import (
 from app.services.web_failure_policy import classify_environment_block
 
 logger = logging.getLogger(__name__)
+
+#: 执行前模板比对自身出错（不是"脚本过期"，也不是用例失败）——按旧脚本继续跑并留痕。
+SCRIPT_CHECK_FAILED = "check_failed"
+
 
 class APITestExecutor:
     """
@@ -199,6 +210,57 @@ class APITestExecutor:
                 except Exception as write_err:
                     logger.error("回写 run 失败状态时出错 run_id=%s: %s", run_id, write_err)
 
+    async def _ensure_script_current(
+        self,
+        *,
+        run_id: UUID,
+        api_test: APITest,
+        script_content: str,
+    ) -> tuple[str, Optional[str], str]:
+        """执行前比对模板指纹，过期即就地重建。
+
+        设计取舍：**重建失败不阻塞执行**。模板过期只意味着"结论可能按旧规则得出"，
+        而完全跑不动等于丢掉这次执行的其它信息；所以失败时照旧脚本跑，只把状态
+        记到 run 上（``execution_config.script_template``），让结论可被追问。
+
+        Returns:
+            ``(action, rendered_content_or_None, reason)``；``rendered_content`` 非空时
+            调用方必须用它替换手上内容（重建结果不一定与下载回来的一致）。
+        """
+        try:
+            service = APIScriptRefreshService(self.session)
+            action, rendered, reason = await service.ensure_current(
+                api_test, current_content=script_content
+            )
+        except Exception as exc:  # 比对/重建任何异常都不该让用例跑不起来
+            logger.warning(
+                "[ScriptTemplate] 执行前比对失败 run=%s api_test=%s: %s",
+                run_id, getattr(api_test, "identifier", None), exc,
+            )
+            return SCRIPT_CHECK_FAILED, None, str(exc)
+
+        if action in (SCRIPT_REGENERATED, SCRIPT_REBUILD_FAILED, SCRIPT_NO_ENDPOINT):
+            await self._stamp_script_status(run_id, action, reason)
+        return action, rendered, reason
+
+    async def _stamp_script_status(
+        self, run_id: UUID, action: str, reason: str
+    ) -> None:
+        """把本次脚本版本状态写进 run 的 execution_config（排障时"用的哪版脚本"有据可查）。"""
+        try:
+            row = await self.api_test_run_repo.get_by_id(run_id)
+            if row is None:
+                return
+            config = dict(row.execution_config or {})
+            config["script_template"] = {
+                "action": action,
+                "reason": reason,
+                "rev": API_SCRIPT_TEMPLATE_REV,
+            }
+            await self.api_test_run_repo.update(row, execution_config=config)
+        except Exception as exc:
+            logger.warning("[ScriptTemplate] 记录脚本状态失败 run=%s: %s", run_id, exc)
+
     async def _execute_in_background_locked(
         self,
         run_id: UUID,
@@ -216,6 +278,20 @@ class APITestExecutor:
             # 2. 下载测试脚本
             script_content = MinIOClient.download_file(api_test.script_path)
             script_content = script_content.decode("utf-8")
+
+            # 2.5 执行前把资产跟到当前模板。
+            # 脚本是生成期的一次性产物，模板改过而这条没重建时，跑出来的结论对不上
+            # 当前规则，且从 API 表面完全看不出来。过期就地重建并**改用新内容执行**；
+            # 重建不成仍跑旧脚本（不让模板问题阻塞执行），但把状态落到 run 上留痕。
+            (
+                _script_status,
+                rendered_script,
+                _script_reason,
+            ) = await self._ensure_script_current(
+                run_id=run_id, api_test=api_test, script_content=script_content
+            )
+            if rendered_script is not None:
+                script_content = rendered_script
 
             # 3. 准备执行环境
             with tempfile.TemporaryDirectory() as temp_dir:
