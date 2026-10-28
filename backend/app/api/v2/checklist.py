@@ -19,7 +19,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.api.deps import DbSessionDep
+from app.api.deps import CurrentUserDep, DbSessionDep
 from app.config.minio_client import MinIOClient, MinIOError
 from app.schemas.common import SuccessResponse
 from app.repositories import checklist_repository as repo
@@ -127,6 +127,7 @@ def _row_out(r) -> dict[str, Any]:
 )
 async def import_rows(
     project_identifier: str,
+    user: CurrentUserDep,
     request: ChecklistImportRequest,
     db: DbSessionDep,
 ) -> SuccessResponse[dict[str, Any]]:
@@ -153,6 +154,7 @@ async def import_rows(
 )
 async def sync_preview(
     project_identifier: str,
+    user: CurrentUserDep,
     db: DbSessionDep,
     file: Annotated[UploadFile, File(description="腾讯文档导出的 .json/.csv 表格行")],
 ) -> SuccessResponse[dict[str, Any]]:
@@ -198,6 +200,7 @@ async def sync_preview(
 )
 async def list_rows(
     project_identifier: str,
+    user: CurrentUserDep,
     db: DbSessionDep,
     main_module: str | None = Query(default=None),
     priority: str | None = Query(default=None),
@@ -225,6 +228,7 @@ async def list_rows(
 )
 async def save_run_results(
     project_identifier: str,
+    user: CurrentUserDep,
     request: RunResultRequest,
     db: DbSessionDep,
 ) -> SuccessResponse[dict[str, Any]]:
@@ -250,6 +254,7 @@ async def save_run_results(
 )
 async def list_runs(
     project_identifier: str,
+    user: CurrentUserDep,
     db: DbSessionDep,
     limit: int = Query(default=20, ge=1, le=100),
 ) -> SuccessResponse[list[dict[str, Any]]]:
@@ -282,6 +287,7 @@ async def list_runs(
 )
 async def get_run(
     project_identifier: str,
+    user: CurrentUserDep,
     run_id: UUID,
     db: DbSessionDep,
 ) -> SuccessResponse[dict[str, Any]]:
@@ -313,6 +319,7 @@ async def get_run(
 )
 async def writeback_preview(
     project_identifier: str,
+    user: CurrentUserDep,
     db: DbSessionDep,
     run_id: Annotated[UUID | None, Query(description="缺省取最近一次执行")] = None,
     label: str = Query(default="自动化执行", description="执行方式列文案"),
@@ -367,6 +374,7 @@ async def writeback_preview(
 )
 async def upload_evidence(
     project_identifier: str,
+    user: CurrentUserDep,
     db: DbSessionDep,
     file: Annotated[UploadFile, File(description="证据文件（截图/视频/日志）")],
 ) -> SuccessResponse[dict[str, Any]]:
@@ -415,8 +423,9 @@ async def get_evidence_file(
 ) -> Response:
     """按 object_name 从对象存储取回证据文件。
 
-    做成后端代理而非预签名 URL：预签名 7 天必过期（平台「不要再存链接」原则），
-    代理链接只要后端在就永不过期。对象名校验限定本项目前缀，防目录穿越。
+    本端点**有意不鉴权**：前端凭证列是裸 ``<a href>`` 不带 Authorization，
+    且对象名不可枚举（写入端已鉴权、UUID 命名）——等价分享链接语义。
+    防护依赖 _safe_evidence_name 的项目前缀限定。其余端点均要求登录。
     """
     try:
         project = await repo.get_project(db, project_identifier)

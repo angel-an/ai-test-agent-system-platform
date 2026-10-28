@@ -14,11 +14,11 @@ description: 把「上线Checklist」腾讯在线文档的表格行同步进平�
 ## 执行步骤
 
 1. 通过 WorkBuddy 打开上述文档，导出表格行（含表头）为 `/tmp/checklist-rows.json`（数组，元素为列名→值的字典）。
-2. 运行：
+2. 运行（`--token` 必填，2026-10-28 起 checklist 端点强制鉴权）：
    ```bash
    python .claude/skills/checklist-sync/sync_to_platform.py \
      --input /tmp/checklist-rows.json --project PR-2 \
-     --base http://127.0.0.1:8000
+     --base http://127.0.0.1:8000 --token "$CHECKLIST_TOKEN"
    ```
 3. 读输出：`created/updated/skipped` 计数。退出码 3 = 存在新增/变更行（行漂移信号），把变更行反馈给维护者核对；0 = 与平台一致，无漂移。
 

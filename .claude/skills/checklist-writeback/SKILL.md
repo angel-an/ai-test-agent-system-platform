@@ -12,10 +12,11 @@ description: 把平台最近一次 Checklist 回归执行结果生成写回腾�
 
 ## 执行步骤
 
-1. 生成载荷（缺省取最近一次执行）：
+1. 生成载荷（缺省取最近一次执行；`--token` 必填，2026-10-28 起 checklist 端点强制鉴权）：
    ```bash
    python .claude/skills/checklist-writeback/build_writeback_payload.py \
-     --project PR-2 --base http://127.0.0.1:8000 --out /tmp/writeback-row.json
+     --project PR-2 --base http://127.0.0.1:8000 \
+     --token "$CHECKLIST_TOKEN" --out /tmp/writeback-row.json
    ```
 2. 通过 WorkBuddy 打开《上线Checklist》文档，把 JSON 对象的值按列名映射**插入一行**到「自动化执行」记录区（表格末尾或专门的执行记录 tab）。
 3. 若失败行非空，`失败行` 列会列出 `row_id 功能点(原因)`，逐条核对。

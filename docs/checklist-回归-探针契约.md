@@ -1,7 +1,20 @@
 # Checklist 回归探针契约（miniprogram-probe-run ↔ 平台）
 
 平台端点前缀：`/api/v2/projects/{project_identifier}/checklist`（如 PR-2）。
-当前不强制鉴权；`--base` 默认 `http://127.0.0.1:8000`（外包机走 `http://192.168.83.250:8000`）。
+`--base` 默认 `http://127.0.0.1:8000`（外包机走 `http://192.168.83.250:8000`）。
+
+## 鉴权（2026-10-28 起强制）
+
+除 `GET /evidence-file`（分享链接语义，有意不鉴权）外，**所有端点都要求
+`Authorization: Bearer <JWT>`**。探针/脚本用服务账号 `checklist-bot` 取 token：
+
+```bash
+curl -X POST {base}/api/v2/auth/login -H "Content-Type: application/json" \
+  -d '{"username":"checklist-bot","password":"<向平台方索取>"}'
+# → access_token，脚本传 --token
+```
+
+无 token → 401。token 有效期见平台配置（默认过期后重新登录获取）。
 
 ## 执行顺序（固定四步，不跳步）
 
