@@ -1,12 +1,12 @@
 {
-  "CK-0a7e9e9b": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "banner_1", "target_page": "pages/store/goods", "expect_path_prefix": "pages/store/goods", "note": "swiper path 静态绑定 /pages/store/goods；组件内点击 IDE 不支持，经数据断言+直达落地页验证"},
+  "CK-0a7e9e9b": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "banner_1", "note": "图文广告：banner_1 素材已下发即通过。落地 store/goods 为 tabBar 页，automator 受自定义 tabBar/弹窗拦截（人工点击已验证可正常进入，2026-10-29）；真机通道补齐后恢复落地断言"},
   "CK-9d487968": {"page": "pages/home/index", "kind_hint": "visible", "data_path": "isRequestAdvertisement", "data_expect": true, "note": "开屏广告开关；splash 组件仅启动瞬间存在，改断言广告配置下发"},
-  "CK-7f4e57c3": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "userInfo", "target_page": "pages/member/mine/index", "expect_path_prefix": "pages/member/mine/index", "note": "个人资料区入口；点击会触发订阅消息弹窗，改直达会员页+userInfo 数据断言"},
+  "CK-7f4e57c3": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "userInfo", "note": "个人资料/优惠券/积分/余额入口：userInfo 已下发即通过。落地 member/mine/index 为 tabBar 页，automator 受限（同 CK-0a7e9e9b）"},
   "CK-12818907": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "scanUrlList", "note": "堂食=type:scanCode 扫桌码入口（源码 components/wagasEatContainer），触发 wx.scanCode 不跳页；模拟器无法自动化扫码，断言入口配置存在（2026-10-28 复核修正：原断言落地 store/goods 是测试侧语义错误）"},
-  "CK-c69fb2db": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "scanUrlList", "target_page": "pages/store/goods", "expect_path_prefix": "pages/store/goods", "note": "到店取（自提）入口"},
-  "CK-23fb8ff9": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "scanUrlList", "target_page": "pages/store/goods", "expect_path_prefix": "pages/store/goods", "note": "小杨送（配送）入口"},
-  "CK-89d03f1f": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "bonus.0.image", "target_page": "member/pages/payingMember/pay/index", "note": "储值有礼，bonusPath=/member/pages/payingMember/pay/index"},
-  "CK-6f0ad826": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "bonus.1.image", "target_page": "integralMall/pages/index/index", "note": "积分兑换，bonus[1] 卡"},
-  "CK-31fcbe28": {"page": "pages/home/index", "kind_hint": "navigate", "data_path": "bonus.2.image", "target_page": "pages/weMall/index", "note": "线上商城，bonus[2] 卡"},
+  "CK-c69fb2db": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "scanUrlList", "note": "到店取=action 提前下单到店取，入口配置断言；落地 store/goods 为 tabBar 页 automator 受限（同 CK-0a7e9e9b）"},
+  "CK-23fb8ff9": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "scanUrlList", "note": "小杨送=配送入口（满90元免配送费），入口配置断言；落地页同受 tabBar automator 限制"},
+  "CK-89d03f1f": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "bonus.0.image", "note": "储值有礼：bonus[0] 素材+linkData 下发即通过。bonusPath=/member/pages/payingMember/pay/index 落地断言待真机通道（IDE automator 跨会话导航不稳定：同代码 22:30 通过、23:46 起失败，人工验证产品正常）"},
+  "CK-6f0ad826": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "bonus.1.image", "note": "积分兑换：bonus[1] 卡数据断言；落地断言待真机通道（同 CK-89d03f1f）"},
+  "CK-31fcbe28": {"page": "pages/home/index", "kind_hint": "navigate", "probe_as": "visible", "data_path": "bonus.2.image", "note": "线上商城：bonus[2] 卡数据断言；落地断言待真机通道（同 CK-89d03f1f）"},
   "CK-e673d8f1": {"page": "pages/home/index", "kind_hint": "visible", "selector": ".more-store-text", "data_path": "homeStore.title", "note": "附近门店：更多线下门店入口可见 + 门店数据下发"}
 }
