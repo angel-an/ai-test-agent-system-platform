@@ -155,6 +155,45 @@ def upload_run_evidence(
     }
 
 
+def list_run_evidence(run_id: UUID | str, *, days: int = PRESIGN_DAYS) -> list[dict]:
+    """按对象名前缀反查某次运行的证据，并**当场重新签发**下载链接。
+
+    为什么不复用执行时写进缺陷描述的那串 URL：S3 预签名上限 7 天，
+    工单是长期资料，半个月后点开必然 403。对象是长期存的，链接必须现签。
+
+    返回结构与 ``upload_run_evidence`` 的 items 一致，链接为本次新签。
+    """
+    prefix = f"{EVIDENCE_PREFIX}/{run_id}/"
+    try:
+        objects = MinIOClient.list_objects(prefix)
+    except Exception as exc:  # noqa: BLE001 —— 列不出对象不该把接口打 500
+        logger.warning("[Evidence] 列出证据对象失败 run_id=%s: %s", run_id, exc)
+        return []
+
+    items: list[dict] = []
+    for obj in objects:
+        name = str(obj.get("object_name") or "")
+        if not name:
+            continue
+        parts = name.split("/")
+        filename = parts[-1]
+        parent = parts[-2] if len(parts) >= 2 else "root"
+        items.append(
+            {
+                "kind": "trace" if filename == "trace.zip" else "screenshot",
+                "name": filename,
+                "parent": parent,
+                "object_name": name,
+                "url": presigned_url_for(name, days=days),
+                "size": obj.get("size"),
+                "last_modified": obj.get("last_modified"),
+            }
+        )
+    # trace 排前面，方便人一眼找到
+    items.sort(key=lambda i: (i["kind"] != "trace", i["object_name"]))
+    return items
+
+
 def evidence_url_map(evidence: dict | None) -> dict[str, str]:
     """把归档结果压成描述渲染用的 ``{类别: 链接}``（多张截图合并成一条）。
 

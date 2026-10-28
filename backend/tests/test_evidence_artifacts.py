@@ -188,7 +188,9 @@ def test_description_renders_clickable_trace_link():
     link_ops = [op for op in ops if (op.get("attributes") or {}).get("link")]
     assert link_ops, "证据链接必须带 link 属性，裸 URL 在部分客户端点不开"
     assert link_ops[0]["insert"].startswith("http://minio/trace.zip")
-    assert any("7 天内有效" in op.get("insert", "") for op in ops)
+    # 必须说清"会过期"以及"过期后怎么取回"（对象长期保留，链接现签）
+    assert any("7 天" in op.get("insert", "") for op in ops)
+    assert any("重新签发" in op.get("insert", "") for op in ops)
 
 
 def test_description_report_url_is_clickable():

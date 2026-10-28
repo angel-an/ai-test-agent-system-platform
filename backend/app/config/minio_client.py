@@ -266,6 +266,45 @@ class MinIOClient:
             )
 
     @classmethod
+    def list_objects(
+        cls,
+        prefix: str = "",
+        *,
+        limit: Optional[int] = None,
+    ) -> list[dict]:
+        """列出某个前缀下的对象（``{name, size, last_modified, etag}``）。
+
+        用途有二，都是"**不要再存链接**"这条原则的延伸：
+        1. 预签名 URL 有 7 天上限，过期后要能按对象名**重新签发**；
+        2. 证据/报告/脚本归档需要按时间做保留期清理。
+
+        异常不吞：调用方（重签/清理）自己决定降级，静默返回空列表会被误读成
+        "目录本来就空"。
+        """
+        client = cls.get_client()
+        out: list[dict] = []
+        try:
+            for obj in client.list_objects(
+                bucket_name=settings.minio_bucket, prefix=prefix, recursive=True
+            ):
+                out.append(
+                    {
+                        "object_name": obj.object_name,
+                        "size": int(getattr(obj, "size", 0) or 0),
+                        "last_modified": getattr(obj, "last_modified", None),
+                    }
+                )
+                if limit is not None and len(out) >= limit:
+                    break
+        except S3Error as e:
+            raise MinIOError(
+                f"Failed to list objects under '{prefix}': {e.message}",
+                code=e.code,
+                original_error=e,
+            )
+        return out
+
+    @classmethod
     def file_exists(cls, object_name: str) -> bool:
         """
         检查文件是否存在

@@ -11,6 +11,7 @@ import os
 import subprocess
 import tempfile
 import shutil
+import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Any, Dict, List
@@ -57,6 +58,27 @@ logger = logging.getLogger(__name__)
 
 #: 执行前模板比对自身出错（不是"脚本过期"，也不是用例失败）——按旧脚本继续跑并留痕。
 SCRIPT_CHECK_FAILED = "check_failed"
+
+#: Allure 报告生成。CLI 是**外部工具**，Node 侧 reporter 只产原始结果；
+#: 缺失/失败会写进 run.execution_config["allure_report"]，别再静默 return None。
+ALLURE_CLI = "allure"
+#: 生成超时（旧值 30s 在大报告上偏紧，且旧实现是同步阻塞事件循环的）。
+ALLURE_CLI_TIMEOUT = 120
+REPORT_STATUS_GENERATED = "generated"
+REPORT_STATUS_NO_RESULTS = "no_results"
+REPORT_STATUS_CLI_MISSING = "cli_missing"
+REPORT_STATUS_GENERATE_FAILED = "generate_failed"
+REPORT_STATUS_EMPTY_OUTPUT = "empty_output"
+REPORT_STATUS_UPLOAD_FAILED = "upload_failed"
+
+
+def _resolve_allure_cli() -> Optional[str]:
+    """解析 Allure CLI 路径（抽成函数是为了可测：Windows 上还可能是 ``allure.bat``）。"""
+    for name in (ALLURE_CLI, f"{ALLURE_CLI}.bat", f"{ALLURE_CLI}.cmd"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
 
 class APITestExecutor:
@@ -314,10 +336,17 @@ class APITestExecutor:
                 )
 
                 # 5. 生成 Allure 报告（先生成，后续处理 IDP 时传入 report_url）
-                report_path = await self._generate_allure_report(
+                #    第二个返回值是状态：失败时不能只是 report_path=None（看不出为什么）。
+                report_path, report_info = await self._generate_allure_report(
                     run_id=run_id,
                     work_dir=temp_path,
                 )
+                if report_info.get("status") != REPORT_STATUS_GENERATED:
+                    logger.warning(
+                        "[Allure] 报告未生成 run=%s status=%s reason=%s",
+                        run_id, report_info.get("status"), report_info.get("reason"),
+                    )
+                    await self._stamp_report_status(run_id, report_info)
 
                 # 5.5 失败证据归档（必须在 with 之内：TemporaryDirectory 退出即清空，
                 #     trace.zip 会随目录一起消失，那样工单里永远只有一句"失败了"）。
@@ -840,56 +869,116 @@ export default defineConfig({{
         self,
         run_id: UUID,
         work_dir: Path,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], Dict[str, Any]]:
+        """生成 Allure 报告，**失败必须说出原因**。
+
+        历史实现有三个静默坑（2026-10-28 实测）：
+        1. ``subprocess.run(["allure", ...])`` 在本机没装 CLI 时抛 FileNotFoundError，
+           被兜底 ``except`` 吞成 ``return None`` —— run 详情里 report_path 就是空的，
+           看不出"没装工具"还是"没产物"；
+        2. 不检查 ``returncode``：``allure generate`` 报错也一样继续打包；
+        3. 打包目录不存在时 ``rglob`` 收集到 0 个文件，**上传一个空 zip** 并返回对象名 ——
+           报告"有"但打不开，比没有更糟。
+
+        返回值改为 ``(object_name, info)``；``info["status"]`` 取值见
+        ``REPORT_STATUS_*``，由调用方写进 run.execution_config 供排障。
         """
-        生成 Allure 测试报告
+        info: Dict[str, Any] = {"status": REPORT_STATUS_NO_RESULTS, "reason": "", "detail": ""}
 
-        Args:
-            run_id: 测试运行 ID
-            work_dir: 工作目录（包含 allure-results）
+        allure_results_dir = work_dir / "allure-results"
+        if not allure_results_dir.exists():
+            info["reason"] = "执行目录里没有 allure-results（用例在产出结果前就失败或被跳过）"
+            return None, info
+        if not any(allure_results_dir.iterdir()):
+            info["reason"] = "allure-results 是空目录"
+            return None, info
 
-        Returns:
-            str: 报告目录路径 (MinIO)
-        """
-        try:
-            allure_results_dir = work_dir / "allure-results"
-
-            # 检查 Allure 结果是否存在
-            if not allure_results_dir.exists():
-                print("未找到 Allure 测试结果")
-                return None
-
-            # 生成 HTML 报告到临时目录
-            allure_report_dir = work_dir / "allure-report"
-            subprocess.run(
-                ["allure", "generate", str(allure_results_dir), "-o", str(allure_report_dir), "--clean"],
-                capture_output=True,
-                timeout=30
+        # PATH 里没有 allure 时直接定性，不要制造一个"跑了但没结果"的假象
+        cli = _resolve_allure_cli()
+        if cli is None:
+            info.update(
+                status=REPORT_STATUS_CLI_MISSING,
+                reason=(
+                    f"未安装 Allure CLI（PATH 中找不到 `{ALLURE_CLI}`）："
+                    "Node 包 allure-playwright 只产出原始结果，HTML 报告需要命令行工具另行生成"
+                ),
             )
+            return None, info
 
-            # 将报告打包为 ZIP 并上传到 MinIO
-            import zipfile
+        allure_report_dir = work_dir / "allure-report"
+        try:
+            # 放线程里跑：旧写法在事件循环上同步阻塞，最长 30 秒卡住整个进程
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                [cli, "generate", str(allure_results_dir), "-o", str(allure_report_dir), "--clean"],
+                capture_output=True,
+                timeout=ALLURE_CLI_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            info.update(
+                status=REPORT_STATUS_GENERATE_FAILED,
+                reason=f"allure generate 超时（>{ALLURE_CLI_TIMEOUT}s）",
+            )
+            return None, info
+        except Exception as exc:  # noqa: BLE001
+            info.update(status=REPORT_STATUS_GENERATE_FAILED, reason=f"allure generate 调用异常: {exc}")
+            return None, info
+
+        if proc.returncode != 0:
+            tail = (proc.stderr or b"").decode("utf-8", "replace").strip()[-500:]
+            info.update(
+                status=REPORT_STATUS_GENERATE_FAILED,
+                reason=f"allure generate 退出码 {proc.returncode}",
+                detail=tail,
+            )
+            return None, info
+
+        # 不看 returncode 之外还要看产物：CLI 存在也可能因为参数/权限什么都没生成
+        if not (allure_report_dir / "index.html").exists():
+            info.update(
+                status=REPORT_STATUS_EMPTY_OUTPUT,
+                reason="allure generate 返回 0 但没有产出 index.html（不会上传空 zip）",
+            )
+            return None, info
+
+        try:
             zip_path = work_dir / "allure-report.zip"
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for file in allure_report_dir.rglob('*'):
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for file in allure_report_dir.rglob("*"):
                     if file.is_file():
-                        arcname = file.relative_to(allure_report_dir)
-                        zipf.write(file, arcname)
+                        zipf.write(file, file.relative_to(allure_report_dir))
 
-            # 上传到 MinIO
             report_path = f"api-test-reports/{run_id}/allure-report.zip"
-            with open(zip_path, 'rb') as f:
-                MinIOClient.upload_bytes(
-                    object_name=report_path,
-                    data=f.read(),
-                    content_type="application/zip",
-                )
+            MinIOClient.upload_bytes(
+                object_name=report_path,
+                data=zip_path.read_bytes(),
+                content_type="application/zip",
+            )
+        except Exception as exc:  # noqa: BLE001 —— 报告上传失败不阻断执行结果落库
+            info.update(status=REPORT_STATUS_UPLOAD_FAILED, reason=f"报告打包/上传失败: {exc}")
+            return None, info
 
-            return report_path
+        info["status"] = REPORT_STATUS_GENERATED
+        info["size"] = zip_path.stat().st_size if zip_path.exists() else None
+        return report_path, info
 
-        except Exception as e:
-            print(f"生成 Allure 报告失败: {e}")
-            return None
+    async def _stamp_report_status(self, run_id: UUID, info: Dict[str, Any]) -> None:
+        """把报告生成状态写进 run.execution_config（与 script_template 同款留痕）。"""
+        if info.get("status") == REPORT_STATUS_GENERATED:
+            return
+        try:
+            row = await self.api_test_run_repo.get_by_id(run_id)
+            if row is None:
+                return
+            config = dict(row.execution_config or {})
+            config["allure_report"] = {
+                "status": info.get("status"),
+                "reason": info.get("reason"),
+                "detail": info.get("detail") or "",
+            }
+            await self.api_test_run_repo.update(row, execution_config=config)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Allure] 记录报告状态失败 run=%s: %s", run_id, exc)
 
     async def _append_defect_report_to_allure(
         self,

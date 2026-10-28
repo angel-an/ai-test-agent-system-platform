@@ -749,7 +749,7 @@ class IDPDefectService:
         if test_case_id:
             delta_ops.append({"insert": f"测试用例 ID: {test_case_id}\n"})
         if report_url:
-            delta_ops.append({"insert": "测试报告地址: "})
+            delta_ops.append({"insert": "测试报告地址（预签名，7 天内有效）: "})
             # 必须挂 link 属性：IDP 富文本里裸 URL 在部分客户端不可点，
             # 而报告是预签名绝对地址（相对路径 + 登录态的历史写法根本打不开）。
             delta_ops.append({"insert": report_url, "attributes": {"link": report_url}})
@@ -778,7 +778,8 @@ class IDPDefectService:
                 delta_ops.append({"insert": _url, "attributes": {"link": _url}})
                 delta_ops.append({"insert": "\n"})
             delta_ops.append({
-                "insert": "（链接为对象存储预签名地址，7 天内有效；过期后可按上方「测试运行 ID」重新归档取回）\n\n"
+                "insert": "（链接为对象存储预签名地址，S3 协议上限 7 天，过期后点开会 403；"
+                "证据对象本身长期保留，可在平台该次运行详情页重新签发取回）\n\n"
             })
 
         # ========== 优先级依据 ==========

@@ -495,6 +495,29 @@ async def get_test_run(
     return SuccessResponse(data=result)
 
 @router.get(
+    "/{api_test_id}/runs/{run_id}/artifacts",
+    response_model=SuccessResponse,
+    summary="重新签发报告与证据链接",
+    description=(
+        "预签名 URL 有 7 天硬上限，缺陷描述里写入的链接过期后会 403。"
+        "该接口按对象名现场重新签发报告与证据（trace/截图）的下载地址。"
+    ),
+)
+async def get_run_artifacts(
+    project_identifier: str,
+    api_test_id: str,
+    run_id: str,
+    service: APITestServiceDep,
+):
+    result = await service.get_run_artifacts(
+        project_identifier=project_identifier,
+        api_test_id=api_test_id,
+        run_id=run_id,
+    )
+    return SuccessResponse(data=result)
+
+
+@router.get(
     "/{api_test_id}/runs/{run_id}/results",
     response_model=SuccessResponse,
     summary="获取测试结果",

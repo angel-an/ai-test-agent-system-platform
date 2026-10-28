@@ -6,7 +6,7 @@ API 路由模块
 
 from fastapi import APIRouter
 
-from .v2 import ai, auth, projects, folders, test_cases, test_runs, test_results, attachments, configurations, test_plans, documents, api_tests, api_tests_extended, api_endpoints, api_docs, unified_import, api_case_links, web_case_links, web_path_templates, web_form_templates, scenarios, web_tests, web_functions, scheduled_runs, llm_settings, mcp_proxy, security_tests, ios_apps, android_apps, idp_defects, web_script_reviews, governance_metrics, knowledge_base, platform_layers, web_layers, evidence, orchestration, runtime, spec_discovery, requirement_quality, api_bundles
+from .v2 import ai, auth, projects, folders, test_cases, test_runs, test_results, attachments, configurations, test_plans, documents, api_tests, api_tests_extended, api_endpoints, api_docs, unified_import, api_case_links, web_case_links, web_path_templates, web_form_templates, scenarios, web_tests, web_functions, scheduled_runs, llm_settings, mcp_proxy, security_tests, ios_apps, android_apps, idp_defects, web_script_reviews, governance_metrics, knowledge_base, platform_layers, web_layers, evidence, orchestration, runtime, spec_discovery, requirement_quality, api_bundles, maintenance
 # noqa  MC8yOmFIVnBZMlhscm9ua3VMazZNemd4Y0E9PTo4MDdiOTdhYQ==
 
 # 创建 API v2 路由
@@ -58,6 +58,7 @@ api_router.include_router(spec_discovery.router, tags=["Spec 自动发现"])
 api_router.include_router(runtime.router, tags=["统一运行时"])
 api_router.include_router(requirement_quality.router, tags=["需求质量门控"])
 api_router.include_router(api_bundles.router, tags=["统一接口资产包"])
+api_router.include_router(maintenance.router, tags=["平台维护"])
 # pragma: no cover  MS8yOmFIVnBZMlhscm9ua3VMazZNemd4Y0E9PTo4MDdiOTdhYQ==
 
 __all__ = ["api_router"]

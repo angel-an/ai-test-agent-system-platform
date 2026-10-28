@@ -873,6 +873,57 @@ class APITestService:
             "report_path": test_run.report_path,
             "created_at": test_run.created_at.isoformat(),
             "updated_at": test_run.updated_at.isoformat() if test_run.updated_at else None,
+            # 排障留痕：脚本模板版本状态 / Allure 报告为何没生成。
+            # 只透出这两个子键（execution_config 里可能有鉴权头，不能整体回显）。
+            "diagnostics": {
+                "script_template": (test_run.execution_config or {}).get("script_template"),
+                "allure_report": (test_run.execution_config or {}).get("allure_report"),
+            },
+        }
+
+    async def get_run_artifacts(
+        self,
+        project_identifier: str,
+        api_test_id: str,
+        run_id: str,
+    ) -> dict:
+        """重新签发该次运行的报告/证据下载链接。
+
+        为什么需要这个接口：预签名 URL 有 7 天硬上限，执行时写进缺陷描述的那串
+        链接过期后点开就是 403。对象本身是长期保留的，所以**对象名恒定、链接现签**。
+        """
+        from datetime import timezone
+
+        from app.services.evidence_artifacts import PRESIGN_DAYS, list_run_evidence, presigned_url_for
+
+        project = await self._get_project_by_identifier(project_identifier)
+        test_run = await self.api_test_run_repo.get_by_id(UUID(run_id))
+        if not test_run or test_run.project_id != project.id:
+            raise NotFoundException(resource_type="测试运行", resource_id=run_id)
+
+        evidence_items = list_run_evidence(test_run.id)
+        trace_url = next(
+            (i["url"] for i in evidence_items if i["kind"] == "trace" and i.get("url")), None
+        )
+        screenshot_url = next(
+            (i["url"] for i in evidence_items if i["kind"] == "screenshot" and i.get("url")), None
+        )
+
+        return {
+            "run_id": str(test_run.id),
+            "identifier": test_run.identifier,
+            "expires_days": PRESIGN_DAYS,
+            "signed_at": datetime.now(timezone.utc).isoformat(),
+            "report": {
+                "object_name": test_run.report_path,
+                "url": presigned_url_for(test_run.report_path) if test_run.report_path else None,
+            },
+            "evidence": {
+                "items": evidence_items,
+                "trace_url": trace_url,
+                "screenshot_url": screenshot_url,
+                "count": len(evidence_items),
+            },
         }
 
     async def get_test_results(
