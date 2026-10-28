@@ -117,3 +117,17 @@ export function importChecklist(projectId: string, items: ChecklistImportItem[],
     { rows: items, dry_run: dryRun }
   );
 }
+
+export interface WritebackPreviewData {
+  run_id: string;
+  columns: string[];
+  payload: Record<string, string | number>;
+}
+
+/** 回写面板：取一次执行的腾讯文档行载荷（缺省最近一次；写文档由 WorkBuddy 执行） */
+export function getWritebackPreview(projectId: string, runId?: string, label?: string) {
+  return apiClient.get<SuccessResponse<WritebackPreviewData>>(
+    `/projects/${projectId}/checklist/writeback-preview`,
+    { params: { run_id: runId, label } }
+  );
+}

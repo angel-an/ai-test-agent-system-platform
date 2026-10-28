@@ -104,3 +104,58 @@ def build_items(raw_rows: list[dict]) -> tuple[list[dict], int]:
     items = [m for i, r in enumerate(raw_rows) if (m := map_row(r, i)) is not None]
     dup = len(items) - len({x["row_id"] for x in items})
     return items, dup
+
+
+# ---------------------------------------------------------------------------
+# 回写载荷（writeback-preview 端点用）。
+# 与 .claude/skills/checklist-writeback/build_writeback_payload.py 的输出保持
+# 同一份列契约，任一侧加列须同步另一侧（脚本面向离线环境，保留独立实现）。
+# ---------------------------------------------------------------------------
+
+VERDICT_LABEL = {"pass": "通过", "fail": "失败", "unverified": "未验证", "empty": "无结果"}
+
+WRITEBACK_COLUMNS = (
+    "执行时间", "执行方式", "项目画像", "判定", "通过", "失败", "未验证",
+    "流程类跳过", "失败行", "报告链接", "run_id",
+)
+
+
+def build_writeback_payload(
+    run: dict, results: list[dict], label: str = "自动化执行"
+) -> dict:
+    """执行记录 → 插入腾讯文档《上线Checklist》「自动化执行」区的一行载荷。
+
+    run: 含 run_id/run_verdict/profile_name/summary/skipped_flow/report_url/created_at。
+    """
+    summary = run.get("summary") or {}
+    verdict = run.get("run_verdict") or "empty"
+    failed = [r for r in results if r.get("status") == "fail"]
+    return {
+        "执行时间": fmt_cn_time(run.get("created_at") or ""),
+        "执行方式": label,
+        "项目画像": run.get("profile_name") or "",
+        "判定": VERDICT_LABEL.get(verdict, verdict),
+        "通过": summary.get("pass", 0),
+        "失败": summary.get("fail", 0),
+        "未验证": summary.get("unverified", 0),
+        "流程类跳过": run.get("skipped_flow", 0),
+        "失败行": ", ".join(
+            f"{r.get('row_id')} {r.get('feature') or ''}({r.get('error') or '无原因'})"
+            for r in failed
+        ),
+        "报告链接": run.get("report_url") or "",
+        "run_id": run.get("run_id") or "",
+    }
+
+
+def fmt_cn_time(iso: str) -> str:
+    """ISO 时间（可能带时区）→ 'YYYY-MM-DD HH:MM:SS' 东八区；不带时区按原样截断。"""
+    from datetime import datetime, timedelta, timezone
+    cn_tz = timezone(timedelta(hours=8))
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso[:19].replace("T", " ")
+    if dt.tzinfo is None:
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return dt.astimezone(cn_tz).strftime("%Y-%m-%d %H:%M:%S")

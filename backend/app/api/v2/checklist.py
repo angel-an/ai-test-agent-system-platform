@@ -306,6 +306,60 @@ async def get_run(
     )
 
 
+@router.get(
+    "/writeback-preview",
+    response_model=SuccessResponse[dict[str, Any]],
+    summary="生成回写腾讯文档的行载荷（平台只算载荷，写文档由外部执行）",
+)
+async def writeback_preview(
+    project_identifier: str,
+    db: DbSessionDep,
+    run_id: Annotated[UUID | None, Query(description="缺省取最近一次执行")] = None,
+    label: str = Query(default="自动化执行", description="执行方式列文案"),
+) -> SuccessResponse[dict[str, Any]]:
+    """回写面板数据源：把一次执行整包转成插入腾讯文档的一行载荷。
+
+    平台不落库、不碰腾讯文档；拿到载荷后由 WorkBuddy 用腾讯文档授权插入
+    《上线Checklist》的「自动化执行」区。列契约与 checklist-writeback skill 一致。
+    """
+    from app.services import checklist_sync
+
+    try:
+        project = await repo.get_project(db, project_identifier)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    run = None
+    if run_id is not None:
+        run = await repo.get_run(db, project.id, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="执行记录不存在")
+    else:
+        latest = await repo.list_runs(db, project.id, limit=1)
+        run = latest[0] if latest else None
+    if not run:
+        raise HTTPException(status_code=404, detail="暂无执行记录，无可回写内容")
+
+    results = (run.results or {}).get("results", [])
+    run_dict = {
+        "run_id": str(run.id),
+        "run_verdict": run.run_verdict,
+        "profile_name": run.profile_name,
+        "summary": run.summary,
+        "skipped_flow": run.skipped_flow,
+        "report_url": run.report_url,
+        "created_at": run.created_at.isoformat() if run.created_at else "",
+    }
+    return SuccessResponse(
+        success=True,
+        data={
+            "run_id": str(run.id),
+            "columns": list(checklist_sync.WRITEBACK_COLUMNS),
+            "payload": checklist_sync.build_writeback_payload(run_dict, results, label),
+        },
+    )
+
+
 @router.post(
     "/evidence",
     response_model=SuccessResponse[dict[str, Any]],

@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import {
   CheckCircle2,
   ClipboardList,
+  Copy,
+  Download,
   ExternalLink,
   FileUp,
   Loader2,
@@ -30,9 +32,11 @@ import {
   getChecklistRun,
   previewChecklistSync,
   importChecklist,
+  getWritebackPreview,
   type ChecklistRow,
   type ChecklistRunSummary,
   type SyncPreviewData,
+  type WritebackPreviewData,
 } from "@/lib/api/checklist";
 
 type RowResult = {
@@ -167,6 +171,120 @@ const DIFF_FIELD_LABEL: Record<string, string> = {
   probe_kind: "探针",
   data_mode: "数据模式",
 };
+
+/** 回写面板：展示最近一次执行的腾讯文档行载荷，复制/下载后由 WorkBuddy 插入文档。 */
+function WritebackPanel({
+  projectId,
+  latestRunId,
+}: {
+  projectId: string;
+  latestRunId: string | null;
+}) {
+  const [preview, setPreview] = React.useState<WritebackPreviewData | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      const resp = await getWritebackPreview(projectId);
+      if (resp.success) setPreview(resp.data);
+    } catch (e) {
+      console.error("writeback preview failed:", e);
+      setPreview(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  React.useEffect(() => {
+    if (latestRunId) load();
+  }, [latestRunId, load]);
+
+  const payloadJson = preview ? JSON.stringify(preview.payload, null, 2) : "";
+
+  const doCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(payloadJson);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("复制失败，请手动选择文本复制");
+    }
+  };
+
+  const doDownload = () => {
+    if (!preview) return;
+    const blob = new Blob([payloadJson + "\n"], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `checklist-writeback-${preview.run_id.slice(0, 8)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">结果回写</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <p className="text-xs text-muted-foreground">
+          平台只负责算载荷、不碰腾讯文档。复制或下载下方 JSON 后，通过 WorkBuddy
+          打开《上线Checklist》，在「自动化执行」区按列名插入一行。
+        </p>
+        {!latestRunId ? (
+          <p className="text-sm text-muted-foreground">暂无执行记录，无可回写内容。</p>
+        ) : loading ? (
+          <Loader2 className="h-5 w-5 animate-spin" />
+        ) : preview ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">run {preview.run_id.slice(0, 8)}</Badge>
+              <Button variant="outline" size="sm" onClick={doCopy}>
+                <Copy className="mr-2 h-4 w-4" />
+                {copied ? "已复制" : "复制 JSON"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={doDownload}>
+                <Download className="mr-2 h-4 w-4" />
+                下载 JSON
+              </Button>
+            </div>
+            <div className="max-h-56 overflow-y-auto rounded-md border">
+              <table className="w-full text-xs">
+                <tbody>
+                  {preview.columns.map((col) => (
+                    <tr key={col} className="border-b align-top">
+                      <td className="w-28 shrink-0 px-3 py-1.5 font-medium text-muted-foreground">
+                        {col}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        {col === "报告链接" && preview.payload[col] ? (
+                          <a
+                            href={String(preview.payload[col])}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                          >
+                            {String(preview.payload[col])}{" "}
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : (
+                          String(preview.payload[col] ?? "")
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
 
 /** 同步面板：上传腾讯文档导出的表格 → 预览行级 diff → 确认导入。 */
 function SyncPanel({ projectId, onImported }: { projectId: string; onImported: () => void }) {
@@ -452,8 +570,7 @@ export default function ChecklistPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">执行历史</CardTitle>
-          </CardHeader>
-          <CardContent>
+          </CardHeader>          <CardContent>
             {runs.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 暂无执行记录。通过 miniprogram-probe-run 执行探针并回传结果后，这里会展示每次回归的判定与汇总。
@@ -514,6 +631,9 @@ export default function ChecklistPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* 结果回写 */}
+        <WritebackPanel projectId={projectId} latestRunId={runs[0]?.run_id ?? null} />
 
         {/* 筛选 */}
         <div className="flex flex-wrap items-center gap-3">
