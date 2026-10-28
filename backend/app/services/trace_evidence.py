@@ -169,7 +169,44 @@ def _is_static(url: str) -> bool:
     return path.endswith(_STATIC_SUFFIXES)
 
 
-def _snapshot_to_exchange(snapshot: dict[str, Any]) -> Optional[HttpExchange]:
+def _read_request_body(zf: zipfile.ZipFile, request: dict[str, Any]) -> Any:
+    """读取 HAR ``request.postData``。
+
+    2026-10-28 实测（ATR-20261028-004 的 trace.zip）：平台执行版本把请求体
+    **外置到 resources 里**，``postData`` 长这样 ——
+
+        {"mimeType": "application/json", "text": "", "params": [],
+         "_sha1": "05b6bfec90d2772b36f9903dcc1d6c4c287fb8a4.json"}
+
+    ``text`` 是**空字符串**，真实报文在 ``resources/<sha1>``。历史实现只取
+    ``postData["text"]``，于是「请求参数」永远是空的，缺陷描述只能拿请求头兜底
+    （工单里出现「content-length: 28 但请求体为空」就是这么来的）。
+
+    所以：text 非空优先用它（老版本/小报文），否则按 ``_sha1`` / ``_file``
+    去 zip 里取 —— 与 ``response.content`` 走同一套解析。
+    """
+    post_data = request.get("postData")
+    if isinstance(post_data, str):
+        return _decode_body(post_data.encode("utf-8"))
+    if not isinstance(post_data, dict):
+        return None
+
+    text = post_data.get("text")
+    if isinstance(text, str) and text.strip():
+        try:
+            return json.loads(text)
+        except (ValueError, TypeError):
+            return text
+
+    # text 空但 bodySize 有值 ⇒ 报文被外置成资源文件
+    if post_data.get("_sha1") or post_data.get("_file"):
+        return _read_content(zf, post_data)
+    return None
+
+
+def _snapshot_to_exchange(
+    snapshot: dict[str, Any], zf: Optional[zipfile.ZipFile] = None
+) -> Optional[HttpExchange]:
     request = snapshot.get("request") or {}
     response = snapshot.get("response") or {}
     if not isinstance(request, dict):
@@ -187,16 +224,6 @@ def _snapshot_to_exchange(snapshot: dict[str, Any]) -> Optional[HttpExchange]:
     except (TypeError, ValueError):
         status = None
 
-    post_data = request.get("postData")
-    request_body: Any = post_data
-    if isinstance(post_data, dict):
-        request_body = post_data.get("text", post_data)
-    if isinstance(request_body, str) and request_body:
-        try:
-            request_body = json.loads(request_body)
-        except (ValueError, TypeError):
-            pass
-
     duration: Optional[float]
     try:
         duration = float(snapshot.get("time")) if snapshot.get("time") is not None else None
@@ -208,12 +235,33 @@ def _snapshot_to_exchange(snapshot: dict[str, Any]) -> Optional[HttpExchange]:
         url=url,
         status_code=status,
         request_headers=_headers_to_dict(request.get("headers")),
-        request_body=request_body,
+        # 没给 zip 时只能读内联 text；给了才去 resources 里取外置报文
+        request_body=(
+            _read_request_body(zf, request)
+            if zf is not None
+            else _inline_request_body(request)
+        ),
         response_headers=_headers_to_dict(response.get("headers")),
         duration_ms=duration,
         started_at=str(snapshot.get("startedDateTime") or ""),
         # response_body 由调用方带 zipfile 读取（需要打开 zip）
     )
+
+
+def _inline_request_body(request: dict[str, Any]) -> Any:
+    """不开 zip 时的请求体（只有内联 text 可用）。"""
+    post_data = request.get("postData")
+    if isinstance(post_data, str):
+        return _decode_body(post_data.encode("utf-8"))
+    if not isinstance(post_data, dict):
+        return None
+    text = post_data.get("text")
+    if isinstance(text, str) and text.strip():
+        try:
+            return json.loads(text)
+        except (ValueError, TypeError):
+            return text
+    return None
 
 
 def extract_last_exchange(trace_path: str) -> Optional[HttpExchange]:
@@ -253,7 +301,7 @@ def extract_last_exchange(trace_path: str) -> Optional[HttpExchange]:
                         entries.append((str(snapshot.get("startedDateTime") or ""), snapshot))
 
             for _, snapshot in reversed(entries):
-                exchange = _snapshot_to_exchange(snapshot)
+                exchange = _snapshot_to_exchange(snapshot, zf)
                 if exchange is None or _is_static(exchange.url):
                     continue
                 exchange.response_body = _read_content(zf, snapshot.get("response", {}).get("content"))

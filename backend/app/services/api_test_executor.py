@@ -14,6 +14,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Any, Dict, List
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -336,6 +337,9 @@ class APITestExecutor:
                     test_result=result,
                     report_url=report_url,
                     evidence_urls=evidence_urls,
+                    # 本次运行实际生效的 base_url（/execute body 是整体覆盖语义）：
+                    # 缺陷描述必须写实际值，不能写 test_config 里的配置值。
+                    execution_base_url=execution_config.get("base_url"),
                 )
 
                 # 7. 回写 IDP 缺陷登记结果到报告
@@ -641,6 +645,7 @@ export default defineConfig({{
         test_result: Dict[str, Any],
         report_url: Optional[str] = None,
         evidence_urls: Optional[Dict[str, str]] = None,
+        execution_base_url: Optional[str] = None,
     ):
         """
         处理测试结果
@@ -685,7 +690,7 @@ export default defineConfig({{
                         evidence = None
                         if status != TestResultStatus.PASSED:
                             evidence = self._extract_http_evidence(
-                                result_details, api_test, test_name
+                                result_details, api_test, test_name, execution_base_url
                             )
 
                         # 保存测试结果：**单条失败不拖垮整段统计**。
@@ -719,6 +724,7 @@ export default defineConfig({{
                                 runner_stdout=test_result.get("stdout"),
                                 evidence=evidence,
                                 evidence_urls=evidence_urls,
+                                execution_base_url=execution_base_url,
                             )
 
             # 更新运行统计（verdict 与计数同事务落库，判红看 verdict 不看 status）
@@ -998,7 +1004,29 @@ export default defineConfig({{
         return result.scalar_one_or_none()
 
     @staticmethod
-    def _evidence_from_exchange(exchange, base_url: str) -> Dict[str, Any]:
+    def _origin_of(url: str) -> str:
+        """取 URL 的 ``scheme://host[:port]``。
+
+        缺陷描述里的 Base URL 必须写**这次真正打过去的地址**。历史写法取
+        ``api_test.test_config["base_url"]``（配置值），而 ``POST /runs/{id}/execute``
+        的 body 是整体覆盖语义 —— 传了不同的 base_url 时，描述里仍显示配置值，
+        拿到工单的人照着配置值复现不出问题（ATR-20261028-004 实例：
+        配置值带 ``/yundt-saas-gateway``，实际打到域根，差一个网关段）。
+        """
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return ""
+        if not parts.scheme or not parts.netloc:
+            return ""
+        return f"{parts.scheme}://{parts.netloc}"
+
+    @staticmethod
+    def _evidence_from_exchange(
+        exchange,
+        base_url: str,
+        execution_base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """把 trace 里的一次真实往返转成登记服务认识的 request/response 摘要。"""
         headers = exchange.response_headers or {}
         reqid = (
@@ -1016,9 +1044,15 @@ export default defineConfig({{
         # 执行时的 base_url 来自本次调用参数，与 test_config 里存的值经常不一致，
         # 前缀匹配失败会把整条绝对 URL 写进缺陷标题。
         endpoint = exchange.path
+        executed_origin = APITestExecutor._origin_of(exchange.url)
         request_summary = {
             "url": exchange.url,
-            "base_url": base_url,
+            # base_url 一律写**实际执行**的那个（有 trace 就一定知道），
+            # 配置值另存一份供描述对比，两者不一致时描述会点出来。
+            "base_url": executed_origin or base_url or "N/A",
+            "base_url_source": "executed" if executed_origin else "configured",
+            "configured_base_url": base_url or None,
+            "execution_base_url": execution_base_url or None,
             "method": exchange.method,
             "headers": exchange.request_headers or {},
             "body": exchange.request_body if exchange.request_body is not None else {},
@@ -1052,6 +1086,7 @@ export default defineConfig({{
         results: List[Dict[str, Any]],
         api_test: APITest,
         test_name: str,
+        execution_base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """提取本次失败的**真实** HTTP 请求/响应。
 
@@ -1082,7 +1117,10 @@ export default defineConfig({{
                 return {
                     "request_summary": {
                         "url": pw_request.get("url"),
-                        "base_url": base_url,
+                        "base_url": self._origin_of(pw_request.get("url") or "") or base_url,
+                        "base_url_source": "executed",
+                        "configured_base_url": base_url or None,
+                        "execution_base_url": execution_base_url or None,
                         "method": pw_request.get("method"),
                         "headers": request_headers,
                         "body": pw_request.get("postData") or {},
@@ -1104,7 +1142,7 @@ export default defineConfig({{
             # 2. trace 附件
             exchange = extract_trace_exchange(last_result)
             if exchange is not None:
-                return self._evidence_from_exchange(exchange, base_url)
+                return self._evidence_from_exchange(exchange, base_url, execution_base_url)
 
         # 3. 降级
         endpoint, method = self._parse_endpoint_from_test_name(test_name)
@@ -1116,6 +1154,12 @@ export default defineConfig({{
         return {
             "request_summary": {
                 "url": base_url,
+                # 没有 trace ⇒ 根本不知道实际打到哪，只能标"配置值"，
+                # 不能让它看起来像实际执行值。
+                "base_url": base_url or "N/A",
+                "base_url_source": "configured",
+                "configured_base_url": base_url or None,
+                "execution_base_url": execution_base_url or None,
                 "method": method,
                 "headers": {},
                 "body": {},
@@ -1141,6 +1185,7 @@ export default defineConfig({{
         runner_stdout: Optional[str] = None,
         evidence: Optional[Dict[str, Any]] = None,
         evidence_urls: Optional[Dict[str, str]] = None,
+        execution_base_url: Optional[str] = None,
     ):
         """
         处理 IDP 缺陷创建
@@ -1157,7 +1202,9 @@ export default defineConfig({{
                 error_message = last_result.get("error", {}).get("message", "")
 
             if evidence is None:
-                evidence = self._extract_http_evidence(results, api_test, test_name)
+                evidence = self._extract_http_evidence(
+                    results, api_test, test_name, execution_base_url
+                )
             request_summary = evidence["request_summary"]
             response_summary = evidence["response_summary"]
             endpoint = evidence["endpoint"]

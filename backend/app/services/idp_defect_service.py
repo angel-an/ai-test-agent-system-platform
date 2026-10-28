@@ -15,6 +15,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -411,8 +412,11 @@ class IDPDefectService:
         同事单里的 `_UAT_CS` 只是"那批需求恰好叫 CS"，属参照实例，不可照抄）。
         两套口径并存但**不得混用**，详见 `docs/IDP_API_CONTRACT.md` §9.6。
         """
-        # 从场景名称中提取业务模块
-        module = IDPDefectService._extract_module(scenario_name)
+        # 从场景名称中提取业务模块（API 场景的模块名要靠 endpoint 兜底，
+        # 否则场景名是 "POST /api/..." 时模块位只能是 "POST /api/..."）
+        module = IDPDefectService._extract_module(
+            scenario_name, endpoint if source_type == "api" else None
+        )
 
         # 类型映射
         type_map = {
@@ -436,18 +440,110 @@ class IDPDefectService:
         return title
 
     @staticmethod
-    def _extract_module(scenario_name: str) -> str:
-        """从场景名称中提取业务模块"""
+    def _extract_module(scenario_name: str, endpoint: Optional[str] = None) -> str:
+        """从场景名称中提取业务模块。
+
+        ``scenario_name`` 对 API 场景常常就是接口串本身（``POST /api/icdp/v1/...``），
+        历史实现"没有方括号就取前 10 个字符"，于是标题变成
+        ``【自动化测试】【API】【POST /api/...】…`` —— 模块位等于没写。
+
+        现在的顺序：
+        1. 方括号 / 中括号里的显式模块名（人工写的场景名基本都带）；
+        2. API 场景：从 ``endpoint`` 路径里取**最后三段**有意义的分段
+           （滤掉 ``api``、``v1``、纯数字 / UUID 这类噪声），
+           如 ``/api/icdp/v1/memberCard/storage-free-order/refund/calculate``
+           → ``storage-free-order/refund/calculate``；
+        3. 兜底：去掉方法前缀后，按第一个分隔符截断，而不是硬切 10 字符。
+        """
+        if not scenario_name and not endpoint:
+            return "未知模块"
+
+        if scenario_name:
+            match = re.search(r"[【\[]([^】\]]+)[】\]]", scenario_name)
+            if match:
+                return match.group(1)
+
+        from_path = IDPDefectService._module_from_path(endpoint)
+        if from_path:
+            return from_path
+
         if not scenario_name:
             return "未知模块"
 
-        # 尝试提取方括号或引号中的模块名
-        match = re.search(r"[【\[]([^】\]]+)[】\]]", scenario_name)
-        if match:
-            return match.group(1)
+        cleaned = re.sub(
+            r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+",
+            "",
+            scenario_name.strip(),
+            flags=re.IGNORECASE,
+        )
+        if cleaned.startswith("/"):
+            # 纯路径串又提取不出分段（例如只有一个 /health）—— 保留路径本身
+            return cleaned[:40]
+        # 取**最靠前**的分隔符截断（不能按分隔符类型顺序找，否则
+        # 「限购商品管理-负路径，提交」会先被「，」命中而留出多余段）
+        cut = [cleaned.find(sep) for sep in ("，", ",", "、", "：", ":", "；", ";", "（", "(", " ", "-")]
+        cut = [idx for idx in cut if idx > 0]
+        if cut:
+            cleaned = cleaned[: min(cut)]
+        cleaned = cleaned.strip()
+        return cleaned[:20] or "未知模块"
 
-        # 取前 10 个字符作为模块名
-        return scenario_name[:10] if len(scenario_name) <= 10 else scenario_name[:10] + "..."
+    @staticmethod
+    def _module_from_path(endpoint: Optional[str]) -> Optional[str]:
+        """从接口路径里取有业务含义的最后三段。"""
+        if not endpoint:
+            return None
+        path = endpoint
+        if "://" in path:
+            path = urlparse(path).path
+        path = (path or "").split("?")[0].strip("/")
+        if not path:
+            return None
+        noise = {"api", "apis", "rest", "gateway"}
+        segments = []
+        for raw in path.split("/"):
+            seg = raw.strip()
+            if not seg:
+                continue
+            low = seg.lower()
+            if low in noise or re.fullmatch(r"v\d+", low):
+                continue
+            if re.fullmatch(r"\d+", seg) or re.fullmatch(r"[0-9a-fA-F-]{16,}", seg):
+                continue
+            segments.append(seg)
+        if not segments:
+            return None
+        return "/".join(segments[-3:])
+
+    @staticmethod
+    def _base_url_lines(request_summary: Optional[dict]) -> list[str]:
+        """渲染 Base URL 行。
+
+        缺陷描述里的 Base URL 必须是**这次真正执行的地址**。历史实现直接写
+        ``test_config`` 里的配置值 —— ``/runs/{id}/execute`` 传的 base_url 是整体
+        覆盖语义，覆盖后描述仍显示配置值，拿到工单的人按配置值复现不出问题
+        （ATR-20261028-004：配置值带 ``/yundt-saas-gateway``，实际打到域根，
+        工单里却写着带网关段的地址）。
+
+        所以：优先写实际执行值并标注来源；两者不一致时把配置值也列出来并提示，
+        让人一眼看出"这次跑的不是配置的那个环境/前缀"。
+        """
+        rs = request_summary or {}
+        executed = (rs.get("base_url") or "").strip()
+        configured = (rs.get("configured_base_url") or "").strip()
+        source = rs.get("base_url_source") or ""
+
+        if not executed or executed == "N/A":
+            return ["Base URL: N/A（未采集到，需人工确认执行环境）\n"]
+
+        label = "实际执行" if source == "executed" else "配置值"
+        lines = [f"Base URL: {executed}（{label}）\n"]
+        if configured and configured.rstrip("/") != executed.rstrip("/"):
+            lines.append(
+                f"配置 Base URL: {configured} —— ⚠️ 与本次实际执行地址不一致，"
+                "说明运行时覆盖了环境地址；若差异在路径前缀，复现时需补回该前缀\n"
+            )
+        return lines
 
     @staticmethod
     def _extract_phenomenon(failure_summary: str, endpoint: str, method: str) -> str:
@@ -509,11 +605,11 @@ class IDPDefectService:
 
         # ========== 测试类型 ==========
         delta_ops.append({"insert": "测试类型\n", "attributes": {"bold": True}})
+        delta_ops.append({"insert": f"{test_type_display}\n\n"})
+
         # ========== 缺陷类型 ==========
         delta_ops.append({"insert": "缺陷类型\n", "attributes": {"bold": True}})
         delta_ops.append({"insert": f"{defect_type or '未归类'}\n\n"})
-
-        delta_ops.append({"insert": f"{test_type_display}\n\n"})
 
         # ========== 业务项目 ==========
         delta_ops.append({"insert": "业务项目\n", "attributes": {"bold": True}})
@@ -525,8 +621,8 @@ class IDPDefectService:
 
         # ========== 测试环境 ==========
         delta_ops.append({"insert": "测试环境\n", "attributes": {"bold": True}})
-        base_url = request_summary.get("base_url", "N/A") if request_summary else "N/A"
-        delta_ops.append({"insert": f"Base URL: {base_url}\n"})
+        for _line in IDPDefectService._base_url_lines(request_summary):
+            delta_ops.append({"insert": _line})
         delta_ops.append({"insert": f"测试时间: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"})
 
         # ========== 复现步骤 ==========
@@ -554,8 +650,10 @@ class IDPDefectService:
             # API 测试复现步骤（默认）——旧版三步是模板套话（"发送请求/使用以下参数/观察结果"），
             # 拿到工单的人无法照着复现。这里把能确证的写实，缺什么就如实标缺。
             delta_ops.append({"insert": f"1. 向 {endpoint} 发送 {method} 请求\n"})
-            if request_params and request_params not in ("N/A", "{}", "null"):
+            if IDPDefectService._has_request_body(request_summary):
                 delta_ops.append({"insert": "2. 请求体见下方「请求信息 › 请求参数」\n"})
+            elif str(method).upper() in ("GET", "HEAD", "OPTIONS"):
+                delta_ops.append({"insert": f"2. 该请求无请求体（{method}），参数见 URL query\n"})
             else:
                 delta_ops.append({
                     "insert": "2. ⚠️ 未采集到请求体 —— 需人工补充能复现的最小请求参数\n"
@@ -615,8 +713,9 @@ class IDPDefectService:
         delta_ops.append({"insert": "请求信息\n", "attributes": {"bold": True}})
         delta_ops.append({"insert": f"Method: {method}\n"})
         delta_ops.append({"insert": f"URL: {endpoint}\n"})
-        if base_url != "N/A":
-            delta_ops.append({"insert": f"Base URL: {base_url}\n\n"})
+        for _line in IDPDefectService._base_url_lines(request_summary):
+            delta_ops.append({"insert": _line})
+        delta_ops.append({"insert": "\n"})
 
         # 请求头
         if request_headers and request_headers != "N/A":
@@ -702,45 +801,85 @@ class IDPDefectService:
 
     @staticmethod
     def _sanitize_request_params(request_summary: Optional[dict]) -> str:
-        """
-        脱敏请求参数
+        """脱敏请求参数。
 
-        隐藏敏感信息：Token、密码、Cookie 等
+        2026-10-28 起语义收紧：**请求体优先，只有请求体缺失时才退到请求头**，
+        并且退让时明确写出来。
+
+        历史实现把 body 与 headers 直接合并成一份 dict 塞进「请求参数」，
+        根因是当时 trace 的请求体读不到（``postData.text`` 是空串、真实报文在
+        ``resources/<sha1>``，见 ``trace_evidence._read_request_body``），
+        于是工单里「请求参数」实际是一堆请求头 —— 现象就是
+        「content-length: 28，但请求体是空的」。
+
+        现在请求体能读到了，请求头另有一节「请求头」，不该再混进来。
         """
         if not request_summary:
             return "N/A"
 
-        params = {}
+        body = IDPDefectService._normalize_body(request_summary.get("body"))
+        if body:
+            return json.dumps(
+                IDPDefectService._redact_mapping(body), ensure_ascii=False, indent=2
+            )
 
-        # 复制请求参数
-        body = request_summary.get("body", {})
+        headers = request_summary.get("headers")
+        if isinstance(headers, dict) and headers and not request_summary.get("query"):
+            return (
+                "（未采集到请求体，以下为请求头）\n"
+                + json.dumps(
+                    IDPDefectService._redact_mapping(headers),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+
+        query = request_summary.get("query")
+        if isinstance(query, str) and query.strip():
+            return f"（该请求无请求体，以下为 URL query 参数）\n{query.strip()}"
+
+        # 旧实现返回 "{}"：工单里写成「请求参数: {}」，读者分不清
+        # 是"请求体本就是空对象"还是"平台没采集到"（925695 即如此）。
+        return "（未采集到请求体/请求头）"
+
+    @staticmethod
+    def _normalize_body(body: Any) -> dict:
+        """把请求体统一成 dict（JSON 文本 / 非空 dict / 其它一律视为空）。"""
         if isinstance(body, dict):
-            params.update(body)
+            return body
+        if isinstance(body, list):
+            return {"items": body}
+        if isinstance(body, str) and body.strip():
+            try:
+                parsed = json.loads(body)
+            except (ValueError, TypeError):
+                return {"raw": body}
+            if isinstance(parsed, dict):
+                return parsed
+            return {"raw": parsed}
+        return {}
 
-        headers = request_summary.get("headers", {})
-        if isinstance(headers, dict):
-            params.update(headers)
+    @staticmethod
+    def _has_request_body(request_summary: Optional[dict]) -> bool:
+        if not request_summary:
+            return False
+        return bool(IDPDefectService._normalize_body(request_summary.get("body")))
 
-        # 脱敏处理
-        sanitized = {}
+    @staticmethod
+    def _redact_mapping(data: dict) -> dict:
+        """敏感字段脱敏（Token / 密码 / Cookie 等）。"""
         sensitive_keys = [
             "password", "token", "auth", "authorization", "cookie",
             "secret", "key", "api_key", "apikey", "access_token",
             "refresh_token", "credential", "credentials",
         ]
-
-        for k, v in params.items():
-            if any(s in k.lower() for s in sensitive_keys):
+        sanitized = {}
+        for k, v in data.items():
+            if any(s in str(k).lower() for s in sensitive_keys):
                 sanitized[k] = "***REDACTED***"
             else:
                 sanitized[k] = v
-
-        if not sanitized:
-            # 旧实现返回 "{}"：工单里写成「请求参数: {}」，读者分不清
-            # 是"请求体本就是空对象"还是"平台没采集到"（925695 即如此）。
-            return "（未采集到请求体/请求头）"
-
-        return json.dumps(sanitized, ensure_ascii=False, indent=2)
+        return sanitized
 
     @staticmethod
     def _sanitize_response_body(response_summary: Optional[dict]) -> str:

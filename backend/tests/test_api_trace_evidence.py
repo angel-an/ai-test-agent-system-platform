@@ -182,6 +182,61 @@ class TestTraceExtraction:
         assert ex.status_code == 404
         assert ex.response_body == {"detail": "Not Found"}
 
+    def test_reads_request_body_from_sha1_reference(self, tmp_path):
+        """回归（2026-10-28 实测 ATR-20261028-004 的真实 trace.zip）：
+
+        ``request.postData`` 是 ``{"mimeType": "application/json", "text": "",
+        "params": [], "_sha1": "…json"}`` —— **text 是空串**，真实报文在
+        ``resources/<sha1>``。历史实现只取 ``postData["text"]``，
+        于是工单里「请求参数」恒空，只剩请求头兜底（content-length: 28 却看不到体）。
+        """
+        trace = tmp_path / "trace.zip"
+        sha = "05b6bfec90d2772b36f9903dcc1d6c4c287fb8a4.json"
+        with zipfile.ZipFile(trace, "w") as zf:
+            zf.writestr(
+                "0-trace.network",
+                json.dumps(
+                    {
+                        "type": "resource-snapshot",
+                        "snapshot": {
+                            "startedDateTime": "2026-10-28T05:34:58.000Z",
+                            "time": 232.1,
+                            "request": {
+                                "method": "POST",
+                                "url": "https://sut.example.com/api/icdp/v1/memberCard/refund/calculate",
+                                "headers": [
+                                    {"name": "content-type", "value": "application/json"},
+                                    {"name": "content-length", "value": "28"},
+                                ],
+                                "bodySize": 28,
+                                "postData": {
+                                    "mimeType": "application/json",
+                                    "text": "",
+                                    "params": [],
+                                    "_sha1": sha,
+                                },
+                            },
+                            "response": {"status": 404, "headers": []},
+                        },
+                    }
+                )
+                + "\n",
+            )
+            zf.writestr(f"resources/{sha}", b'{"orderNo":"xxxxxxxxxxxxxx"}')
+        ex = extract_last_exchange(str(trace))
+        assert ex is not None
+        assert ex.status_code == 404
+        assert ex.request_body == {"orderNo": "xxxxxxxxxxxxxx"}
+
+    def test_missing_request_body_is_none_not_empty_dict(self, tmp_path):
+        """请求体既无内联 text 也无 _sha1 ⇒ None（描述里才敢说"未采集到"）。"""
+        trace = _write_trace(
+            tmp_path,
+            [_snapshot("POST", "https://sut.example.com/api/x", 500, "2026-10-27T13:00:00.000Z")],
+        )
+        ex = extract_last_exchange(str(trace))
+        assert ex is not None and ex.request_body is None
+
     def test_large_body_is_truncated(self, tmp_path):
         big = "x" * (MAX_BODY_BYTES * 2)
         trace = _write_trace(
@@ -307,3 +362,36 @@ class TestExecutorEvidence:
         ev = self._executor()._extract_http_evidence(results, self._api_test(), "POST /api/x")
         code = ev["response_summary"]["status_code"]
         assert code is None or isinstance(code, int)
+
+    def test_base_url_uses_executed_address_not_config(self, tmp_path):
+        """回归（ATR-20261028-004）：描述里的 Base URL 必须是本次真实执行的地址。
+
+        该次运行的 ``/execute`` body 传了 ``{"base_url": "https://sut.example.com"}``，
+        覆盖掉了配置里带网关段的 ``…/yundt-saas-gateway``；旧实现写配置值，
+        工单里的地址与实际请求不一致，排查方向直接被带偏。
+        """
+        trace = _write_trace(
+            tmp_path,
+            [_snapshot("POST", "https://sut.example.com/api/icdp/v1/x", 404, "2026-10-28T05:34:58.000Z")],
+        )
+        results = [{"attachments": [{"name": "trace", "path": str(trace)}]}]
+        ev = self._executor()._extract_http_evidence(
+            results,
+            self._api_test("https://sut.example.com/yundt-saas-gateway"),
+            "POST /api/icdp/v1/x",
+            "https://sut.example.com",
+        )
+        rs = ev["request_summary"]
+        assert rs["base_url"] == "https://sut.example.com"
+        assert rs["base_url_source"] == "executed"
+        assert rs["configured_base_url"] == "https://sut.example.com/yundt-saas-gateway"
+        assert rs["execution_base_url"] == "https://sut.example.com"
+
+    def test_fallback_base_url_is_marked_as_configured(self):
+        """没有 trace 时不知道实际打到哪 —— 只能标"配置值"，不能冒充实际值。"""
+        ev = self._executor()._extract_http_evidence(
+            [{"status": "failed"}], self._api_test("https://sut.example.com/gw"), "POST /api/x"
+        )
+        rs = ev["request_summary"]
+        assert rs["base_url_source"] == "configured"
+        assert rs["base_url"] == "https://sut.example.com/gw"
