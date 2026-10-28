@@ -576,7 +576,7 @@ class APICaseLinkService:
 
     def _generate_playwright_script(self, endpoint: APIEndpoint) -> str:
         method = endpoint.method.upper()
-        path = self._sample_path(endpoint.path)
+        path = self._sample_path(endpoint.path, endpoint.parameters)
         payload = self._sample_payload(endpoint.request_body)
         headers = self._sample_headers(endpoint.parameters)
         should_skip_mutation = self._is_mutating_endpoint(method, endpoint.path)
@@ -667,9 +667,11 @@ function buildPageUrl(base: string, page: number): string {{
         sample_note = ""
         if query_params or "{" in (endpoint.path or ""):
             sample_note = (
-                "\n// 样本值说明：路径参数用占位值 1、query 只传必填项"
-                "（default → 枚举首值 → 类型样本值），均不代表业务真实数据 —— "
+                "\n// 样本值说明：路径参数优先按接口声明取样本值"
+                "（default → 枚举首值 → 类型样本值，声明缺失用 1）；"
+                "query 只传必填项 —— 均不代表业务真实数据，"
                 "本用例验证的是接口契约与参数传递，不是业务结果正确性。"
+                "{{var}} 形态的路径段可经 API_TEST_DATA_JSON 运行期覆盖。"
             )
 
         return f"""import {{ test, expect }} from '@playwright/test';{sample_note}
@@ -712,14 +714,20 @@ function missingTemplateVariables(value: unknown): string[] {{
 
 function buildUrl(path: string): string {{
   const normalizedBase = BASE_URL.endsWith('/') ? BASE_URL : BASE_URL + '/';
-  return new URL(path.replace(/^\\/+/, ''), normalizedBase).toString();
+  // {{{{var}}}} 形态的路径段走 TEST_DATA 运行期覆盖（与 rawOptions 同一套解析）；
+  // 单大括号 {{id}} 在生成期已被样本值替换，不会进入这里。
+  // String()：resolveTemplate 的返回类型是 unknown，直接 .replace 会 TS2339。
+  return new URL(String(resolveTemplate(path)).replace(/^\\/+/, ''), normalizedBase).toString();
 }}
 {pagination_helper}
 test('{method} {endpoint.path} basic contract', async ({test_params}) => {{
   {unverified_guard}
   {skip_guard}
   const rawOptions = {json.dumps(options, ensure_ascii=False, indent=4)};
+  // 路径里的 {{{{var}}}} 与 rawOptions 共用同一套缺失检查：缺 TEST_DATA 时跳过
+  // 并给出变量名，而不是把字面 {{{{var}}}} 打进 URL 制造一个必然 404。
   const missingVariables = missingTemplateVariables(rawOptions)
+    .concat(missingTemplateVariables({json.dumps(path, ensure_ascii=False)}))
     .filter((key) => TEST_DATA[key] === undefined || TEST_DATA[key] === null);
   test.skip(missingVariables.length > 0, `Missing API test data: ${{missingVariables.join(', ')}}`);
   const resolvedOptions: any = resolveTemplate(rawOptions);
@@ -925,10 +933,47 @@ test('{method} {endpoint.path} basic contract', async ({test_params}) => {{
         )
         return not any(marker in normalized_path for marker in readonly_markers)
 
-    def _sample_path(self, path: str) -> str:
+    def _sample_path(self, path: str, parameters: Any = None) -> str:
+        """路径参数取样本值：优先用 endpoint.parameters 里 ``in: path`` 的声明
+        （default → 枚举首值 → 类型样本值），声明缺失时回落 "1"。
+
+        此前无条件 ``re.sub(r"\\{[^{}]+\\}", "1", path)``：分页类接口声明了
+        page/pageSize 语义的路径段（如 ``/page/{pageNo}``）也被打成 1，
+        和 query 参数同一套样本逻辑却不共用。
+
+        ``{{var}}``（双大括号）是运行期变量，保留原样交给脚本里的
+        ``buildUrl``/``resolveTemplate`` 按 ``API_TEST_DATA_JSON`` 解析，不参与采样。
+        """
         import re
 
-        return re.sub(r"\{[^{}]+\}", "1", path)
+        declared: dict[str, str] = {}
+        if isinstance(parameters, list):
+            for param in parameters:
+                if (
+                    isinstance(param, dict)
+                    and param.get("in") == "path"
+                    and param.get("name")
+                ):
+                    declared[str(param["name"])] = self._sample_param_value(param)
+
+        def _replace(match: "re.Match[str]") -> str:
+            name = match.group(1).strip()
+            return declared.get(name, "1")
+
+        # 先把 {{var}} 摘出来保护（sentinel 不含大括号，采样正则碰不到它），
+        # 单大括号段采样完再原样放回。
+        tokens: dict[str, str] = {}
+
+        def _protect(match: "re.Match[str]") -> str:
+            key = f"\x00{len(tokens)}\x00"
+            tokens[key] = match.group(0)
+            return key
+
+        protected = re.sub(r"\{\{[^{}]+\}\}", _protect, path)
+        protected = re.sub(r"\{([^{}]+)\}", _replace, protected)
+        for key, original in tokens.items():
+            protected = protected.replace(key, original)
+        return protected
 
     def _sample_headers(self, parameters: Any) -> dict[str, str]:
         headers: dict[str, str] = {}

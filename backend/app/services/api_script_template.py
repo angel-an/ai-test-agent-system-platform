@@ -29,7 +29,9 @@ from typing import Iterable, Mapping, Optional
 #:
 #: 变更记录：
 #:   api-rev1 (2026-10-28) 首版指纹：模板、样本值、信封断言、分页契约计入 digest。
-API_SCRIPT_TEMPLATE_REV = "api-rev1"
+#:   api-rev2 (2026-10-28) 路径参数消费 endpoint.parameters（default→enum→类型样本，
+#:             此前一律硬替换成 "1"）；buildUrl 支持 {{var}} 运行期 TEST_DATA 覆盖。
+API_SCRIPT_TEMPLATE_REV = "api-rev2"
 
 #: 指纹行格式（写在脚本首行，纯注释，不影响执行）。
 _FINGERPRINT_LINE = "// API_SCRIPT_TEMPLATE_REV: {rev} DIGEST: {digest}"
