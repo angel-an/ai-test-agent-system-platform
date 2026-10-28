@@ -19,6 +19,7 @@ from .test_result import TestResult, TestStepResult
 from .attachment import Attachment, AttachmentEntityType
 from .configuration import Configuration
 from .test_plan import TestPlan
+from .checklist_row import ChecklistRow, ChecklistRun
 from .api_test import APITest, APITestRun, APITestResult
 from .api_endpoint import APIEndpoint
 from .api_doc_parse_task import APIDocParseTask
@@ -93,6 +94,8 @@ __all__ = [
     "TestRunArtifact",
     "Configuration",
     "TestPlan",
+    "ChecklistRow",
+    "ChecklistRun",
     "TestPlanStatus",
     "TestPlanActiveState",
     "APITest",

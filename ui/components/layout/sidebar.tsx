@@ -75,6 +75,11 @@ export function Sidebar({
       icon: Route,
     },
     {
+      title: "上线Checklist",
+      href: "/checklist",
+      icon: ClipboardList,
+    },
+    {
       title: t("nav.androidTests"),
       href: "/android-tests",
       icon: Smartphone,

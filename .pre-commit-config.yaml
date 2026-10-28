@@ -20,7 +20,10 @@ repos:
       # 只启这一条规则，不引入全量风格检查。
       - id: ruff-f811
         name: Ruff F811 (redefinition of unused name)
-        entry: .venv/Scripts/ruff.exe check backend/app --select F811 --quiet
+        # 用 python -m ruff 而非裸 ruff.exe 相对路径：Windows 下 pre-commit 以
+        # CreateProcess 拉起钩子进程，相对路径 exe 会 WinError 2（2026-10-28 实测）。
+        # python 走 PATH 解析，venv 激活与否都能工作（系统 Python 亦装有 ruff）。
+        entry: python -m ruff check backend/app --select F811 --quiet
         language: system
         pass_filenames: false
         always_run: true
