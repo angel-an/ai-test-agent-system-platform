@@ -54,6 +54,7 @@ class DefectRegistrationService:
         error_message: Optional[str],
         report_url: Optional[str] = None,
         allow_create: bool = True,
+        evidence_urls: Optional[dict] = None,
     ):
         """
         从 API 测试失败登记缺陷
@@ -70,6 +71,7 @@ class DefectRegistrationService:
             error_message: 错误信息
             report_url: 报告地址
             allow_create: 是否允许自动创建
+            evidence_urls: 已归档到对象存储的失败证据链接 {类别: 预签名 URL}
         """
         # 决策判断
         decision = DefectDecisionService.decide(
@@ -96,6 +98,7 @@ class DefectRegistrationService:
             report_url=report_url,
             allow_create=allow_create,
             source_type="api",
+            evidence_urls=evidence_urls,
         )
 
     # ========================================================================

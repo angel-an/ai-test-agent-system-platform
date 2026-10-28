@@ -60,6 +60,7 @@ class IDPDefectService:
         allow_create: bool = True,
         source_type: str = "api",
         parent_test_run_id: Optional[UUID] = None,
+        evidence_urls: Optional[dict] = None,
     ) -> IDPDefectRecord:
         """
         处理测试失败，创建 IDP 缺陷
@@ -79,6 +80,8 @@ class IDPDefectService:
             source_type: 来源类型 (api/web/security)
             parent_test_run_id: 所属 TestRun（Web 场景下 test_run_id 是 WebTestRun，
                 需要额外的 TestRun 维度才能做"同一次运行内去重"）
+            evidence_urls: 已归档到对象存储的失败证据链接 {类别: 预签名 URL}
+                （trace / screenshot 等，写进描述「证据附件」节）
 
         Returns:
             IDPDefectRecord: 缺陷记录
@@ -164,6 +167,7 @@ class IDPDefectService:
             report_url=report_url,
             source_project_key=source_project_key,
             source_type=source_type,
+            evidence_urls=evidence_urls,
         )
 
         # 8. 创建缺陷记录（pending 状态）
@@ -449,6 +453,7 @@ class IDPDefectService:
         report_url: Optional[str],
         source_project_key: str,
         source_type: str = "api",
+        evidence_urls: Optional[dict] = None,
     ) -> str:
         """
         生成缺陷描述（Delta 格式）
@@ -623,8 +628,37 @@ class IDPDefectService:
         if test_case_id:
             delta_ops.append({"insert": f"测试用例 ID: {test_case_id}\n"})
         if report_url:
-            delta_ops.append({"insert": f"测试报告地址: {report_url}\n"})
+            delta_ops.append({"insert": "测试报告地址: "})
+            # 必须挂 link 属性：IDP 富文本里裸 URL 在部分客户端不可点，
+            # 而报告是预签名绝对地址（相对路径 + 登录态的历史写法根本打不开）。
+            delta_ops.append({"insert": report_url, "attributes": {"link": report_url}})
+            delta_ops.append({"insert": "\n"})
         delta_ops.append({"insert": "\n"})
+
+        # ========== 证据附件 ==========
+        # trace / 截图由执行器在临时目录销毁前归档到对象存储（见
+        # app/services/evidence_artifacts.py），这里只负责把预签名链接写成人能点开的形式。
+        _evidence = {k: v for k, v in (evidence_urls or {}).items() if v}
+        if _evidence:
+            delta_ops.append({"insert": "证据附件\n", "attributes": {"bold": True}})
+            _labels = {
+                "trace": "Playwright trace（下载后用 trace.playwright.dev 打开，含完整请求/响应）",
+            }
+            for _kind, _url in _evidence.items():
+                if _kind in _labels:
+                    _label = _labels[_kind]
+                elif _kind == "screenshot":
+                    _label = "失败截图"
+                elif _kind.startswith("screenshot_"):
+                    _label = f"失败截图 {_kind.rsplit('_', 1)[-1]}"
+                else:
+                    _label = _kind
+                delta_ops.append({"insert": f"{_label}: "})
+                delta_ops.append({"insert": _url, "attributes": {"link": _url}})
+                delta_ops.append({"insert": "\n"})
+            delta_ops.append({
+                "insert": "（链接为对象存储预签名地址，7 天内有效；过期后可按上方「测试运行 ID」重新归档取回）\n\n"
+            })
 
         # ========== 优先级依据 ==========
         delta_ops.append({"insert": "优先级依据\n", "attributes": {"bold": True}})

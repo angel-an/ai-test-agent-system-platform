@@ -33,6 +33,11 @@ from app.schemas.enums import TestResultStatus
 from app.models.mongodb.api_test_log import APITestDetailLog
 from app.services.defect_registration_service import DefectRegistrationService
 from app.services.trace_evidence import extract_from_result as extract_trace_exchange
+from app.services.evidence_artifacts import (
+    evidence_url_map,
+    presigned_url_for,
+    upload_run_evidence,
+)
 from app.services.web_failure_policy import classify_environment_block
 
 logger = logging.getLogger(__name__)
@@ -205,13 +210,24 @@ class APITestExecutor:
                     work_dir=temp_path,
                 )
 
+                # 5.5 失败证据归档（必须在 with 之内：TemporaryDirectory 退出即清空，
+                #     trace.zip 会随目录一起消失，那样工单里永远只有一句"失败了"）。
+                #     trace 只在失败时落盘，全通过时这里扫不到文件、零开销。
+                evidence = await asyncio.to_thread(upload_run_evidence, run_id, temp_path)
+                evidence_urls = evidence_url_map(evidence)
+
+                # 报告下载地址改成**预签名绝对 URL**：历史写法是
+                # `/api/v2/test-runs/{run_id}/report`（相对路径 + 需要平台登录态），
+                # 拿到工单的人点不开。预签名失败就留空，不往描述里写坏链接。
+                report_url = presigned_url_for(report_path) if report_path else None
+
                 # 6. 解析结果并保存（此时 report_path 已生成，可传入缺陷描述）
-                report_url = f"/api/v2/test-runs/{run_id}/report" if report_path else None
                 await self._process_test_results(
                     run_id=run_id,
                     api_test=api_test,
                     test_result=result,
                     report_url=report_url,
+                    evidence_urls=evidence_urls,
                 )
 
                 # 7. 回写 IDP 缺陷登记结果到报告
@@ -516,6 +532,7 @@ export default defineConfig({{
         api_test: APITest,
         test_result: Dict[str, Any],
         report_url: Optional[str] = None,
+        evidence_urls: Optional[Dict[str, str]] = None,
     ):
         """
         处理测试结果
@@ -525,6 +542,7 @@ export default defineConfig({{
             api_test: API 测试
             test_result: Playwright 测试结果
             report_url: 测试报告 URL（报告生成后传入）
+            evidence_urls: 已归档到对象存储的失败证据链接 {类别: 预签名 URL}
         """
         try:
             # 解析 Playwright 结果
@@ -592,6 +610,7 @@ export default defineConfig({{
                                 # 正常路径用 setdefault 挂在报告 dict 上）
                                 runner_stdout=test_result.get("stdout"),
                                 evidence=evidence,
+                                evidence_urls=evidence_urls,
                             )
 
             # 更新运行统计（verdict 与计数同事务落库，判红看 verdict 不看 status）
@@ -1013,6 +1032,7 @@ export default defineConfig({{
         report_url: Optional[str] = None,
         runner_stdout: Optional[str] = None,
         evidence: Optional[Dict[str, Any]] = None,
+        evidence_urls: Optional[Dict[str, str]] = None,
     ):
         """
         处理 IDP 缺陷创建
@@ -1091,6 +1111,7 @@ export default defineConfig({{
                 error_message=error_message,
                 report_url=report_url,
                 allow_create=has_complete_evidence,
+                evidence_urls=evidence_urls,
             )
 
         except Exception as e:
