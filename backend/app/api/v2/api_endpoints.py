@@ -559,6 +559,7 @@ async def get_endpoint_test_runs(
             {
                 "id": str(run.id),
                 "status": run.status,
+                "verdict": run.verdict,
                 "total_scenarios": run.total_tests,
                 "passed_scenarios": run.passed_tests,
                 "failed_scenarios": run.failed_tests,

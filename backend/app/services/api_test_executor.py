@@ -26,6 +26,7 @@ from app.repositories.api_test_repo import (
     APITestRepository,
     APITestRunRepository,
     APITestResultRepository,
+    api_run_verdict,
 )
 from app.config.minio_client import MinIOClient
 from app.schemas.enums import TestResultStatus
@@ -146,7 +147,16 @@ class APITestExecutor:
                     row = await self.api_test_run_repo.get_by_id(run_id)
                     if row is not None:
                         await self.api_test_run_repo.update(
-                            row, status="failed", error_message=str(outer_err)
+                            row,
+                            status="failed",
+                            error_message=str(outer_err),
+                            # 异常中断不是用例失败：按现有计数推导（零结果 → empty）
+                            verdict=api_run_verdict(
+                                total=row.total_tests,
+                                passed=row.passed_tests,
+                                failed=row.failed_tests,
+                                skipped=row.skipped_tests,
+                            ),
                         )
                         await bg_session.commit()
                 except Exception as write_err:
@@ -233,11 +243,20 @@ class APITestExecutor:
         except Exception as e:
             # 更新为失败状态（回写自身也要兜底，绝不让异常逃出后台任务）
             try:
-                await self.api_test_run_repo.update(
-                    await self.api_test_run_repo.get_by_id(run_id),
-                    status="failed",
-                    error_message=str(e)
-                )
+                failed_row = await self.api_test_run_repo.get_by_id(run_id)
+                if failed_row is not None:
+                    await self.api_test_run_repo.update(
+                        failed_row,
+                        status="failed",
+                        error_message=str(e),
+                        # 异常中断不是用例失败：按现有计数推导（零结果 → empty）
+                        verdict=api_run_verdict(
+                            total=failed_row.total_tests,
+                            passed=failed_row.passed_tests,
+                            failed=failed_row.failed_tests,
+                            skipped=failed_row.skipped_tests,
+                        ),
+                    )
             except Exception as update_err:
                 logger.error(
                     "回写 run 失败状态时出错 run_id=%s: %s（原始错误: %s）",
@@ -575,13 +594,19 @@ export default defineConfig({{
                                 evidence=evidence,
                             )
 
-            # 更新运行统计
+            # 更新运行统计（verdict 与计数同事务落库，判红看 verdict 不看 status）
             await self.api_test_run_repo.update(
                 await self.api_test_run_repo.get_by_id(run_id),
                 total_tests=total_tests,
                 passed_tests=passed_tests,
                 failed_tests=failed_tests,
                 skipped_tests=skipped_tests,
+                verdict=api_run_verdict(
+                    total=total_tests,
+                    passed=passed_tests,
+                    failed=failed_tests,
+                    skipped=skipped_tests,
+                ),
             )
 
         except Exception as e:

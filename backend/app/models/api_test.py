@@ -241,6 +241,13 @@ class APITestRun(Base, UUIDMixin, TimestampMixin):
         comment="跳过数"
     )
 
+    # run 级结论（与 web 侧 test_runs.verdict 同口径：判红看 verdict，不看 status）
+    verdict: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        comment="run 结论 pass/fail/unverified/empty；由用例级计数推导"
+    )
+
     # 执行时长
     duration_ms: Mapped[int | None] = mapped_column(
         Integer,

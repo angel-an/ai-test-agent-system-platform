@@ -22,7 +22,11 @@ from uuid import UUID
 from app.config.database import async_session_factory
 from app.config.minio_client import MinIOClient
 from app.config.settings import settings
-from app.repositories.api_test_repo import APITestRepository, APITestRunRepository
+from app.repositories.api_test_repo import (
+    APITestRepository,
+    APITestRunRepository,
+    api_run_verdict,
+)
 from app.schemas.enums import JobStatus
 from app.services.execution.models import ExecutionResult
 from app.services.execution.runner import PlaywrightRunner
@@ -377,6 +381,9 @@ class PlaywrightExecutor(ScriptExecutor):
                         passed_tests=passed,
                         failed_tests=failed,
                         skipped_tests=skipped,
+                        verdict=api_run_verdict(
+                            total=total, passed=passed, failed=failed, skipped=skipped
+                        ),
                         report_path=report_path,
                     )
                     await session.commit()
@@ -400,6 +407,13 @@ class PlaywrightExecutor(ScriptExecutor):
                     kwargs: Dict[str, Any] = {
                         "status": "failed",
                         "error_message": error_message,
+                        # 失败路径不改计数：按行上已有计数推导（零结果 → empty）
+                        "verdict": api_run_verdict(
+                            total=run_record.total_tests,
+                            passed=run_record.passed_tests,
+                            failed=run_record.failed_tests,
+                            skipped=run_record.skipped_tests,
+                        ),
                     }
                     if duration_ms is not None:
                         kwargs["duration_ms"] = duration_ms

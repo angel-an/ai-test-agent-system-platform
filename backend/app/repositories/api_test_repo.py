@@ -22,6 +22,24 @@ from app.models.api_test import APITest, APITestRun, APITestResult
 API_RUN_INTERRUPTED_MESSAGE = "执行被中断（服务进程退出或重启），非用例失败"
 
 
+def api_run_verdict(*, total: int, passed: int, failed: int, skipped: int) -> str:
+    """API 链路 run 级结论，与 web 侧 ``compute_run_verdict`` 同一口径（判红看它）。
+
+    API 侧没有 blocked / not_executed 两个计数桶，固定传 0；改动这里必须
+    同步检查 ``0027_api_run_verdict`` 迁移的回填 SQL，两边口径不能漂移。
+    """
+    from app.repositories.test_run_repo import compute_run_verdict
+
+    return compute_run_verdict(
+        total=total,
+        passed=passed,
+        failed=failed,
+        skipped=skipped,
+        blocked=0,
+        not_executed=0,
+    )
+
+
 def next_api_run_identifier(existing_identifiers: Iterable[str], date_str: str) -> str:
     """从「当天已用编号」推算下一个 ``ATR-YYYYMMDD-NNN``。
 

@@ -21,7 +21,7 @@ from app.config.settings import settings
 from app.config.minio_client import MinIOClient
 from app.models.api_test import APITestResult
 from app.models.attachment import Attachment
-from app.repositories.api_test_repo import APITestRunRepository
+from app.repositories.api_test_repo import APITestRunRepository, api_run_verdict
 from app.schemas.enums import TestResultStatus
 
 
@@ -61,6 +61,8 @@ async def execute_endpoint_script(
             passed_tests=0,
             failed_tests=0,
             skipped_tests=0,
+            # 阻断 ≠ 用例失败：零结果按口径落 empty（与回填 SQL 一致）
+            verdict=api_run_verdict(total=0, passed=0, failed=0, skipped=0),
             error_message="缺执行环境配置: " + ", ".join(missing),
         )
         return str(run.id)
@@ -298,6 +300,9 @@ async def _run_in_background(
                     passed_tests=passed,
                     failed_tests=failed,
                     skipped_tests=skipped,
+                    verdict=api_run_verdict(
+                        total=total, passed=passed, failed=failed, skipped=skipped
+                    ),
                 )
 
             # 写入每个用例的明细 (APITestResult)
