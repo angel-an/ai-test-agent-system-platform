@@ -237,3 +237,6 @@ backend/verify_round_final.json
 # 本地构建缓存与 vendored 运行时源
 ui/.next-dev/
 core/
+
+# 小程序编译包（vendor 提供的 mp 构建产物，14MB，不入库）
+backend/workspace/miniprogram/

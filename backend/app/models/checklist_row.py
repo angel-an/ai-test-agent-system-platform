@@ -50,7 +50,7 @@ class ChecklistRow(Base, UUIDMixin, TimestampMixin):
     )
     latest_error: Mapped[str | None] = mapped_column(Text, comment="最近失败原因（人话）")
     latest_evidence: Mapped[str | None] = mapped_column(Text, comment="最近证据路径/链接")
-    latest_consistency: Mapped[str | None] = mapped_column(String(60), comment="一致性断言说明")
+    latest_consistency: Mapped[str | None] = mapped_column(Text, comment="一致性断言/验证方式说明（0029 由 varchar(60) 放宽为 Text）")
     latest_run_id: Mapped[UUID | None] = mapped_column(
         UUID(as_uuid=True), comment="最近所属 ChecklistRun ID"
     )
