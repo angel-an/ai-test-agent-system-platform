@@ -182,6 +182,9 @@ def probe_row(mini, row: dict, spec: dict | None, evidence_dir: str) -> dict:
                 err = data_assert(page, spec)
             item["status"] = "fail" if err else "pass"
             item["error"] = err
+            # probe_as 降级的行必须把验证方式/覆盖边界写进 consistency，页面可查
+            if not err and spec.get("probe_as") and spec.get("note"):
+                item["consistency"] = spec["note"]
         elif kind == "navigate":
             err = data_assert(page, spec)
             note = spec.get("note")
