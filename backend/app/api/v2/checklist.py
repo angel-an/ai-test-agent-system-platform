@@ -21,8 +21,10 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUserDep, DbSessionDep
 from app.config.minio_client import MinIOClient, MinIOError
+from app.config.settings import settings
 from app.schemas.common import SuccessResponse
 from app.repositories import checklist_repository as repo
+from app.services.evidence_artifacts import presigned_url_for
 
 
 router = APIRouter(
@@ -33,6 +35,10 @@ router = APIRouter(
 # 证据对象在存储桶内的固定前缀，兼作目录穿越防护的锚
 EVIDENCE_PREFIX = "checklist-evidence"
 
+# 图文报告前缀：该前缀**公开只读**（桶策略 ChecklistReportsPublicRead），
+# 链接不带签名、不过期，团队成员/手机直接可开。
+REPORT_PREFIX = "checklist-reports"
+
 # 单证据大小上限（截图/短视频足够，防止误传大文件把桶打爆）
 EVIDENCE_MAX_BYTES = 50 * 1024 * 1024
 
@@ -42,6 +48,8 @@ _EXT_CONTENT_TYPE = {
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
     ".gif": "image/gif",
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
     ".mp4": "video/mp4",
     ".webm": "video/webm",
     ".json": "application/json",
@@ -58,6 +66,18 @@ def _safe_evidence_name(project_identifier: str, raw: str) -> str:
     if not name.startswith(expected) or ".." in name.split("/"):
         raise HTTPException(status_code=400, detail="非法证据对象名")
     return name
+
+
+def public_object_url(object_name: str) -> str:
+    """对象名 → 对外可分享 URL（**不带签名、不过期**）。
+
+    依赖桶策略把 ``checklist-reports/*`` 设为匿名只读；host 优先取
+    ``MINIO_PUBLIC_ENDPOINT``（有反代/域名时填域名），否则用 ``MINIO_ENDPOINT``。
+    """
+    host = (settings.minio_public_endpoint or settings.minio_endpoint or "").strip()
+    host = host.replace("https://", "").replace("http://", "").rstrip("/")
+    scheme = "https" if settings.minio_secure or host.endswith(":443") else "http"
+    return f"{scheme}://{host}/{settings.minio_bucket}/{object_name}"
 
 
 class ChecklistRowIn(BaseModel):
@@ -412,6 +432,58 @@ async def upload_evidence(
     )
 
 
+@router.post(
+    "/report",
+    response_model=SuccessResponse[dict[str, Any]],
+    summary="图文报告发布（公开只读、不过期链接，团队/手机可直接打开）",
+)
+async def upload_report(
+    project_identifier: str,
+    user: CurrentUserDep,
+    db: DbSessionDep,
+    file: Annotated[UploadFile, File(description="自包含 HTML 报告（证据图内联）")],
+) -> SuccessResponse[dict[str, Any]]:
+    """把探针的 report.html 发布成**公开只读链接**。
+
+    与 ``/evidence`` 的区别：证据走 ``checklist-evidence/``（私有，靠签名或后代理读），
+    报告走 ``checklist-reports/``（桶策略匿名只读）——因此链接**不带签名、永不过期**，
+    团队成员与手机点开都一样，不受预签名 7 天上限约束。
+
+    报告必须是**自包含**的（图片已内联 data URI）；外部资源在别人机器上会 404。
+    """
+    try:
+        project = await repo.get_project(db, project_identifier)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+    if len(data) > EVIDENCE_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"报告超过大小上限 {EVIDENCE_MAX_BYTES // (1024 * 1024)}MB",
+        )
+    if Path(file.filename or "").suffix.lower() not in (".html", ".htm"):
+        raise HTTPException(status_code=400, detail="只接受 .html 报告")
+
+    object_name = f"{REPORT_PREFIX}/{project.identifier}/{uuid4().hex[:12]}.html"
+    try:
+        MinIOClient.upload_bytes(object_name, data, content_type="text/html; charset=utf-8")
+    except MinIOError as exc:
+        raise HTTPException(status_code=502, detail=f"报告上传对象存储失败: {exc}") from exc
+
+    return SuccessResponse(
+        success=True,
+        data={
+            "object_name": object_name,
+            "url": public_object_url(object_name),
+            "size": len(data),
+            "expires": None,
+        },
+    )
+
+
 @router.get(
     "/evidence-file",
     summary="证据文件下载（对象存储代理，链接永不过期）",
@@ -443,3 +515,36 @@ async def get_evidence_file(
     ext = Path(name).suffix.lower()
     media_type = _EXT_CONTENT_TYPE.get(ext, "application/octet-stream")
     return Response(content=content, media_type=media_type)
+
+
+@router.get(
+    "/evidence-link",
+    response_model=SuccessResponse[dict[str, Any]],
+    summary="证据/报告的对外可点链接（对象存储预签名，手机可打开）",
+)
+async def get_evidence_link(
+    project_identifier: str,
+    user: CurrentUserDep,
+    db: DbSessionDep,
+    object_name: Annotated[str, Query(description="upload_evidence 返回的 object_name")],
+    days: Annotated[int, Query(ge=1, le=7, description="有效期（天），对象存储预签名上限 7 天")] = 7,
+) -> SuccessResponse[dict[str, Any]]:
+    """把 object_name 换成可直接分享的预签名链接。
+
+    用途：钉钉/IM 通知里的「报告链接」必须是别人（含手机）点得开的地址，
+    ``/evidence-file`` 是后端代理（依赖 127.0.0.1 或本机存活），不等于分享链接；
+    这里直接签对象存储域名，链接短时有效（≤7 天），**事后失效属预期**。
+    预签名失败返回 ``url=null``，绝不返回坏链接。
+    """
+    try:
+        project = await repo.get_project(db, project_identifier)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    name = _safe_evidence_name(project.identifier, object_name)
+    url = presigned_url_for(name, days=days)
+    return SuccessResponse(
+        success=True,
+        data={"object_name": name, "url": url, "expires_days": days if url else None},
+    )
+

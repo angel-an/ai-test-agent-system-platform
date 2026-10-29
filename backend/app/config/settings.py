@@ -174,6 +174,9 @@ class Settings(BaseSettings):
 
     # MinIO 对象存储配置
     minio_endpoint: str = "114.55.110.60:9000"
+    # 对外可分享域名（团队成员/手机访问用）；留空则退化用 minio_endpoint。
+    # 例：MINIO_PUBLIC_ENDPOINT=minio.example.com:9000（有反代时写域名:443 不带 scheme）
+    minio_public_endpoint: Optional[str] = None
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_bucket: str = "test-management"
