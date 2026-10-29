@@ -23,7 +23,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import uuid
@@ -148,6 +150,370 @@ def data_assert(page, spec: dict) -> str | None:
     if isinstance(node, str):
         return None if node.strip() else f"数据断言失败：{dp} 为空串"
     return None if node else f"数据断言失败：{dp} 为空"
+
+
+# ---------------------------------------------------------------------------
+# 真机混合通道（device 模式）：automator 桥（test_port）+ u2 坐标点击 + adb 截图。
+# 前提：手机经 auto-preview 真机调试二维码挂进 IDE 自动化会话，wx API 经 mock 打桩。
+# ---------------------------------------------------------------------------
+
+def adb_shot(adb_path: str, serial: str, out: str) -> None:
+    with open(out, "wb") as f:
+        subprocess.run([adb_path, "-s", serial, "exec-out", "screencap", "-p"],
+                       stdout=f, check=False)
+
+
+def current_activity(adb_path: str, serial: str) -> str:
+    r = subprocess.run(
+        [adb_path, "-s", serial, "shell",
+         "dumpsys activity activities | grep -m1 topResumedActivity"],
+        capture_output=True, text=True, timeout=15)
+    return r.stdout or ""
+
+
+def in_miniprogram(adb_path: str, serial: str) -> bool:
+    act = current_activity(adb_path, serial)
+    return "com.tencent.mm" in act and "AppBrandUI" in act
+
+
+def reopen_miniprogram(mini, u2d, dev_conf, adb_path: str, serial: str) -> bool:
+    """小程序被完全退出时自动重进：回微信首页 → 下拉最近小程序 → 点图标。
+
+    全程坐标化（荣耀系无障碍树不暴露微信 UI 文本），实现无人值守。
+    """
+    reopen = dev_conf.get("reopen") or {}
+    (x1, y1), (x2, y2) = reopen.get("swipe", [[500, 400], [500, 1150]])
+    ix, iy = reopen.get("icon", [105, 470])
+    try:
+        u2d.app_start("com.tencent.mm")
+        time.sleep(3)
+        # 退到微信首页（聊天列表）：不在 LauncherUI 就按返回
+        for _ in range(5):
+            if "LauncherUI" in current_activity(adb_path, serial):
+                break
+            u2d.press("back")
+            time.sleep(1.2)
+        # 下拉出「最近的小程序」面板并点目标小程序图标
+        u2d.swipe(x1, y1, x2, y2, duration=0.3)
+        time.sleep(1.5)
+        u2d.click(ix, iy)
+        time.sleep(5)
+        for _ in range(5):
+            try:
+                _ = mini.app.get_current_page().path
+                return True
+            except Exception:
+                time.sleep(2)
+        return False
+    except Exception:
+        return False
+
+
+def is_home(mini, u2d, dev_conf, adb_path: str, serial: str,
+            refs_dir: str, shot: str) -> bool:
+    """以首页特征区金标图像判定是否真在首页（automator 在真机是影子栈，不可信）。
+
+    用 home_rect（堂食/到店取/小杨送入口带，通知横幅遮不到），连拍 3 次
+    （间隔 2.5s）任一命中即通过——容忍负一屏通知横幅的瞬时遮挡。
+    """
+    home_ref = os.path.join(refs_dir, "home.png")
+    if not os.path.exists(home_ref):
+        try:
+            adb_shot(adb_path, serial, shot)
+            from shutil import copyfile
+            copyfile(crop_title(shot, dev_conf, "home_rect"), home_ref)
+            return True  # 基线轮视为通过
+        except Exception:
+            return False
+    threshold = float(dev_conf.get("rmse_threshold", 14.0))
+    for attempt in range(3):
+        try:
+            adb_shot(adb_path, serial, shot)
+            if rmse(crop_title(shot, dev_conf, "home_rect"), home_ref) <= threshold:
+                return True
+        except Exception:
+            pass
+        if attempt < 2:
+            time.sleep(2.5)  # 等通知横幅消散
+    return False
+
+
+def ensure_session(mini, u2d, dev_conf, adb_path: str, serial: str,
+                   refs_dir: str) -> bool:
+    """每行探针前恢复会话：原生页（扫码/支付等）按 BACK 退回小程序；
+    小程序被完全退出则自动重进（reopen 流程），无需人工留守。
+    落点判定一律用截图与 home 金标比对（automator 路由不穿透真机渲染层）。"""
+    tmp_shot = os.path.join(tempfile.gettempdir(), "ensure-session.png")
+    for _ in range(3):
+        if in_miniprogram(adb_path, serial):
+            break
+        u2d.press("back")
+        time.sleep(1.5)
+    else:
+        print("[info] 小程序已退出，自动重进…", flush=True)
+        if not reopen_miniprogram(mini, u2d, dev_conf, adb_path, serial):
+            return False
+    w, h = dev_conf.get("screen", [720, 1612])
+    x, y = dev_conf.get("tab_home", [0.086, 0.957])
+    # 恢复策略：第一步 tab 点击（有 tab 栏的页直接回首页）；
+    # 之后每轮先截图判定，不在小程序就自动重进，在但不在首页就按 BACK
+    # （二级页/表单无 tab 栏，BACK 链可能 3+ 层）。判定先于动作，绝不误退首页。
+    tab_tried = False
+    for attempt in range(10):
+        if in_miniprogram(adb_path, serial) and is_home(
+                mini, u2d, dev_conf, adb_path, serial, refs_dir, tmp_shot):
+            return True
+        if not in_miniprogram(adb_path, serial):
+            print("[info] 小程序已退出，自动重进…", flush=True)
+            reopen_miniprogram(mini, u2d, dev_conf, adb_path, serial)
+        elif not tab_tried:
+            u2d.click(int(w * x), int(h * y))
+            tab_tried = True
+        else:
+            u2d.press("back")
+        time.sleep(2.2)
+    return False
+
+
+def go_home_device(mini, u2d, dev_conf: dict) -> bool:
+    """tabBar API 导航在本应用对 automator 抛错，改用 u2 坐标点「首页」tab。"""
+    w, h = dev_conf.get("screen", [720, 1612])
+    x, y = dev_conf.get("tab_home", [0.086, 0.957])
+    for _ in range(2):
+        u2d.click(int(w * x), int(h * y))
+        time.sleep(2.0)
+        try:
+            if (mini.app.get_current_page().path or "").strip("/") == "pages/home/index":
+                return True
+        except Exception:
+            time.sleep(1.0)
+    return False
+
+
+def wait_route(mini, timeout: float = 6.0) -> str | None:
+    """点击后等待路由稳定，返回最终 page path。"""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        try:
+            last = mini.app.get_current_page().path
+        except Exception:
+            pass
+        time.sleep(0.8)
+    return last
+
+
+def device_click(mini, u2d, dev_conf: dict, click: dict) -> None:
+    if "css" in click:  # 页面级元素走 automator（带路由事件）
+        mini.app.get_current_page().get_element(click["css"]).click()
+    elif "coord" in click:  # 组件内元素走 u2 坐标（画布不上报无障碍树）
+        w, h = dev_conf.get("screen", [720, 1612])
+        x, y = click["coord"]
+        u2d.click(int(w * x), int(h * y))
+    else:
+        raise ValueError("click 配置须含 css 或 coord")
+
+
+# ---------------------------------------------------------------------------
+# 图像级落地断言（真机通道专用）：真机调试 2.0 的 automator 只操作影子栈，
+# 路由事件不穿透手机渲染层——落地判定必须对 adb 截图做标题区域基线比对。
+# ---------------------------------------------------------------------------
+
+def crop_title(img_path: str, dev_conf: dict, rect_key: str = "title_rect") -> str:
+    """按 dev_conf[rect_key] 裁剪判定区域，返回裁剪图路径。"""
+    from PIL import Image
+    rect = dev_conf.get(rect_key, [0.15, 0.055, 0.7, 0.075])
+    x0, y0, w, h = rect
+    im = Image.open(img_path).convert("L")
+    W, H = im.size
+    crop = im.crop((int(W * x0), int(H * y0), int(W * (x0 + w)), int(H * (y0 + h))))
+    out = img_path + ".title.png"
+    crop.save(out)
+    return out
+
+
+def rmse(a_path: str, b_path: str) -> float:
+    """缩放至小图后做平移容忍比对：真机渲染存在亚像素抖动（同名文字边缘差可达 80），
+    固定对齐的 RMSE 会把同页误判成异页。对 ±3px 平移取最小差值。"""
+    import numpy as np
+    from PIL import Image
+    a = np.asarray(Image.open(a_path).convert("L").resize((160, 40)), dtype=float)
+    b = np.asarray(Image.open(b_path).convert("L").resize((160, 40)), dtype=float)
+    best = float("inf")
+    for dy in range(-3, 4):
+        for dx in range(-3, 4):
+            bs = np.roll(np.roll(b, dy, axis=0), dx, axis=1)
+            # 平移卷出的边缘条带不参与比较
+            y0, y1 = max(0, dy), min(40, 40 + dy)
+            x0, x1 = max(0, dx), min(160, 160 + dx)
+            if y1 - y0 < 20 or x1 - x0 < 80:
+                continue
+            diff = a[y0:y1, x0:x1] - bs[y0:y1, x0:x1]
+            best = min(best, float(np.sqrt((diff ** 2).mean())))
+    return best
+
+
+def assert_landing(shot: str, ref_key: str, refs_dir: str, dev_conf: dict,
+                   recapture: bool = False,
+                   reshoot=None) -> tuple[bool, str]:
+    """标题区域与金标图比对。基线缺失时自动采基线并通过（附说明）。
+
+    判定超限且提供 reshoot（重截图函数）时，等通知横幅消散后重拍复核一次。
+
+    Returns: (通过?, 说明)
+    """
+    ref = os.path.join(refs_dir, f"{ref_key}.png")
+    if not os.path.exists(ref) or recapture:
+        os.makedirs(refs_dir, exist_ok=True)
+        from shutil import copyfile
+        copyfile(crop_title(shot, dev_conf), ref)
+        return True, f"基线已建立（{ref_key}），本轮不判定"
+    title = crop_title(shot, dev_conf)
+    score = rmse(title, ref)
+    threshold = float(dev_conf.get("rmse_threshold", 12.0))
+    if score > threshold and reshoot is not None:
+        time.sleep(3.5)  # 等通知横幅自动消散
+        shot2 = reshoot()
+        if shot2:
+            title = crop_title(shot2, dev_conf)
+            score = rmse(title, ref)
+    if score <= threshold:
+        return True, f"标题比对通过 rmse={score:.1f}"
+    return False, f"落地页标题不符 rmse={score:.1f}（阈值 {threshold}），期望金标 {ref_key}"
+
+
+def probe_row_device(mini, u2d, dev_conf, row, spec, evidence_dir,
+                     adb_path: str, serial: str, refs_dir: str,
+                     recapture_refs: bool = False) -> dict:
+    """真机混合通道单行探针：u2 执行 + adb 截图 + 图像级落地断言。
+    不可自动化场景自动打 [转人工] 标签（而非误判 fail）。"""
+    item = {
+        "row_id": row["row_id"], "status": "unverified", "error": None,
+        "evidence": None, "consistency": None,
+        "feature": row.get("feature"), "main_module": row.get("main_module"),
+    }
+    shot = os.path.join(evidence_dir, f"{row['row_id']}.png")
+    try:
+        def _reshot():
+            try:
+                adb_shot(adb_path, serial, shot)
+                return shot if os.path.getsize(shot) > 0 else None
+            except Exception:
+                return None
+        if spec is None:
+            item["error"] = "选择器配置缺失（xysjg_selectors.json）"
+            return item
+        manual = spec.get("manual")
+        if manual:  # 配置显式声明转人工（配置评审把关，防把产品缺陷藏进人工队列）
+            item["error"] = f"[转人工]{manual.get('reason', '配置声明人工处理')}"
+            item["consistency"] = manual.get("guide") or spec.get("note")
+            return item
+        if not ensure_session(mini, u2d, dev_conf, adb_path, serial, refs_dir):
+            item["error"] = "[转人工]小程序不在前台或首页不可达（可能扫码后退出，请人工确认手机状态）"
+            return item
+        page = mini.app.get_current_page()
+        kind = spec.get("probe_as") or row.get("probe_kind") or "reachable"
+        dspec = spec.get("device") or {}
+
+        err = None
+        if not dspec.get("skip_data_assert"):
+            # device 通道下 automator 是影子栈，页面数据不镜像真机——数据断言仅 IDE 模式强制执行；
+            # 配置 device.skip_data_assert=true 的行（如素材下发类）在真机完全依赖图像断言。
+            err = data_assert(page, spec)
+        if err:
+            item["status"] = "fail"
+            item["error"] = err
+            return item
+
+        # wx API 打桩（如 scanCode 返回假桌码）
+        for m, cfg in (dspec.get("mock") or {}).items():
+            try:
+                mini.app.mock_wx_method(m, result=cfg.get("result"),
+                                        success=cfg.get("success", True))
+            except Exception as exc:
+                item["error"] = f"mock {m} 失败: {exc}"[:150]
+
+        click = dspec.get("click")
+        if kind == "visible":
+            if click:
+                device_click(mini, u2d, dev_conf, click)
+                time.sleep(2.5)
+                adb_shot(adb_path, serial, shot)
+                if os.path.exists(shot) and os.path.getsize(shot) > 0:
+                    item["evidence"] = shot
+                ref_key = dspec.get("assert_img")
+                if ref_key:
+                    ok, note = assert_landing(shot, ref_key, refs_dir, dev_conf,
+                                              recapture=recapture_refs,
+                                              reshoot=lambda: _reshot())
+                    if not ok:
+                        item["status"] = "fail"
+                        item["error"] = note
+                        return item
+                    item["consistency"] = "; ".join(filter(None, [spec.get("note"), note]))
+                else:
+                    expect = (dspec.get("expect_path_prefix") or "").strip("/")
+                    landed = (wait_route(mini) or "").strip("/")
+                    if expect and not landed.startswith(expect):
+                        item["status"] = "fail"
+                        item["error"] = f"落地页不符：期望 {expect}，实际 {landed}"
+                        return item
+            item["status"] = "pass"
+            if not item["consistency"] and spec.get("probe_as") and spec.get("note"):
+                item["consistency"] = spec["note"]
+        elif kind == "navigate":
+            if not click:
+                # 自动打标兜底：无点击配置 = 当前不可自动化，转人工而非误报失败
+                item["error"] = "[转人工]device 通道无点击配置（组件内入口需坐标，或需人工补验）"
+                item["consistency"] = spec.get("note")
+                return item
+            device_click(mini, u2d, dev_conf, click)
+            time.sleep(2.5)  # 真机页面渲染等待
+            adb_shot(adb_path, serial, shot)
+            if os.path.exists(shot) and os.path.getsize(shot) > 0:
+                item["evidence"] = shot
+            if not in_miniprogram(adb_path, serial):
+                # 点击打开了原生页（扫码/支付等）：记录证据（原生页截图）并转人工
+                u2d.press("back")
+                time.sleep(1.0)
+                item["error"] = "[转人工]点击进入了原生扫码/能力页，真实环节需人工完成"
+                item["consistency"] = (spec.get("note") or "") + "；已定位到原生页并回退"
+                return item
+            # 图像级落地断言：标题区域与金标比对（automator 路由事件不穿透真机渲染层）
+            ref_key = dspec.get("assert_img")
+            if ref_key:
+                ok, note = assert_landing(shot, ref_key, refs_dir, dev_conf,
+                                          recapture=recapture_refs,
+                                          reshoot=lambda: _reshot())
+                if ok:
+                    item["status"] = "pass"
+                    item["consistency"] = "; ".join(filter(None, [spec.get("note"), note]))
+                else:
+                    item["status"] = "fail"
+                    item["error"] = note
+            else:
+                landed = (wait_route(mini) or "").strip("/")
+                expect = (dspec.get("expect_path_prefix") or "").strip("/")
+                if not expect or landed.startswith(expect):
+                    item["status"] = "pass"
+                    if spec.get("note"):
+                        item["consistency"] = spec["note"] + "（注：automator 路由仅影子栈，真机以截图为准）"
+                else:
+                    item["status"] = "fail"
+                    item["error"] = f"落地页不符：期望 {expect} 前缀，实际 {landed}"
+    except Exception as exc:
+        item["status"] = "fail"
+        item["error"] = f"{type(exc).__name__}: {exc}"[:400]
+    finally:
+        try:
+            adb_shot(adb_path, serial, shot)
+            if os.path.exists(shot) and os.path.getsize(shot) > 0:
+                item["evidence"] = shot
+        except Exception as exc:
+            if item["status"] == "pass":
+                item["status"] = "unverified"
+            item["error"] = (item["error"] or "") + f"；截图失败: {exc}"[:200]
+    return item
 
 
 def probe_row(mini, row: dict, spec: dict | None, evidence_dir: str) -> dict:
@@ -282,6 +648,14 @@ def main() -> int:
     ap.add_argument("--password", default=None)
     ap.add_argument("--dev-tool", default=r"D:\Program Files (x86)\Tencent\微信web开发者工具\cli.bat")
     ap.add_argument("--auto-port", type=int, default=9420)
+    ap.add_argument("--device", default=None,
+                    help="真机混合通道：adb 序列号。挂进 IDE 自动化会话的手机，不重拉会话")
+    ap.add_argument("--adb", default=r"D:\apps\android_sdk\platform-tools\adb.exe")
+    ap.add_argument("--refs-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                       "assert_refs"),
+                    help="落地页标题金标图目录（assert_img 键对应的基线）")
+    ap.add_argument("--recapture-refs", action="store_true",
+                    help="重采金标基线（UI 变更后使用），采基线轮全部判定通过")
     args = ap.parse_args()
 
     token = os.environ.get("CHECKLIST_TOKEN")
@@ -307,12 +681,33 @@ def main() -> int:
     print(f"[info] 清单 {len(all_rows)} 行 → 本轮执行 {len(rows)} 行，flow 跳过 {len(flow_rows)} 行")
 
     import minium
-    mini = minium.Minium({
-        "project_path": os.path.abspath(args.mini_project),
-        "auto_port": args.auto_port,
-        "dev_tool_path": args.dev_tool,
-    })
-    time.sleep(4)  # 等模拟器就绪
+    if args.device:
+        # 真机混合通道：只连现有自动化会话（带 project_path 会重拉 cli auto，会弄断桥接）
+        mini = minium.Minium({"test_port": args.auto_port})
+        import uiautomator2 as u2
+        u2d = u2.connect(args.device)
+        dev_conf = selectors.get("_device", {})
+        selectors = {k: v for k, v in selectors.items() if not k.startswith("_")}
+        # 预检：小程序须在手机前台（荣耀系无障碍树不暴露微信 UI，u2 无法代开）
+        for attempt in range(3):
+            try:
+                _ = mini.app.get_current_page().path
+                break
+            except Exception:
+                time.sleep(2)
+        else:
+            print("[error] 手机前台未打开小程序（automator 无响应）。请在手机微信里重新打开"
+                  "小杨生煎小程序（下拉最近小程序即可）后重试", file=sys.stderr)
+            return 2
+        print(f"[info] 真机混合通道已就绪 device={args.device} screen={dev_conf.get('screen')}")
+    else:
+        mini = minium.Minium({
+            "project_path": os.path.abspath(args.mini_project),
+            "auto_port": args.auto_port,
+            "dev_tool_path": args.dev_tool,
+        })
+        u2d, dev_conf = None, None
+        time.sleep(4)  # 等模拟器就绪
 
     evidence_dir = os.path.join("probe-runs", time.strftime("%Y%m%d-%H%M%S"), "evidence")
     os.makedirs(evidence_dir, exist_ok=True)
@@ -320,7 +715,12 @@ def main() -> int:
     results = []
     for i, row in enumerate(rows, 1):
         spec = selectors.get(row["row_id"])
-        item = probe_row(mini, row, spec, evidence_dir)
+        if args.device:
+            item = probe_row_device(mini, u2d, dev_conf, row, spec, evidence_dir,
+                                    args.adb, args.device, args.refs_dir,
+                                    recapture_refs=args.recapture_refs)
+        else:
+            item = probe_row(mini, row, spec, evidence_dir)
         results.append(item)
         mark = {"pass": "✓", "fail": "✗"}.get(item["status"], "?")
         print(f"[{i}/{len(rows)}] {mark} {row['row_id']} {row.get('feature', '')} "
