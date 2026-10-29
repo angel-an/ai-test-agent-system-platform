@@ -30,10 +30,15 @@ import time
 import urllib.request
 import uuid
 
-TAB_PAGES = {
-    "pages/home/index", "pages/store/goods", "pages/order/index/index",
-    "pages/member/mine/index", "pages/memberCode/index",
-}
+def tab_pages_of(dev_conf) -> set:
+    """tabBar 页名单来自项目配置 tab_pages（各小程序不同，框架不内置）。
+
+    名单用于区分「只能 switchTab 不能 navigateTo 的页面」。
+    device 模式取 _device.tab_pages；IDE 模式取配置顶层 tab_pages；缺省空集。
+    """
+    if not dev_conf:
+        return set()
+    return set(dev_conf.get("tab_pages") or [])
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +94,7 @@ def login(base: str, username: str, password: str) -> str:
 # minium 驱动
 # ---------------------------------------------------------------------------
 
-def goto_page(mini, page_path: str, timeout: float = 15.0) -> bool:
+def goto_page(mini, page_path: str, timeout: float = 15.0, dev_conf=None) -> bool:
     """导航到页面并断言落地。tabBar 页微信禁 navigateTo，依次尝试
     switch_tab → relaunch → navigate_to；Uncaught 异步报错一律吞掉
     （导航可能实际成功），最终以 page path 裁决，不轻信任何 SDK 返回值。"""
@@ -101,7 +106,7 @@ def goto_page(mini, page_path: str, timeout: float = 15.0) -> bool:
             if cur == page_path.strip("/"):
                 return True
             try:
-                if page_path in TAB_PAGES:
+                if page_path in tab_pages_of(dev_conf):
                     app.switch_tab(page_path, is_wait_url_change=True,
                                    wait_route_done_time=10)
                 else:
@@ -259,18 +264,30 @@ def ensure_session(mini, u2d, dev_conf, adb_path: str, serial: str,
     # 之后每轮先截图判定，不在小程序就自动重进，在但不在首页就按 BACK
     # （二级页/表单无 tab 栏，BACK 链可能 3+ 层）。判定先于动作，绝不误退首页。
     tab_tried = False
-    for attempt in range(10):
+    consecutive_backs = 0
+    MAX_ATTEMPTS = 14          # 深层表单（新增地址等）BACK 链 3+ 层，10 轮曾偶发不够
+    MAX_CONSECUTIVE_BACKS = 8  # 连续 BACK 上限：逼近小程序栈底前必须改走重进
+    for attempt in range(MAX_ATTEMPTS):
         if in_miniprogram(adb_path, serial) and is_home(
                 mini, u2d, dev_conf, adb_path, serial, refs_dir, tmp_shot):
             return True
         if not in_miniprogram(adb_path, serial):
             print("[info] 小程序已退出，自动重进…", flush=True)
             reopen_miniprogram(mini, u2d, dev_conf, adb_path, serial)
+            consecutive_backs = 0
         elif not tab_tried:
             u2d.click(int(w * x), int(h * y))
             tab_tried = True
+            consecutive_backs = 0
+        elif consecutive_backs >= MAX_CONSECUTIVE_BACKS:
+            # 连续 BACK 已到上限仍未回首页：栈底在望，重进比重叠 BACK 更稳
+            print("[info] 连续 BACK 未回首页，改走自动重进…", flush=True)
+            reopen_miniprogram(mini, u2d, dev_conf, adb_path, serial)
+            consecutive_backs = 0
+            tab_tried = False
         else:
             u2d.press("back")
+            consecutive_backs += 1
         time.sleep(2.2)
     return False
 
@@ -516,7 +533,8 @@ def probe_row_device(mini, u2d, dev_conf, row, spec, evidence_dir,
     return item
 
 
-def probe_row(mini, row: dict, spec: dict | None, evidence_dir: str) -> dict:
+def probe_row(mini, row: dict, spec: dict | None, evidence_dir: str,
+              dev_conf=None) -> dict:
     """执行单行探针，返回 RunResultItem 字典（evidence 先填本地路径，上传后替换）。"""
     item = {
         "row_id": row["row_id"], "status": "unverified", "error": None,
@@ -528,7 +546,7 @@ def probe_row(mini, row: dict, spec: dict | None, evidence_dir: str) -> dict:
         if spec is None:
             item["error"] = "选择器配置缺失（xysjg_selectors.json）"
             return item
-        if not goto_page(mini, spec["page"]):
+        if not goto_page(mini, spec["page"], dev_conf=dev_conf):
             item["error"] = f"页面不可达：{spec['page']}"
             return item
         page = mini.app.get_current_page()
@@ -573,7 +591,7 @@ def probe_row(mini, row: dict, spec: dict | None, evidence_dir: str) -> dict:
                     ok = False
                     # 非 tab 页 navigate_to 已实测最稳排第一；tab 页 navigateTo 违法，
                     # switch_tab 排第一。relaunch 会毒化会话状态，只作最后兜底。
-                    if target in TAB_PAGES:
+                    if target in tab_pages_of(dev_conf):
                         attempts = ("switch_tab", "navigate_to", "relaunch")
                     else:
                         attempts = ("navigate_to", "relaunch", "switch_tab")
@@ -639,11 +657,13 @@ def main() -> int:
     ap.add_argument("--project", required=True, help="平台项目 identifier，如 PR-2")
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--selectors", required=True, help="选择器配置 json")
-    ap.add_argument("--mini-project", default=r"backend\workspace\miniprogram\xysjg")
+    ap.add_argument("--mini-project", default=None,
+                    help="IDE 模式必填：小程序工程目录（项目相关，不进框架默认值）")
     ap.add_argument("--main-module", default=None, help="只跑某主模块，如 首页")
     ap.add_argument("--kinds", default="reachable,visible,navigate")
     ap.add_argument("--limit", type=int, default=0, help="最多跑 N 行（调试用）")
-    ap.add_argument("--profile", default="xiaoyang-shengjian")
+    ap.add_argument("--profile", default="miniprogram-probe",
+                    help="项目画像名，建议用平台 project identifier")
     ap.add_argument("--username", default=None, help="缺省取 CHECKLIST_TOKEN；或现场登录")
     ap.add_argument("--password", default=None)
     ap.add_argument("--dev-tool", default=r"D:\Program Files (x86)\Tencent\微信web开发者工具\cli.bat")
@@ -651,12 +671,14 @@ def main() -> int:
     ap.add_argument("--device", default=None,
                     help="真机混合通道：adb 序列号。挂进 IDE 自动化会话的手机，不重拉会话")
     ap.add_argument("--adb", default=r"D:\apps\android_sdk\platform-tools\adb.exe")
-    ap.add_argument("--refs-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                       "assert_refs"),
-                    help="落地页标题金标图目录（assert_img 键对应的基线）")
+    ap.add_argument("--refs-dir", default=None,
+                    help="金标图目录，默认 <selectors所在目录>/assert_refs（随项目配置走）")
     ap.add_argument("--recapture-refs", action="store_true",
                     help="重采金标基线（UI 变更后使用），采基线轮全部判定通过")
     args = ap.parse_args()
+
+    if args.refs_dir is None:
+        args.refs_dir = os.path.join(os.path.dirname(os.path.abspath(args.selectors)), "assert_refs")
 
     token = os.environ.get("CHECKLIST_TOKEN")
     if not token:
@@ -667,6 +689,7 @@ def main() -> int:
         print("[info] 已用账号密码登录取 token")
 
     selectors = {k: v for k, v in json.load(open(args.selectors, encoding="utf-8")).items()}
+    ide_tab_pages = selectors.get("tab_pages", [])  # IDE 模式的 tabBar 名单（项目配置顶层）
     kinds = set(args.kinds.split(","))
 
     rows_resp = api_get(args.base, f"/api/v2/projects/{args.project}/checklist/rows", token)
@@ -701,6 +724,9 @@ def main() -> int:
             return 2
         print(f"[info] 真机混合通道已就绪 device={args.device} screen={dev_conf.get('screen')}")
     else:
+        if not args.mini_project:
+            print("[error] IDE 模式须显式 --mini-project <小程序工程目录>", file=sys.stderr)
+            return 2
         mini = minium.Minium({
             "project_path": os.path.abspath(args.mini_project),
             "auto_port": args.auto_port,
@@ -720,7 +746,7 @@ def main() -> int:
                                     args.adb, args.device, args.refs_dir,
                                     recapture_refs=args.recapture_refs)
         else:
-            item = probe_row(mini, row, spec, evidence_dir)
+            item = probe_row(mini, row, spec, evidence_dir, dev_conf={"tab_pages": ide_tab_pages})
         results.append(item)
         mark = {"pass": "✓", "fail": "✗"}.get(item["status"], "?")
         print(f"[{i}/{len(rows)}] {mark} {row['row_id']} {row.get('feature', '')} "

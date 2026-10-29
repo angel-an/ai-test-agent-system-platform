@@ -37,6 +37,13 @@
       0.44,
       0.9,
       0.1
+    ],
+    "tab_pages": [
+      "pages/home/index",
+      "pages/store/goods",
+      "pages/order/index/index",
+      "pages/member/mine/index",
+      "pages/memberCode/index"
     ]
   },
   "CK-0a7e9e9b": {
@@ -195,5 +202,12 @@
     "device": {
       "skip_data_assert": true
     }
-  }
+  },
+  "tab_pages": [
+    "pages/home/index",
+    "pages/store/goods",
+    "pages/order/index/index",
+    "pages/member/mine/index",
+    "pages/memberCode/index"
+  ]
 }
