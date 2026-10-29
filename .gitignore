@@ -240,3 +240,6 @@ core/
 
 # 小程序编译包（vendor 提供的 mp 构建产物，14MB，不入库）
 backend/workspace/miniprogram/
+
+# 真机图像断言金标（小体积基线图，纳入版本管理供断言复用）
+!.claude/skills/miniprogram-probe-run/assert_refs/*.png
