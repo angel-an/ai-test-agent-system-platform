@@ -114,8 +114,12 @@ def build_items(raw_rows: list[dict]) -> tuple[list[dict], int]:
 
 VERDICT_LABEL = {"pass": "通过", "fail": "失败", "unverified": "未验证", "empty": "无结果"}
 
+# 列契约与腾讯文档「自动化执行记录」子表表头一一对应（12 列）。
+# 2026-10-29 修正：文档表头在「项目画像」后有「主模块」列（LinkFox 复核发现），
+# 缺列会导致一键回写整行左移错位。改动须同步 .claude/skills/checklist-writeback/
+# build_writeback_payload.py 的列契约注释。
 WRITEBACK_COLUMNS = (
-    "执行时间", "执行方式", "项目画像", "判定", "通过", "失败", "未验证",
+    "执行时间", "执行方式", "项目画像", "主模块", "判定", "通过", "失败", "未验证",
     "流程类跳过", "失败行", "报告链接", "run_id",
 )
 
@@ -125,15 +129,23 @@ def build_writeback_payload(
 ) -> dict:
     """执行记录 → 插入腾讯文档《上线Checklist》「自动化执行」区的一行载荷。
 
-    run: 含 run_id/run_verdict/profile_name/summary/skipped_flow/report_url/created_at。
+    run: 含 run_id/run_verdict/profile_name/summary/skipped_flow/report_url/created_at，
+         可附 main_module 显式指定主模块（手工回填 run 的 results 常缺该字段）。
     """
     summary = run.get("summary") or {}
     verdict = run.get("run_verdict") or "empty"
     failed = [r for r in results if r.get("status") == "fail"]
+    modules: list[str] = []
+    for r in results:
+        m = r.get("main_module") or ""
+        if m and m not in modules:
+            modules.append(m)
+    main_module = run.get("main_module") or "、".join(modules)
     return {
         "执行时间": fmt_cn_time(run.get("created_at") or ""),
         "执行方式": label,
         "项目画像": run.get("profile_name") or "",
+        "主模块": main_module,
         "判定": VERDICT_LABEL.get(verdict, verdict),
         "通过": summary.get("pass", 0),
         "失败": summary.get("fail", 0),

@@ -89,10 +89,19 @@ def run_level(args) -> int:
 
     # created_at 只在 /runs 列表返回，详情接口不带——从列表记录取
     created_at = summary_run.get("created_at") or d.get("created_at") or ""
+    # 主模块列（2026-10-29 起与腾讯文档 12 列表头对齐——LinkFox 复核发现的错位缺陷；
+    # 平台 WRITEBACK_COLUMNS 同改，两侧列契约须保持同步）：
+    # run 详情可显式带 main_module；否则取 results 各行 main_module 去重拼接
+    modules: list[str] = []
+    for r in d.get("results", []):
+        m = r.get("main_module") or ""
+        if m and m not in modules:
+            modules.append(m)
     payload = {
         "执行时间": fmt_time(created_at),
         "执行方式": args.label,
         "项目画像": d.get("profile_name") or "",
+        "主模块": d.get("main_module") or "、".join(modules),
         "判定": VERDICT_LABEL.get(verdict, verdict),
         "通过": s.get("pass", 0),
         "失败": s.get("fail", 0),
