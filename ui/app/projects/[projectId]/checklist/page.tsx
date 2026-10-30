@@ -456,6 +456,7 @@ export default function ChecklistPage() {
   const [mainModule, setMainModule] = React.useState<string>("all");
   const [priority, setPriority] = React.useState<string>("all");
   const [probeKind, setProbeKind] = React.useState<string>("all");
+  const [onlyAnomaly, setOnlyAnomaly] = React.useState(false);
 
   const loadRows = React.useCallback(async () => {
     const filters: Record<string, string> = {};
@@ -533,15 +534,29 @@ export default function ChecklistPage() {
     );
   }, [selectedRun, rows]);
 
+  // 仅看异常：隐藏通过行，聚焦失败与转人工（日常回归最关心的就是这几行）
+  const displayRows = React.useMemo(
+    () => (onlyAnomaly ? viewRows.filter((r) => r.status !== "pass") : viewRows),
+    [onlyAnomaly, viewRows]
+  );
+
   const statusCount = React.useMemo(() => {
     const c = { pass: 0, fail: 0, unverified: 0 };
-    viewRows.forEach((r) => {
+    displayRows.forEach((r) => {
       if (r.status === "pass") c.pass += 1;
       else if (r.status === "fail") c.fail += 1;
       else c.unverified += 1;
     });
     return c;
-  }, [viewRows]);
+  }, [displayRows]);
+
+  // 最近回归结论（页头一行，3 秒拿到项目健康度；取最新一次执行）
+  const latestRun = runs[0];
+  const latestText = latestRun
+    ? `最近回归：${STATUS_LABEL[latestRun.run_verdict] || latestRun.run_verdict} ` +
+      `${latestRun.summary?.pass ?? 0}·${latestRun.summary?.fail ?? 0}·${latestRun.summary?.unverified ?? 0}` +
+      `（${latestRun.created_at ? new Date(latestRun.created_at).toLocaleString() : ""}）`
+    : "暂无回归记录";
 
   return (
     <MainLayout>
@@ -550,8 +565,11 @@ export default function ChecklistPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <ClipboardList className="h-5 w-5" />
-            <h1 className="text-xl font-semibold">上线Checklist 回归</h1>
-            <Badge variant="outline">{viewRows.length} 行</Badge>
+            <h1 className="text-xl font-semibold">回归验证</h1>
+            {/* 套件：当前单套件弱化展示；出现多清单（冒烟/大促等）后换 Select，数据模型加 suite_id */}
+            <Badge variant="outline">上线Checklist</Badge>
+            <span className="text-sm text-muted-foreground">{latestText}</span>
+            <Badge variant="outline">{displayRows.length} 行</Badge>
           </div>
           <Button variant="outline" onClick={loadAll} disabled={loading}>
             {loading ? (
@@ -681,6 +699,13 @@ export default function ChecklistPage() {
               退出明细视图，回到清单总览
             </Button>
           )}
+          <Button
+            size="sm"
+            variant={onlyAnomaly ? "default" : "outline"}
+            onClick={() => setOnlyAnomaly((v) => !v)}
+          >
+            仅看异常
+          </Button>
           <span className="ml-auto text-sm text-muted-foreground">
             通过 {statusCount.pass} · 失败 {statusCount.fail} · 未验证{" "}
             {statusCount.unverified}
@@ -712,14 +737,14 @@ export default function ChecklistPage() {
                         <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                       </td>
                     </tr>
-                  ) : viewRows.length === 0 ? (
+                  ) : displayRows.length === 0 ? (
                     <tr>
                       <td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">
                         暂无数据。先执行 checklist-sync 导入 Checklist 行。
                       </td>
                     </tr>
                   ) : (
-                    viewRows.map((r) => (
+                    displayRows.map((r) => (
                       <tr key={r.row_id} className="border-b align-top">
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-1.5">

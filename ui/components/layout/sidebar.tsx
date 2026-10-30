@@ -53,71 +53,40 @@ export function Sidebar({
   const pathname = usePathname();
   const { t } = useLanguage();
 
-  const navItems = [
+  type NavItem = { title: string; href: string; icon: typeof FileText };
+  // 分组导航（2026-10-30 IA 调整）：测试资产 / 执行域 / 执行与结果 / 配置。
+  // 「上线Checklist」更名「回归验证」归入「执行与结果」，与测试运行（执行历史）
+  // 形成「套件定义↔执行记录」对称；href 不变以保 URL 与收藏稳定。
+  const navGroups: { label: string; items: NavItem[] }[] = [
     {
-      title: t("nav.testCases"),
-      href: "/test-cases",
-      icon: FileText,
+      label: "测试资产",
+      items: [
+        { title: t("nav.testCases"), href: "/test-cases", icon: FileText },
+        { title: "知识库", href: "/knowledge-base", icon: BookOpen },
+      ],
     },
     {
-      title: t("nav.apiTests"),
-      href: "/api-tests",
-      icon: Database,
+      label: "执行域",
+      items: [
+        { title: t("nav.apiTests"), href: "/api-tests", icon: Database },
+        { title: t("nav.webTests"), href: "/web-tests", icon: Globe },
+        { title: t("nav.androidTests"), href: "/android-tests", icon: Smartphone },
+        { title: "IOS测试", href: "/ios-tests", icon: TabletSmartphone },
+        { title: t("nav.pentest"), href: "/security-tests", icon: Shield },
+      ],
     },
     {
-      title: t("nav.webTests"),
-      href: "/web-tests",
-      icon: Globe,
+      label: "执行与结果",
+      items: [
+        { title: "回归验证", href: "/checklist", icon: ClipboardList },
+        { title: t("nav.testRuns"), href: "/test-runs", icon: PlayCircle },
+        { title: t("nav.reports"), href: "/reports", icon: BarChart3 },
+        { title: t("nav.fullstackAnalysis"), href: "/fullstack-analysis", icon: Layers },
+      ],
     },
     {
-      title: "路径配置",
-      href: "/web-path-templates",
-      icon: Route,
-    },
-    {
-      title: "上线Checklist",
-      href: "/checklist",
-      icon: ClipboardList,
-    },
-    {
-      title: t("nav.androidTests"),
-      href: "/android-tests",
-      icon: Smartphone,
-    },
-    {
-      title: "IOS测试",
-      href: "/ios-tests",
-      icon: TabletSmartphone,
-    },
-    {
-      title: t("nav.pentest"),
-      href: "/security-tests",
-      icon: Shield,
-    },
-    {
-      title: "知识库",
-      href: "/knowledge-base",
-      icon: BookOpen,
-    },
-    {
-      title: t("nav.testRuns"),
-      href: "/test-runs",
-      icon: PlayCircle,
-    },
-    {
-      title: t("nav.reports"),
-      href: "/reports",
-      icon: BarChart3,
-    },
-    // {
-    //   title: t("nav.codeAnalysis"),
-    //   href: "/code-analysis",
-    //   icon: Code2,
-    // },
-    {
-      title: t("nav.fullstackAnalysis"),
-      href: "/fullstack-analysis",
-      icon: Layers,
+      label: "配置",
+      items: [{ title: "路径配置", href: "/web-path-templates", icon: Route }],
     },
   ];
 
@@ -203,20 +172,27 @@ export function Sidebar({
               <div className="mb-2 px-2 text-xs font-medium text-muted-foreground">
                 {t("nav.projectNavigation")}
               </div>
-              {navItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={getNavHref(item.href)}
-                  prefetch={true}
-                >
-                  <Button
-                    variant={isActive(item.href) ? "secondary" : "ghost"}
-                    className={cn("w-full justify-start", (item as any).indent && "pl-8 text-sm")}
-                  >
-                    <item.icon className="mr-2 h-4 w-4" />
-                    {item.title}
-                  </Button>
-                </Link>
+              {navGroups.map((group) => (
+                <div key={group.label} className="mb-2">
+                  <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                    {group.label}
+                  </div>
+                  {group.items.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={getNavHref(item.href)}
+                      prefetch={true}
+                    >
+                      <Button
+                        variant={isActive(item.href) ? "secondary" : "ghost"}
+                        className="w-full justify-start"
+                      >
+                        <item.icon className="mr-2 h-4 w-4" />
+                        {item.title}
+                      </Button>
+                    </Link>
+                  ))}
+                </div>
               ))}
             </>
           )}
