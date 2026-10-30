@@ -479,7 +479,7 @@ export default function ChecklistPage() {
   }, [projectId, mainModule, priority, probeKind]);
 
   const loadRuns = React.useCallback(async () => {
-    const response = await getChecklistRuns(projectId);
+    const response = await getChecklistRuns(projectId, 50); // run 增长快，20 条不够回看
     if (response.success) {
       setRuns(response.data);
     }
