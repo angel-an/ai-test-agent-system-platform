@@ -7,9 +7,9 @@
 WorkBuddy 负责：用腾讯文档授权打开文档，把本脚本输出的 JSON 行插入表格
 （约定插到「自动化执行」区，见 --label）。
 
-两种载荷
---------
-- run 级（默认）：一次执行的整包结论（11 列单行）
+两种载荷（列契约统一为 12 列，见平台 WRITEBACK_COLUMNS；缺省值填空串）
+----------------------------------------------------------------------
+- run 级（默认）：一次执行的整包结论
 - 按模块分批（--by-module）：全量清单行最新状态逐主模块出载荷行，
   已执行模块给结论、未执行模块如实标未验证
 
@@ -133,10 +133,22 @@ def by_module(args) -> int:
     modules: dict[str, dict] = {}
     for r in rows.get("data", []):
         m = r.get("main_module") or "（未分组）"
-        bucket = modules.setdefault(m, {"pass": 0, "fail": 0, "unverified": 0})
+        bucket = modules.setdefault(m, {"pass": 0, "fail": 0, "unverified": 0, "fail_rows": []})
         st = r.get("latest_status") or "unverified"
         bucket[st] = bucket.get(st, 0) + 1
+        if st == "fail":
+            bucket["fail_rows"].append(f"{r.get('row_id')} {r.get('feature') or ''}".strip())
 
+    # 与 run 级同一 12 列契约（平台 WRITEBACK_COLUMNS）；模块汇总没有的维度填空串，
+    # 避免两种载荷插同一张表时列错位（LinkFox 复核点③，2026-10-30 对齐）
+    profile = ""
+    if run_id:
+        runs = api_get(args.base, f"/api/v2/projects/{args.project}/checklist/runs?limit=50",
+                       args.token)
+        hit = next((r for r in runs.get("data", []) if r.get("run_id") == run_id), None)
+        if hit:
+            latest_run_at = fmt_time(hit.get("created_at") or "")
+            profile = hit.get("profile_name") or ""
     lines = []
     for m, c in modules.items():
         fails = c.get("fail", 0)
@@ -145,12 +157,16 @@ def by_module(args) -> int:
         lines.append({
             "执行时间": latest_run_at or "-",
             "执行方式": args.label,
+            "项目画像": profile,
             "主模块": m,
             "判定": verdict,
             "通过": c.get("pass", 0),
             "失败": fails,
             "未验证": unv,
-            "关联run_id": run_id or "-",
+            "流程类跳过": "",
+            "失败行": ", ".join(c["fail_rows"]),
+            "报告链接": "",
+            "run_id": run_id or "-",
         })
 
     return emit(lines, args, note=f"{len(lines)} 个模块载荷行")
