@@ -159,7 +159,9 @@ class Settings(BaseSettings):
     # JWT 配置（用于认证）
     secret_key: str = "your-secret-key-change-in-production"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
+    # 2026-10-30：30min → 480min（一个工作日）。配合前端 401 统一跳登录，
+    # 内部测试平台重登频率与工作流匹配；验签方案落地后另行收紧评估。
+    access_token_expire_minutes: int = 480
     #: 作业总超时（秒）：整个脚本作业（下载/预检/运行器）的上限，防无总超时脚本挂起
     job_timeout_seconds: int = 1800
 
