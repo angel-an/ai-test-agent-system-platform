@@ -172,7 +172,7 @@ const DIFF_FIELD_LABEL: Record<string, string> = {
   data_mode: "数据模式",
 };
 
-/** 回写面板：展示最近一次执行的腾讯文档行载荷，复制/下载后由 WorkBuddy 插入文档。 */
+/** 回写面板：展示最近一次执行的行载荷，复制/下载后由外部执行器按列名写入清单文档。 */
 function WritebackPanel({
   projectId,
   latestRunId,
@@ -231,8 +231,8 @@ function WritebackPanel({
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <p className="text-xs text-muted-foreground">
-          平台只负责算载荷、不碰腾讯文档。复制或下载下方 JSON 后，通过 WorkBuddy
-          打开《上线Checklist》，在「自动化执行」区按列名插入一行。
+          平台只负责算载荷、不直接写清单文档。复制或下载下方 JSON 后，由外部执行器
+          按列名写入清单文档（如经 WorkBuddy 授权写入在线文档的「自动化执行」区）。
         </p>
         {!latestRunId ? (
           <p className="text-sm text-muted-foreground">暂无执行记录，无可回写内容。</p>
@@ -286,7 +286,7 @@ function WritebackPanel({
   );
 }
 
-/** 同步面板：上传腾讯文档导出的表格 → 预览行级 diff → 确认导入。 */
+/** 同步面板：上传清单源导出的表格（JSON/CSV/Excel）→ 预览行级 diff → 确认导入。 */
 function SyncPanel({ projectId, onImported }: { projectId: string; onImported: () => void }) {
   const fileRef = React.useRef<HTMLInputElement>(null);
   const [file, setFile] = React.useState<File | null>(null);
@@ -301,7 +301,7 @@ function SyncPanel({ projectId, onImported }: { projectId: string; onImported: (
       if (resp.success) setPreview(resp.data);
     } catch (e) {
       console.error("sync preview failed:", e);
-      toast.error("同步预览失败，请确认是腾讯文档导出的 JSON/CSV");
+      toast.error("同步预览失败，请确认是清单源导出的 JSON/CSV/Excel");
     } finally {
       setBusy(false);
     }
@@ -339,15 +339,24 @@ function SyncPanel({ projectId, onImported }: { projectId: string; onImported: (
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <p className="text-xs text-muted-foreground">
-          通过 WorkBuddy 从腾讯文档《上线Checklist》导出表格（JSON/CSV）后上传：
-          先预览与平台现有清单的差异（不落库），确认后再导入。row_id 按
-          主模块|子模块|功能点 锚定，重复同步不会产生重复行。
+          上传清单文件（从清单源——腾讯/飞书/钉钉在线文档或 Excel——导出/下载的
+          JSON、CSV、Excel），先预览与平台现有清单的行级差异（不落库），确认后再导入。
+          row_id 按 主模块|子模块|功能点 自动生成锚定，重复同步不会产生重复行。
+          格式参考
+          <a href="/docs/checklist-回归验证-导入模板.xlsx" download className="mx-1 text-blue-600 hover:underline">
+            导入模板(xlsx)
+          </a>
+          /
+          <a href="/docs/checklist-回归验证-导入模板.csv" download className="mx-1 text-blue-600 hover:underline">
+            csv
+          </a>
+          。
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <input
             ref={fileRef}
             type="file"
-            accept=".json,.csv,application/json,text/csv"
+            accept=".json,.csv,.xlsx,application/json,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             className="hidden"
             onChange={(e) => {
               setFile(e.target.files?.[0] ?? null);
@@ -356,7 +365,7 @@ function SyncPanel({ projectId, onImported }: { projectId: string; onImported: (
           />
           <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
             <FileUp className="mr-2 h-4 w-4" />
-            {file ? file.name : "选择导出文件"}
+            {file ? file.name : "选择清单文件"}
           </Button>
           <Button size="sm" onClick={doPreview} disabled={!file || busy}>
             {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}

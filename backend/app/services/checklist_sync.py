@@ -40,9 +40,33 @@ CONTENT_FIELDS = ("title", "expected", "priority", "probe_kind", "data_mode")
 
 
 def parse_sheet(data: bytes, filename: str = "") -> list[dict]:
-    """解析腾讯文档导出的表格行为字典列表（JSON 数组或 CSV，按内容判断）。"""
+    """解析清单源导出的表格行为字典列表。
+
+    源无关：JSON 数组 / CSV / Excel(.xlsx) 皆可——清单源可以是在线文档
+    （腾讯/飞书/钉钉文档导出）或本地 Excel，格式按导入模板（ui/public/docs/，页面可下载）。
+    xlsx 读取首个工作表、首行表头。
+    """
+    lower = filename.lower()
+    if lower.endswith(".xlsx"):
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        ws = wb.worksheets[0]
+        rows_iter = ws.iter_rows(values_only=True)
+        try:
+            headers = [str(h).strip() if h is not None else "" for h in next(rows_iter)]
+        except StopIteration:
+            wb.close()
+            return []
+        out = []
+        for row in rows_iter:
+            item = {headers[i]: ("" if v is None else str(v))
+                    for i, v in enumerate(row) if i < len(headers) and headers[i]}
+            if any(v.strip() for v in item.values()):
+                out.append(item)
+        wb.close()
+        return out
     head = data.lstrip()[:1]
-    if filename.lower().endswith(".csv") or head not in (b"[", b""):
+    if lower.endswith(".csv") or head not in (b"[", b""):
         text = data.decode("utf-8-sig", errors="replace")
         return [dict(r) for r in csv.DictReader(io.StringIO(text))]
     parsed = json.loads(data.decode("utf-8"))

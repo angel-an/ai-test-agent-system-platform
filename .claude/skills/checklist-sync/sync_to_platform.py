@@ -59,10 +59,25 @@ def norm_key(k: str) -> str:
 
 
 def load_rows(path: str) -> list[dict]:
-    """读取 JSON 或 CSV（按扩展名与首字符判断）为行字典列表。"""
+    """读取 JSON / CSV / Excel(.xlsx) 为行字典列表（与后端 checklist_sync.parse_sheet 同源）。"""
+    lower = path.lower()
+    if lower.endswith(".xlsx"):
+        from openpyxl import load_workbook
+        wb = load_workbook(path, read_only=True, data_only=True)
+        ws = wb.worksheets[0]
+        it = ws.iter_rows(values_only=True)
+        headers = [str(h).strip() if h is not None else "" for h in next(it, [])]
+        out = []
+        for row in it:
+            item = {headers[i]: ("" if v is None else str(v))
+                    for i, v in enumerate(row) if i < len(headers) and headers[i]}
+            if any(v.strip() for v in item.values()):
+                out.append(item)
+        wb.close()
+        return out
     with open(path, "rb") as f:
         head = f.read(4)
-    if path.lower().endswith(".csv") or not head.lstrip().startswith(b"["):
+    if lower.endswith(".csv") or not head.lstrip().startswith(b"["):
         with open(path, newline="", encoding="utf-8-sig") as f:
             return [dict(r) for r in csv.DictReader(f)]
     with open(path, encoding="utf-8") as f:
